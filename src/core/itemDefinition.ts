@@ -9,7 +9,7 @@ export interface ItemDefinition {
   /** Numeric ID used on the wire and in save data. */
   readonly id: ItemId;
 
-  /** Namespaced string key e.g. "turfd:stone". */
+  /** Namespaced string key e.g. "stratum:stone". */
   readonly key: string;
 
   /**

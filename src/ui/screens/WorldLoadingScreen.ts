@@ -23,7 +23,7 @@ const LOADING_TIPS: string[] = [
   "If loading ever feels stuck, check the stage text above for what the game is doing.",
 ];
 
-const STYLE_ID = "turfd-world-loading-styles";
+const STYLE_ID = "stratum-world-loading-styles";
 
 const TIP_ROTATE_MS = 4500;
 /** Smoothing factor per frame (~60fps → comfortable ramp). */
@@ -52,7 +52,7 @@ function injectLoadingStyles(base: string): void {
       font-style: normal;
     }
 
-    .turfd-loading-overlay {
+    .stratum-loading-overlay {
       --tl-ink: #f2f2f7;
       --tl-ink-mid: #aeaeb2;
       --tl-ink-soft: #8e8e93;
@@ -82,11 +82,11 @@ function injectLoadingStyles(base: string): void {
       transition: opacity 0.3s ease;
     }
 
-    .turfd-loading-overlay.turfd-loading-overlay--entered {
+    .stratum-loading-overlay.stratum-loading-overlay--entered {
       opacity: 1;
     }
 
-    .turfd-loading-main {
+    .stratum-loading-main {
       flex: 1;
       display: flex;
       align-items: center;
@@ -94,7 +94,7 @@ function injectLoadingStyles(base: string): void {
       min-height: 0;
     }
 
-    .turfd-loading-card {
+    .stratum-loading-card {
       width: min(32rem, 100%);
       border-radius: var(--tl-radius-md);
       corner-shape: squircle;
@@ -109,23 +109,23 @@ function injectLoadingStyles(base: string): void {
         opacity 0.28s ease;
     }
 
-    .turfd-loading-overlay.turfd-loading-overlay--entered .turfd-loading-card {
+    .stratum-loading-overlay.stratum-loading-overlay--entered .stratum-loading-card {
       transform: translateY(0);
       opacity: 1;
     }
 
-    .turfd-loading-card.turfd-loading-card--error {
+    .stratum-loading-card.stratum-loading-card--error {
       border-color: rgba(255, 69, 58, 0.35);
     }
 
-    .turfd-loading-brand {
+    .stratum-loading-brand {
       display: flex;
       flex-direction: column;
       align-items: center;
       margin-bottom: 1.25rem;
     }
 
-    .turfd-loading-logo {
+    .stratum-loading-logo {
       display: block;
       width: min(200px, 52vw);
       height: auto;
@@ -133,7 +133,7 @@ function injectLoadingStyles(base: string): void {
       image-rendering: crisp-edges;
     }
 
-    .turfd-loading-kicker {
+    .stratum-loading-kicker {
       margin: 0.65rem 0 0;
       font-family: 'M5x7', monospace;
       font-size: 14px;
@@ -142,7 +142,7 @@ function injectLoadingStyles(base: string): void {
       color: var(--tl-ink-soft);
     }
 
-    .turfd-loading-title {
+    .stratum-loading-title {
       margin: 0 0 1rem;
       font-family: 'BoldPixels', monospace;
       font-size: 19px;
@@ -152,7 +152,7 @@ function injectLoadingStyles(base: string): void {
       text-align: center;
     }
 
-    .turfd-loading-stage {
+    .stratum-loading-stage {
       font-family: 'BoldPixels', monospace;
       font-size: 15px;
       text-transform: uppercase;
@@ -162,7 +162,7 @@ function injectLoadingStyles(base: string): void {
       line-height: 1.35;
     }
 
-    .turfd-loading-detail {
+    .stratum-loading-detail {
       min-height: 1.35em;
       margin-top: 0.5rem;
       font-family: 'M5x7', monospace;
@@ -172,11 +172,11 @@ function injectLoadingStyles(base: string): void {
       text-align: center;
     }
 
-    .turfd-loading-progress {
+    .stratum-loading-progress {
       margin-top: 1.35rem;
     }
 
-    .turfd-loading-track {
+    .stratum-loading-track {
       width: 100%;
       height: 10px;
       border-radius: var(--tl-radius-sm);
@@ -186,14 +186,14 @@ function injectLoadingStyles(base: string): void {
       overflow: hidden;
     }
 
-    .turfd-loading-fill {
+    .stratum-loading-fill {
       height: 100%;
       width: 0%;
       background: var(--tl-ink-mid);
       transform-origin: left center;
     }
 
-    .turfd-loading-percent {
+    .stratum-loading-percent {
       margin-top: 0.5rem;
       min-height: 1.35em;
       text-align: right;
@@ -202,11 +202,11 @@ function injectLoadingStyles(base: string): void {
       color: var(--tl-ink-soft);
     }
 
-    .turfd-loading-stage--error {
+    .stratum-loading-stage--error {
       color: var(--tl-danger);
     }
 
-    .turfd-loading-tip-wrap {
+    .stratum-loading-tip-wrap {
       flex-shrink: 0;
       max-width: 40rem;
       width: 100%;
@@ -215,7 +215,7 @@ function injectLoadingStyles(base: string): void {
       box-sizing: border-box;
     }
 
-    .turfd-loading-tip-label {
+    .stratum-loading-tip-label {
       margin: 0 0 0.35rem;
       font-family: 'BoldPixels', monospace;
       font-size: 11px;
@@ -225,7 +225,7 @@ function injectLoadingStyles(base: string): void {
       text-align: center;
     }
 
-    .turfd-loading-tip {
+    .stratum-loading-tip {
       margin: 0;
       font-family: 'M5x7', monospace;
       font-size: 15px;
@@ -235,14 +235,14 @@ function injectLoadingStyles(base: string): void {
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .turfd-loading-fill {
+      .stratum-loading-fill {
         transition: none;
       }
-      .turfd-loading-overlay {
+      .stratum-loading-overlay {
         transition: none;
         opacity: 1;
       }
-      .turfd-loading-card {
+      .stratum-loading-card {
         transition: none;
         transform: none;
         opacity: 1;
@@ -276,47 +276,47 @@ export class WorldLoadingScreen {
     injectLoadingStyles(base);
 
     this.root = document.createElement("div");
-    this.root.className = "turfd-loading-overlay";
+    this.root.className = "stratum-loading-overlay";
 
     const main = document.createElement("div");
-    main.className = "turfd-loading-main";
+    main.className = "stratum-loading-main";
 
     this.card = document.createElement("div");
-    this.card.className = "turfd-loading-card";
+    this.card.className = "stratum-loading-card";
 
     const brand = document.createElement("div");
-    brand.className = "turfd-loading-brand";
+    brand.className = "stratum-loading-brand";
     const logo = document.createElement("img");
-    logo.className = "turfd-loading-logo";
+    logo.className = "stratum-loading-logo";
     logo.src = `${base}assets/textures/logo.png`;
-    logo.alt = "Turf'd";
+    logo.alt = "Stratum";
     const kicker = document.createElement("p");
-    kicker.className = "turfd-loading-kicker";
+    kicker.className = "stratum-loading-kicker";
     kicker.textContent = "Loading";
     brand.appendChild(logo);
     brand.appendChild(kicker);
 
     this.titleEl = document.createElement("h2");
-    this.titleEl.className = "turfd-loading-title";
+    this.titleEl.className = "stratum-loading-title";
     this.titleEl.textContent = "Preparing World";
 
     this.stageEl = document.createElement("div");
-    this.stageEl.className = "turfd-loading-stage";
+    this.stageEl.className = "stratum-loading-stage";
     this.stageEl.textContent = "Loading...";
 
     this.detailEl = document.createElement("div");
-    this.detailEl.className = "turfd-loading-detail";
+    this.detailEl.className = "stratum-loading-detail";
     this.detailEl.textContent = "";
 
     const progressWrap = document.createElement("div");
-    progressWrap.className = "turfd-loading-progress";
+    progressWrap.className = "stratum-loading-progress";
     const track = document.createElement("div");
-    track.className = "turfd-loading-track";
+    track.className = "stratum-loading-track";
     this.barFillEl = document.createElement("div");
-    this.barFillEl.className = "turfd-loading-fill";
+    this.barFillEl.className = "stratum-loading-fill";
     track.appendChild(this.barFillEl);
     this.percentEl = document.createElement("div");
-    this.percentEl.className = "turfd-loading-percent";
+    this.percentEl.className = "stratum-loading-percent";
     this.percentEl.textContent = "0%";
     progressWrap.appendChild(track);
     progressWrap.appendChild(this.percentEl);
@@ -329,12 +329,12 @@ export class WorldLoadingScreen {
     main.appendChild(this.card);
 
     const tipWrap = document.createElement("div");
-    tipWrap.className = "turfd-loading-tip-wrap";
+    tipWrap.className = "stratum-loading-tip-wrap";
     const tipLabel = document.createElement("p");
-    tipLabel.className = "turfd-loading-tip-label";
+    tipLabel.className = "stratum-loading-tip-label";
     tipLabel.textContent = "Tip";
     this.tipEl = document.createElement("p");
-    this.tipEl.className = "turfd-loading-tip";
+    this.tipEl.className = "stratum-loading-tip";
     this.tipEl.textContent = this._pickRandomTip();
     tipWrap.appendChild(tipLabel);
     tipWrap.appendChild(this.tipEl);
@@ -345,7 +345,7 @@ export class WorldLoadingScreen {
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        this.root.classList.add("turfd-loading-overlay--entered");
+        this.root.classList.add("stratum-loading-overlay--entered");
       });
     });
 
@@ -419,8 +419,8 @@ export class WorldLoadingScreen {
   }
 
   update(progress: LoadingProgressUpdate): void {
-    this.card.classList.remove("turfd-loading-card--error");
-    this.stageEl.classList.remove("turfd-loading-stage--error");
+    this.card.classList.remove("stratum-loading-card--error");
+    this.stageEl.classList.remove("stratum-loading-stage--error");
     this.barFillEl.style.opacity = "";
     this.titleEl.textContent = "Preparing World";
     this.stageEl.textContent = progress.stage;
@@ -439,16 +439,16 @@ export class WorldLoadingScreen {
     this.stopped = true;
     this._stopBarLoop();
     this._stopTips();
-    this.card.classList.add("turfd-loading-card--error");
+    this.card.classList.add("stratum-loading-card--error");
     this.titleEl.textContent = "Unable to Start";
-    this.stageEl.classList.add("turfd-loading-stage--error");
+    this.stageEl.classList.add("stratum-loading-stage--error");
     this.stageEl.textContent = "Loading failed";
     this.detailEl.textContent = message;
     this.barFillEl.style.width = "100%";
     this.barFillEl.style.opacity = "0.35";
     this.percentEl.textContent = "—";
     this.tipEl.textContent = "";
-    const tipLabel = this.root.querySelector(".turfd-loading-tip-label");
+    const tipLabel = this.root.querySelector(".stratum-loading-tip-label");
     if (tipLabel instanceof HTMLElement) {
       tipLabel.style.display = "none";
     }

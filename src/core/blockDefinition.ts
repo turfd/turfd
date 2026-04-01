@@ -31,7 +31,7 @@ export interface BlockDefinitionBase {
   /** Dropped item identifiers (Phase 3). */
   drops: string[];
   /**
-   * Namespaced loot table key, e.g. "turfd:stone".
+   * Namespaced loot table key, e.g. "stratum:stone".
    * Resolved by LootResolver at block-break time.
    * Undefined means the block drops nothing.
    */

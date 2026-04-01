@@ -31,11 +31,11 @@ const MAX_LOG_LINES = 120;
 const BASE_URL = import.meta.env.BASE_URL;
 
 function injectFontFaces(): void {
-  if (document.getElementById("turfd-chat-fonts")) {
+  if (document.getElementById("stratum-chat-fonts")) {
     return;
   }
   const style = document.createElement("style");
-  style.id = "turfd-chat-fonts";
+  style.id = "stratum-chat-fonts";
   style.textContent = `
     @font-face {
       font-family: 'M5x7';
@@ -76,7 +76,7 @@ export class ChatOverlay {
     injectFontFaces();
 
     const root = document.createElement("div");
-    root.id = "turfd-chat-root";
+    root.id = "stratum-chat-root";
     root.style.cssText = [
       "position:absolute",
       "inset:0",

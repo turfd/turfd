@@ -1,121 +1,121 @@
 {
   "format_version": "1.0.0",
   "loot_tables": {
-    "turfd:stone": {
+    "stratum:stone": {
       "entries": [
-        { "itemKey": "turfd:stone", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:stone", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:dirt": {
+    "stratum:dirt": {
       "entries": [
-        { "itemKey": "turfd:dirt", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:dirt", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:grass": {
+    "stratum:grass": {
       "entries": [
-        { "itemKey": "turfd:dirt", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:dirt", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:sand": {
+    "stratum:sand": {
       "entries": [
-        { "itemKey": "turfd:sand", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:sand", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:gravel": {
+    "stratum:gravel": {
       "entries": [
-        { "itemKey": "turfd:gravel", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:gravel", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:glass": {
+    "stratum:glass": {
       "entries": []
     },
-    "turfd:wood_log": {
+    "stratum:wood_log": {
       "entries": [
-        { "itemKey": "turfd:wood_log", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:wood_log", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:wood_log_back": {
+    "stratum:wood_log_back": {
       "entries": [
-        { "itemKey": "turfd:wood_log_back", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:wood_log_back", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:leaves": {
+    "stratum:leaves": {
       "entries": [
-        { "itemKey": "turfd:leaves", "countMin": 0, "countMax": 1, "chance": 0.2 }
+        { "itemKey": "stratum:leaves", "countMin": 0, "countMax": 1, "chance": 0.2 }
       ]
     },
-    "turfd:leaves_back": {
+    "stratum:leaves_back": {
       "entries": [
-        { "itemKey": "turfd:leaves_back", "countMin": 0, "countMax": 1, "chance": 0.2 }
+        { "itemKey": "stratum:leaves_back", "countMin": 0, "countMax": 1, "chance": 0.2 }
       ]
     },
-    "turfd:coal_ore": {
+    "stratum:coal_ore": {
       "entries": [
-        { "itemKey": "turfd:coal", "countMin": 1, "countMax": 2, "chance": 1.0 }
+        { "itemKey": "stratum:coal", "countMin": 1, "countMax": 2, "chance": 1.0 }
       ]
     },
-    "turfd:iron_ore": {
+    "stratum:iron_ore": {
       "entries": [
-        { "itemKey": "turfd:iron_ore", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:iron_ore", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:gold_ore": {
+    "stratum:gold_ore": {
       "entries": [
-        { "itemKey": "turfd:gold_ore", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:gold_ore", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:diamond_ore": {
+    "stratum:diamond_ore": {
       "entries": [
-        { "itemKey": "turfd:diamond", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:diamond", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:lapis_ore": {
+    "stratum:lapis_ore": {
       "entries": [
-        { "itemKey": "turfd:lapis", "countMin": 2, "countMax": 5, "chance": 1.0 }
+        { "itemKey": "stratum:lapis", "countMin": 2, "countMax": 5, "chance": 1.0 }
       ]
     },
-    "turfd:redstone_ore": {
+    "stratum:redstone_ore": {
       "entries": [
-        { "itemKey": "turfd:redstone", "countMin": 2, "countMax": 5, "chance": 1.0 }
+        { "itemKey": "stratum:redstone", "countMin": 2, "countMax": 5, "chance": 1.0 }
       ]
     },
-    "turfd:torch": {
+    "stratum:torch": {
       "entries": [
-        { "itemKey": "turfd:torch", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:torch", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:dandelion": {
+    "stratum:dandelion": {
       "entries": [
-        { "itemKey": "turfd:dandelion", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:dandelion", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:poppy": {
+    "stratum:poppy": {
       "entries": [
-        { "itemKey": "turfd:poppy", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:poppy", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:short_grass": {
+    "stratum:short_grass": {
       "entries": [
-        { "itemKey": "turfd:short_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:short_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:tall_grass_bottom": {
+    "stratum:tall_grass_bottom": {
       "entries": [
-        { "itemKey": "turfd:tall_grass_bottom", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:tall_grass_bottom", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:tall_grass_top": {
+    "stratum:tall_grass_top": {
       "entries": [
-        { "itemKey": "turfd:tall_grass_top", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:tall_grass_top", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "turfd:bedrock": {
+    "stratum:bedrock": {
       "entries": []
     },
-    "turfd:air": {
+    "stratum:air": {
       "entries": []
     },
-    "turfd:water": {
+    "stratum:water": {
       "entries": []
     }
   }

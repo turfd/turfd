@@ -78,37 +78,37 @@ export class OreVeins {
 
     this.oreTable = [
       {
-        oreId: id("turfd:diamond_ore"),
+        oreId: id("stratum:diamond_ore"),
         veinSpacing: 16, peakSpawnChance: 0.12, veinRadius: 1.2,
         minHAB: 0, peakStartHAB: 15, peakEndHAB: 55, maxHAB: 75,
         salts: DIAMOND_SALTS,
       },
       {
-        oreId: id("turfd:gold_ore"),
+        oreId: id("stratum:gold_ore"),
         veinSpacing: 18, peakSpawnChance: 0.065, veinRadius: 1.5,
         minHAB: 0, peakStartHAB: 20, peakEndHAB: 100, maxHAB: 140,
         salts: GOLD_SALTS,
       },
       {
-        oreId: id("turfd:lapis_ore"),
+        oreId: id("stratum:lapis_ore"),
         veinSpacing: 18, peakSpawnChance: 0.065, veinRadius: 1.5,
         minHAB: 25, peakStartHAB: 45, peakEndHAB: 85, maxHAB: 130,
         salts: LAPIS_SALTS,
       },
       {
-        oreId: id("turfd:redstone_ore"),
+        oreId: id("stratum:redstone_ore"),
         veinSpacing: 10, peakSpawnChance: 0.09, veinRadius: 2.0,
         minHAB: 0, peakStartHAB: 0, peakEndHAB: 20, maxHAB: 80,
         salts: REDSTONE_SALTS,
       },
       {
-        oreId: id("turfd:iron_ore"),
+        oreId: id("stratum:iron_ore"),
         veinSpacing: 12, peakSpawnChance: 0.10, veinRadius: 2.0,
         minHAB: 0, peakStartHAB: 20, peakEndHAB: 220, maxHAB: 260,
         salts: IRON_SALTS,
       },
       {
-        oreId: id("turfd:coal_ore"),
+        oreId: id("stratum:coal_ore"),
         veinSpacing: 10, peakSpawnChance: 0.07, veinRadius: 2.5,
         minHAB: 15, peakStartHAB: 25, peakEndHAB: 200, maxHAB: 260,
         salts: COAL_SALTS,

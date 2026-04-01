@@ -39,7 +39,7 @@ export class EntityManager {
     this.world = world;
     this.input = input;
     this.player = new Player(registry, bus, audio, itemRegistry);
-    this.airId = registry.getByIdentifier("turfd:air").id;
+    this.airId = registry.getByIdentifier("stratum:air").id;
     this.itemRegistry = itemRegistry;
     this.atlasLoader = atlasLoader;
   }

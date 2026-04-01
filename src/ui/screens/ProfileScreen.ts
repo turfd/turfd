@@ -3,7 +3,7 @@
 import type { IAuthProvider } from "../../auth/IAuthProvider";
 import { validateUsername } from "../../auth/profile";
 
-const STYLES_ID = "turfd-profile-styles";
+const STYLES_ID = "stratum-profile-styles";
 
 function injectStyles(): void {
   if (document.getElementById(STYLES_ID) !== null) {
@@ -12,26 +12,26 @@ function injectStyles(): void {
   const style = document.createElement("style");
   style.id = STYLES_ID;
   style.textContent = `
-    .turfd-profile-inner {
+    .stratum-profile-inner {
       flex: 1;
       min-height: 0;
       display: flex;
       flex-direction: column;
     }
-    .turfd-profile-actions {
+    .stratum-profile-actions {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 6px;
     }
-    .turfd-profile-switch {
+    .stratum-profile-switch {
       margin-top: 14px;
       font-family: 'M5x7', monospace;
       font-size: 17px;
       line-height: 1.45;
       color: var(--mm-ink-mid, #aeaeb2);
     }
-    .turfd-profile-switch button {
+    .stratum-profile-switch button {
       background: none;
       border: none;
       color: var(--mm-ink, #f2f2f7);
@@ -45,10 +45,10 @@ function injectStyles(): void {
       padding: 0;
       margin-left: 6px;
     }
-    .turfd-profile-switch button:hover {
+    .stratum-profile-switch button:hover {
       opacity: 0.9;
     }
-    .turfd-profile-switch button:focus-visible {
+    .stratum-profile-switch button:focus-visible {
       outline: none;
       border-radius: 4px;
       box-shadow: 0 0 0 2px var(--mm-border-strong, rgba(255,255,255,0.16));
@@ -122,7 +122,7 @@ export function mountProfileScreen(
     root.appendChild(title);
 
     const inner = document.createElement("div");
-    inner.className = "turfd-profile-inner";
+    inner.className = "stratum-profile-inner";
     root.appendChild(inner);
     root.appendChild(feedback);
 
@@ -156,14 +156,14 @@ export function mountProfileScreen(
         signed.textContent = "Signed in as " + uname + ".";
 
         const nameInput = document.createElement("input");
-        nameInput.id = "turfd-profile-username";
+        nameInput.id = "stratum-profile-username";
         nameInput.type = "text";
         nameInput.value = uname;
         nameInput.autocomplete = "username";
         const nameWrap = profileField("Username", nameInput);
 
         const actions = document.createElement("div");
-        actions.className = "turfd-profile-actions";
+        actions.className = "stratum-profile-actions";
         const saveBtn = document.createElement("button");
         saveBtn.type = "button";
         saveBtn.className = "mm-btn";
@@ -207,25 +207,25 @@ export function mountProfileScreen(
     muted.className = "mm-note";
     muted.textContent =
       mode === "login"
-        ? "Sign in with your Turf'd account."
+        ? "Sign in with your Stratum account."
         : "Create an account (check your email if confirmation is required).";
     inner.appendChild(muted);
 
     const emailInput = document.createElement("input");
-    emailInput.id = "turfd-profile-email";
+    emailInput.id = "stratum-profile-email";
     emailInput.type = "email";
     emailInput.autocomplete = mode === "login" ? "email" : "username";
     const emailWrap = profileField("Email", emailInput);
 
     const passInput = document.createElement("input");
-    passInput.id = "turfd-profile-password";
+    passInput.id = "stratum-profile-password";
     passInput.type = "password";
     passInput.autocomplete =
       mode === "login" ? "current-password" : "new-password";
     const passWrap = profileField("Password", passInput);
 
     const actions = document.createElement("div");
-    actions.className = "turfd-profile-actions";
+    actions.className = "stratum-profile-actions";
     const primary = document.createElement("button");
     primary.type = "button";
     primary.className = "mm-btn";
@@ -258,7 +258,7 @@ export function mountProfileScreen(
     inner.appendChild(actions);
 
     const sw = document.createElement("div");
-    sw.className = "turfd-profile-switch";
+    sw.className = "stratum-profile-switch";
     sw.appendChild(document.createTextNode(mode === "login" ? "New here?" : "Already registered?"));
     const swBtn = document.createElement("button");
     swBtn.type = "button";

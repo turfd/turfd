@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": { "identifier": "stratum:wood_log_back" },
+    "components": {
+      "stratum:display_name": "Background Wood",
+      "stratum:texture": { "all": "wood_log" },
+      "stratum:solid": false,
+      "stratum:transparent": true,
+      "stratum:water": false,
+      "stratum:hardness": 1.8,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 2,
+      "stratum:material": "wood",
+      "stratum:loot_table": "stratum:wood_log_back"
+    }
+  }
+}

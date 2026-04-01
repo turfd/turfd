@@ -1,0 +1,17 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": { "identifier": "stratum:bedrock" },
+    "components": {
+      "stratum:display_name": "Bedrock",
+      "stratum:texture": { "all": "bedrock" },
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 999,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:material": "stone"
+    }
+  }
+}

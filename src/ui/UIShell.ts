@@ -29,18 +29,18 @@ export class UIShell {
     this.pauseMenu.init(mount, bus);
 
     const sess = document.createElement("div");
-    sess.className = "turfd-session-overlay";
+    sess.className = "stratum-session-overlay";
     sess.setAttribute("aria-hidden", "true");
     sess.setAttribute("role", "alertdialog");
     sess.setAttribute("aria-modal", "true");
-    sess.setAttribute("aria-labelledby", "turfd-session-ended-msg");
+    sess.setAttribute("aria-labelledby", "stratum-session-ended-msg");
 
     const card = document.createElement("div");
-    card.className = "turfd-session-card";
+    card.className = "stratum-session-card";
     card.addEventListener("click", (e) => e.stopPropagation());
 
     const msg = document.createElement("p");
-    msg.id = "turfd-session-ended-msg";
+    msg.id = "stratum-session-ended-msg";
     msg.style.cssText = [
       "margin:0 0 1.15rem",
       "font-family:'M5x7',monospace",
@@ -80,7 +80,7 @@ export class UIShell {
       }
       this.sessionEndedShown = true;
       msg.textContent = e.message;
-      sess.classList.add("turfd-session-overlay--open");
+      sess.classList.add("stratum-session-overlay--open");
       sess.setAttribute("aria-hidden", "false");
       bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
     });

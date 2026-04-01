@@ -253,7 +253,7 @@ export class MenuBackground {
     const base = import.meta.env.BASE_URL;
     const blockDefs = await Promise.all(
       BLOCK_FILES.map(async (file) => {
-        const res = await fetch(`${base}assets/mods/turfd-core/blocks/${file}`);
+        const res = await fetch(`${base}assets/mods/stratum-core/blocks/${file}`);
         if (!res.ok) throw new Error(`Block load failed: ${file}`);
         return parseBlockJson(await res.json());
       }),
@@ -265,7 +265,7 @@ export class MenuBackground {
     const generator  = new WorldGenerator(MENU_SEED, registry);
     const chunkMap   = new ChunkMap(
       registry,
-      registry.getByIdentifier("turfd:air").id,
+      registry.getByIdentifier("stratum:air").id,
     );
     this.chunkMap = chunkMap;
 

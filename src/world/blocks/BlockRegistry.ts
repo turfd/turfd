@@ -15,13 +15,13 @@ export class BlockRegistry {
   }
 
   /**
-   * Register a block; returns assigned id. First call must be `turfd:air` (id 0).
+   * Register a block; returns assigned id. First call must be `stratum:air` (id 0).
    */
   register(def: BlockDefinitionBase): number {
     const id = this.byId.length;
-    if (id === 0 && def.identifier !== "turfd:air") {
+    if (id === 0 && def.identifier !== "stratum:air") {
       throw new Error(
-        `First registered block must be turfd:air (got ${def.identifier})`,
+        `First registered block must be stratum:air (got ${def.identifier})`,
       );
     }
     if (this.byIdentifier.has(def.identifier)) {
@@ -37,7 +37,7 @@ export class BlockRegistry {
     return id;
   }
 
-  /** Unique mod namespace prefixes from registered block identifiers (e.g. `turfd`). */
+  /** Unique mod namespace prefixes from registered block identifiers (e.g. `stratum`). */
   getModList(): string[] {
     return [...this.modNamespaces].sort();
   }

@@ -1,0 +1,21 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": { "identifier": "stratum:poppy" },
+    "components": {
+      "stratum:display_name": "Poppy",
+      "stratum:texture": { "all": "poppy" },
+      "stratum:solid": false,
+      "stratum:transparent": true,
+      "stratum:water": false,
+      "stratum:hardness": 0.05,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 0,
+      "stratum:material": "grass",
+      "stratum:replaceable": true,
+      "stratum:tall_grass": "none",
+      "stratum:loot_table": "stratum:poppy",
+      "stratum:plant_foot_offset_px": 5
+    }
+  }
+}

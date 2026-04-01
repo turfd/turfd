@@ -50,7 +50,7 @@ function sortWorldsByLastPlayed(a: WorldMetadata, b: WorldMetadata): number {
 // CSS
 // ---------------------------------------------------------------------------
 
-const STYLES_ID = "turfd-mm2-styles";
+const STYLES_ID = "stratum-mm2-styles";
 
 function injectStyles(base: string): void {
   if (document.getElementById(STYLES_ID)) return;
@@ -805,7 +805,7 @@ export class MainMenu {
       discordBtn.type = "button";
       discordBtn.textContent = "Discord";
       discordBtn.addEventListener("click", () => {
-        window.open("https://discord.gg/turfd", "_blank", "noopener");
+        window.open("https://discord.gg/stratum", "_blank", "noopener");
       });
       topbar.appendChild(discordBtn);
       root.appendChild(topbar);
@@ -823,7 +823,7 @@ export class MainMenu {
       const brandLogo = document.createElement("img");
       brandLogo.className = "mm-brand-logo";
       brandLogo.src = `${base}assets/textures/logo.png`;
-      brandLogo.alt = "Turf'd";
+      brandLogo.alt = "Stratum";
       brand.appendChild(brandLogo);
       nav.appendChild(brand);
 
@@ -1071,7 +1071,7 @@ export class MainMenu {
         const readMoreBtn = makeBtn("Read More", "mm-btn mm-btn-subtle mm-home-changelog-cta");
         readMoreBtn.addEventListener("click", () => {
           // Placeholder CTA until changelog route/details view is implemented.
-          window.open("https://discord.gg/turfd", "_blank", "noopener");
+          window.open("https://discord.gg/stratum", "_blank", "noopener");
         });
         wnCopy.appendChild(readMoreBtn);
 

@@ -1,5 +1,5 @@
 /**
- * Turf'd — application entry.
+ * Stratum — application entry.
  */
 import { createAuthProvider } from "./auth/createAuthProvider";
 import { Game } from "./core/Game";
@@ -42,12 +42,12 @@ async function main(): Promise<void> {
   const signalRelay = createSupabaseSignalRelay(auth);
 
   while (true) {
-    mount.classList.remove("turfd-game-loading");
+    mount.classList.remove("stratum-game-loading");
     mount.replaceChildren();
 
     const result = await MainMenu.show(mount, store, auth);
     const loadingUi = new WorldLoadingScreen(mount);
-    mount.classList.add("turfd-game-loading");
+    mount.classList.add("stratum-game-loading");
     loadingUi.update({
       stage: "Preparing session",
       detail: "Loading world metadata...",
@@ -65,7 +65,7 @@ async function main(): Promise<void> {
         worldUuid = crypto.randomUUID();
         seed = result.seed;
         worldName = result.name.trim() || "My World";
-        localStorage.setItem("turfd_worldUuid", worldUuid);
+        localStorage.setItem("stratum_worldUuid", worldUuid);
       } else if (result.action === "load") {
         worldUuid = result.uuid;
         const meta = await store.loadWorld(result.uuid);
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
           hotbarSlot: meta.hotbarSlot,
         };
         initialWorldTimeMs = meta.worldTimeMs ?? 0;
-        localStorage.setItem("turfd_worldUuid", worldUuid);
+        localStorage.setItem("stratum_worldUuid", worldUuid);
       } else {
         worldUuid = crypto.randomUUID();
         seed = 0;
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
       }
       await loadingUi.finishAndHold();
       loadingUi.destroy();
-      mount.classList.remove("turfd-game-loading");
+      mount.classList.remove("stratum-game-loading");
       game.start();
 
       await game.waitForStop();
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
         setTimeout(resolve, 1400);
       });
       loadingUi.destroy();
-      mount.classList.remove("turfd-game-loading");
+      mount.classList.remove("stratum-game-loading");
     }
   }
 }

@@ -1,8 +1,8 @@
 /** localStorage keys for pause-menu volume sliders (0–100). */
 export const VOL_KEYS = {
-  master: "turfd_vol_master",
-  music: "turfd_vol_music",
-  sfx: "turfd_vol_sfx",
+  master: "stratum_vol_master",
+  music: "stratum_vol_music",
+  sfx: "stratum_vol_sfx",
 } as const;
 
 export function readVolumeStored(key: string, defaultVal: number): number {

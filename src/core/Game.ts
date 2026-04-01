@@ -95,7 +95,7 @@ export type GameLoadProgress = {
   total?: number;
 };
 
-const TURFD_CORE_BLOCK_FILES = [
+const STRATUM_CORE_BLOCK_FILES = [
   "air.json",
   "dirt.json",
   "grass.json",
@@ -300,9 +300,9 @@ export class Game {
       stage: "Loading block data",
       detail: "Reading core block definitions...",
       current: 0,
-      total: TURFD_CORE_BLOCK_FILES.length,
+      total: STRATUM_CORE_BLOCK_FILES.length,
     });
-    await this.loadTurfdCoreBlocks(registry, (loaded, total, file) => {
+    await this.loadStratumCoreBlocks(registry, (loaded, total, file) => {
       progressCallback?.({
         stage: "Loading block data",
         detail: `Loaded ${file}`,
@@ -508,7 +508,7 @@ export class Game {
         playerSavedState.hotbarSlot,
       );
     } else {
-      const airId = world.getRegistry().getByIdentifier("turfd:air").id;
+      const airId = world.getRegistry().getByIdentifier("stratum:air").id;
       let surfaceY: number | null = null;
       for (let wy = 0; wy < WORLD_Y_MAX; wy++) {
         const solid = world.getBlock(0, wy);
@@ -1082,15 +1082,15 @@ export class Game {
     this.input?.setWorldInputBlocked(this.paused || this.isInventoryOpen);
   }
 
-  private async loadTurfdCoreBlocks(
+  private async loadStratumCoreBlocks(
     registry: BlockRegistry,
     progressCallback?: (loaded: number, total: number, file: string) => void,
   ): Promise<void> {
     const base = import.meta.env.BASE_URL;
-    const total = TURFD_CORE_BLOCK_FILES.length;
+    const total = STRATUM_CORE_BLOCK_FILES.length;
     let loaded = 0;
-    for (const file of TURFD_CORE_BLOCK_FILES) {
-      const url = `${base}assets/mods/turfd-core/blocks/${file}`;
+    for (const file of STRATUM_CORE_BLOCK_FILES) {
+      const url = `${base}assets/mods/stratum-core/blocks/${file}`;
       const res = await fetch(url);
       if (!res.ok) {
         throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
@@ -1280,7 +1280,7 @@ export class Game {
         const player = this.entityManager.getPlayer();
         const torchId = this.world
           .getRegistry()
-          .getByIdentifier("turfd:torch").id;
+          .getByIdentifier("stratum:torch").id;
         let heldTorch: HeldTorchLighting | null = null;
         if (player.getSelectedHotbarBlockId() === torchId) {
           const st = player.state;

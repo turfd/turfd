@@ -24,12 +24,12 @@ body {
 }
 
 /* During world load, hide canvas + in-game DOM so nothing shows through the overlay. */
-#app.turfd-game-loading > *:not(.turfd-loading-overlay) {
+#app.stratum-game-loading > *:not(.stratum-loading-overlay) {
   visibility: hidden !important;
 }
 
 /* Multiplayer / session-ended overlay (UIShell) — fade + slide, matches pause/inventory */
-.turfd-session-overlay {
+.stratum-session-overlay {
   position: fixed;
   inset: 0;
   z-index: 1200;
@@ -50,13 +50,13 @@ body {
     visibility 0.24s ease;
 }
 
-.turfd-session-overlay.turfd-session-overlay--open {
+.stratum-session-overlay.stratum-session-overlay--open {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
 }
 
-.turfd-session-card {
+.stratum-session-card {
   width: min(26rem, 100%);
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -71,18 +71,18 @@ body {
     opacity 0.26s ease;
 }
 
-.turfd-session-overlay.turfd-session-overlay--open .turfd-session-card {
+.stratum-session-overlay.stratum-session-overlay--open .stratum-session-card {
   transform: translateY(0);
   opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .turfd-session-overlay,
-  .turfd-session-card {
+  .stratum-session-overlay,
+  .stratum-session-card {
     transition: none;
   }
 
-  .turfd-session-overlay.turfd-session-overlay--open .turfd-session-card {
+  .stratum-session-overlay.stratum-session-overlay--open .stratum-session-card {
     transform: none;
   }
 }

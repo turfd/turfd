@@ -1,4 +1,4 @@
--- Turf'd — run once in Supabase SQL Editor (or migrate).
+-- Stratum — run once in Supabase SQL Editor (or migrate).
 -- Profiles + authenticated room relay. RLS assumes a hostile anon key.
 
 -- ---------------------------------------------------------------------------
@@ -70,22 +70,22 @@ create trigger profiles_set_updated_at
   for each row execute function public.set_profiles_updated_at();
 
 -- ---------------------------------------------------------------------------
--- turfd_room_sessions (no client SELECT; lookup via RPC only)
+-- stratum_room_sessions (no client SELECT; lookup via RPC only)
 -- ---------------------------------------------------------------------------
-create table if not exists public.turfd_room_sessions (
+create table if not exists public.stratum_room_sessions (
   room_code text primary key
     check (room_code ~ '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$'),
   host_peer_id text not null
     check (
-      host_peer_id ~ '^turfd-host-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$'
-      and substring(host_peer_id from 12) = room_code
+      host_peer_id ~ '^stratum-host-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$'
+      and substring(host_peer_id from 14) = room_code
     ),
   host_user_id uuid not null references auth.users (id) on delete cascade,
   expires_at timestamptz not null,
   updated_at timestamptz not null default now()
 );
 
-create or replace function public.set_turfd_room_sessions_updated_at()
+create or replace function public.set_stratum_room_sessions_updated_at()
 returns trigger
 language plpgsql
 as $$
@@ -95,26 +95,26 @@ begin
 end;
 $$;
 
-drop trigger if exists turfd_room_sessions_set_updated_at on public.turfd_room_sessions;
-create trigger turfd_room_sessions_set_updated_at
-  before update on public.turfd_room_sessions
-  for each row execute function public.set_turfd_room_sessions_updated_at();
+drop trigger if exists stratum_room_sessions_set_updated_at on public.stratum_room_sessions;
+create trigger stratum_room_sessions_set_updated_at
+  before update on public.stratum_room_sessions
+  for each row execute function public.set_stratum_room_sessions_updated_at();
 
-alter table public.turfd_room_sessions enable row level security;
+alter table public.stratum_room_sessions enable row level security;
 
 -- No SELECT policy: clients cannot list or read rows via PostgREST.
 
-create policy "turfd_room_sessions_insert_host"
-  on public.turfd_room_sessions for insert to authenticated
+create policy "stratum_room_sessions_insert_host"
+  on public.stratum_room_sessions for insert to authenticated
   with check (auth.uid() = host_user_id);
 
-create policy "turfd_room_sessions_update_host"
-  on public.turfd_room_sessions for update to authenticated
+create policy "stratum_room_sessions_update_host"
+  on public.stratum_room_sessions for update to authenticated
   using (auth.uid() = host_user_id)
   with check (auth.uid() = host_user_id);
 
-create policy "turfd_room_sessions_delete_host"
-  on public.turfd_room_sessions for delete to authenticated
+create policy "stratum_room_sessions_delete_host"
+  on public.stratum_room_sessions for delete to authenticated
   using (auth.uid() = host_user_id);
 
 create or replace function public.lookup_room_host_peer(p_room_code text)
@@ -136,7 +136,7 @@ begin
     return null;
   end if;
   select s.host_peer_id into pid
-  from public.turfd_room_sessions s
+  from public.stratum_room_sessions s
   where s.room_code = code
     and s.expires_at > now()
   limit 1;
@@ -144,12 +144,12 @@ begin
 end;
 $$;
 
-revoke all on public.turfd_room_sessions from public;
-grant select, insert, update, delete on public.turfd_room_sessions to service_role;
-grant insert, update, delete on public.turfd_room_sessions to authenticated;
+revoke all on public.stratum_room_sessions from public;
+grant select, insert, update, delete on public.stratum_room_sessions to service_role;
+grant insert, update, delete on public.stratum_room_sessions to authenticated;
 
 grant execute on function public.lookup_room_host_peer(text) to anon;
 grant execute on function public.lookup_room_host_peer(text) to authenticated;
 
 -- Optional: schedule in Supabase (Database → Cron) to prune stale rows, e.g.:
--- delete from public.turfd_room_sessions where expires_at < now();
+-- delete from public.stratum_room_sessions where expires_at < now();

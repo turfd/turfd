@@ -1,4 +1,4 @@
-/** Publish and resolve Turf'd room codes via Supabase (authenticated hosts only). */
+/** Publish and resolve Stratum room codes via Supabase (authenticated hosts only). */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { IAuthProvider } from "../auth/IAuthProvider";
@@ -28,7 +28,7 @@ export class SupabaseSignalAdapter {
       return;
     }
     const expiresAt = new Date(Date.now() + ROOM_RELAY_TTL_MS).toISOString();
-    const { error } = await this.client.from("turfd_room_sessions").upsert(
+    const { error } = await this.client.from("stratum_room_sessions").upsert(
       {
         room_code: roomCode,
         host_peer_id: hostPeerId,
@@ -49,7 +49,7 @@ export class SupabaseSignalAdapter {
       return;
     }
     const { error } = await this.client
-      .from("turfd_room_sessions")
+      .from("stratum_room_sessions")
       .delete()
       .eq("room_code", roomCode)
       .eq("host_user_id", session.userId);

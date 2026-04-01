@@ -1,6 +1,6 @@
-/** Turf'd host peer IDs for PeerJS (`turfd-host-` + random suffix). Joiners dial this ID on your signaling server. */
+/** Stratum host peer IDs for PeerJS (`stratum-host-` + random suffix). Joiners dial this ID on your signaling server. */
 
-const HOST_PREFIX = "turfd-host-";
+const HOST_PREFIX = "stratum-host-";
 
 /** Length of the random suffix (characters). */
 export const HOST_PEER_SUFFIX_LENGTH = 6;
@@ -20,7 +20,7 @@ const FULL_HOST_REGEX = new RegExp(
   `^${HOST_PREFIX}[${HOST_PEER_SUFFIX_ALPHABET}]{${HOST_PEER_SUFFIX_LENGTH}}$`,
 );
 
-/** True if `s` is a full host peer id (`turfd-host-XXXXXX`). */
+/** True if `s` is a full host peer id (`stratum-host-XXXXXX`). */
 export function isHostPeerId(s: string): s is HostPeerId {
   return FULL_HOST_REGEX.test(s);
 }
@@ -52,7 +52,7 @@ export function generateHostPeerId(): HostPeerId {
   return id;
 }
 
-/** Random client id (`turfd-client-` + suffix). */
+/** Random client id (`stratum-client-` + suffix). */
 export function generateClientPeerId(): string {
-  return `turfd-client-${generateRandomSuffix()}`;
+  return `stratum-client-${generateRandomSuffix()}`;
 }

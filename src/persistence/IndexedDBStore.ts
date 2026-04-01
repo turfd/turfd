@@ -6,7 +6,7 @@ import type { Chunk } from "../world/chunk/Chunk";
 import { chunkKey, type ChunkCoord } from "../world/chunk/ChunkCoord";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 
-export const DB_NAME = "turfd";
+export const DB_NAME = "stratum";
 export const DB_VERSION = 1;
 
 export type WorldMetadata = {

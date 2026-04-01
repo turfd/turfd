@@ -12,7 +12,7 @@ export type { AtlasIconLayout } from "./atlasItemIcon";
 
 type GetInventory = () => PlayerInventory;
 
-const INV_FONT_STYLE_ID = "turfd-inventory-fonts";
+const INV_FONT_STYLE_ID = "stratum-inventory-fonts";
 
 function ensureInventoryFonts(): void {
   if (document.getElementById(INV_FONT_STYLE_ID) !== null) {

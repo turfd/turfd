@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": { "identifier": "stratum:redstone_ore" },
+    "components": {
+      "stratum:display_name": "Redstone Ore",
+      "stratum:texture": { "all": "redstone_ore" },
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 4,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:material": "stone",
+      "stratum:loot_table": "stratum:redstone_ore"
+    }
+  }
+}

@@ -41,8 +41,8 @@ import type { GameEvent } from "../core/types";
 
 function isGrassOrDirtSupport(def: BlockDefinition): boolean {
   return (
-    def.identifier === "turfd:grass" ||
-    def.identifier === "turfd:dirt"
+    def.identifier === "stratum:grass" ||
+    def.identifier === "stratum:dirt"
   );
 }
 
@@ -108,7 +108,7 @@ export class World {
     this.registry = registry;
     this.chunks = new ChunkManager();
     this.worldGen = new WorldGenerator(seed, registry);
-    this.airId = registry.getByIdentifier("turfd:air").id;
+    this.airId = registry.getByIdentifier("stratum:air").id;
     this.seed = seed;
     this.store = store;
     this.worldUuid = worldUuid;
@@ -147,7 +147,7 @@ export class World {
     return this.registry;
   }
 
-  /** Numeric id of `turfd:air` (hot paths: occlusion, etc.). */
+  /** Numeric id of `stratum:air` (hot paths: occlusion, etc.). */
   getAirBlockId(): number {
     return this.airId;
   }
@@ -410,9 +410,9 @@ export class World {
       !above.solid &&
       !above.water &&
       (above.tallGrass === "bottom" ||
-        above.identifier === "turfd:dandelion" ||
-        above.identifier === "turfd:poppy" ||
-        above.identifier === "turfd:short_grass");
+        above.identifier === "stratum:dandelion" ||
+        above.identifier === "stratum:poppy" ||
+        above.identifier === "stratum:short_grass");
 
     if (!isFoliage) {
       return;

@@ -65,19 +65,19 @@ export class WorldGenerator {
     this.terrain = new TerrainNoise(seed);
     this.caves = new CaveGenerator(root.fork(0xca_57));
     this.ores = new OreVeins(root.fork(0x0e5), registry);
-    this.airId = registry.getByIdentifier("turfd:air").id;
-    this.grassId = registry.getByIdentifier("turfd:grass").id;
-    this.dirtId = registry.getByIdentifier("turfd:dirt").id;
-    this.stoneId = registry.getByIdentifier("turfd:stone").id;
-    this.gravelId = registry.getByIdentifier("turfd:gravel").id;
-    this.bedrockId = registry.getByIdentifier("turfd:bedrock").id;
-    this.treeTrunkBackId = registry.getByIdentifier("turfd:wood_log_back").id;
-    this.treeLeavesBackId = registry.getByIdentifier("turfd:leaves_back").id;
-    this.shortGrassId = registry.getByIdentifier("turfd:short_grass").id;
-    this.tallGrassBottomId = registry.getByIdentifier("turfd:tall_grass_bottom").id;
-    this.tallGrassTopId = registry.getByIdentifier("turfd:tall_grass_top").id;
-    this.dandelionId = registry.getByIdentifier("turfd:dandelion").id;
-    this.poppyId = registry.getByIdentifier("turfd:poppy").id;
+    this.airId = registry.getByIdentifier("stratum:air").id;
+    this.grassId = registry.getByIdentifier("stratum:grass").id;
+    this.dirtId = registry.getByIdentifier("stratum:dirt").id;
+    this.stoneId = registry.getByIdentifier("stratum:stone").id;
+    this.gravelId = registry.getByIdentifier("stratum:gravel").id;
+    this.bedrockId = registry.getByIdentifier("stratum:bedrock").id;
+    this.treeTrunkBackId = registry.getByIdentifier("stratum:wood_log_back").id;
+    this.treeLeavesBackId = registry.getByIdentifier("stratum:leaves_back").id;
+    this.shortGrassId = registry.getByIdentifier("stratum:short_grass").id;
+    this.tallGrassBottomId = registry.getByIdentifier("stratum:tall_grass_bottom").id;
+    this.tallGrassTopId = registry.getByIdentifier("stratum:tall_grass_top").id;
+    this.dandelionId = registry.getByIdentifier("stratum:dandelion").id;
+    this.poppyId = registry.getByIdentifier("stratum:poppy").id;
   }
 
   getSurfaceHeight(wx: number): number {

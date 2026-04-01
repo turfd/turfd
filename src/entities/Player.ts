@@ -124,17 +124,17 @@ function approach(current: number, target: number, maxDelta: number): number {
 
 function isGrassOrDirtSurface(below: BlockDefinition): boolean {
   return (
-    below.identifier === "turfd:grass" ||
-    below.identifier === "turfd:dirt"
+    below.identifier === "stratum:grass" ||
+    below.identifier === "stratum:dirt"
   );
 }
 
 /** Flowers and short grass may only be placed on grass or dirt. */
 function isFlowerOrShortGrass(identifier: string): boolean {
   return (
-    identifier === "turfd:dandelion" ||
-    identifier === "turfd:poppy" ||
-    identifier === "turfd:short_grass"
+    identifier === "stratum:dandelion" ||
+    identifier === "stratum:poppy" ||
+    identifier === "stratum:short_grass"
   );
 }
 
@@ -188,7 +188,7 @@ export class Player {
     this.registry = registry;
     this.itemRegistry = itemRegistry;
     this.inventory = new PlayerInventory(itemRegistry);
-    this.airId = registry.getByIdentifier("turfd:air").id;
+    this.airId = registry.getByIdentifier("stratum:air").id;
   }
 
   /** Seeds the first hotbar slots for a new world (no saved inventory). */
@@ -199,11 +199,11 @@ export class Player {
         this.inventory.setStack(slot, { itemId: item.id, count });
       }
     };
-    set("turfd:dirt", 0, 64);
-    set("turfd:stone", 1, 64);
-    set("turfd:wood_log", 2, 64);
-    set("turfd:glass", 3, 64);
-    set("turfd:torch", 4, 64);
+    set("stratum:dirt", 0, 64);
+    set("stratum:stone", 1, 64);
+    set("stratum:wood_log", 2, 64);
+    set("stratum:glass", 3, 64);
+    set("stratum:torch", 4, 64);
   }
 
   getAABB(): AABB {
@@ -522,7 +522,7 @@ export class Player {
                   }
                 }
                 if (!overlapsAnyPlayer) {
-                  const topId = this.registry.getByIdentifier("turfd:tall_grass_top").id;
+                  const topId = this.registry.getByIdentifier("stratum:tall_grass_top").id;
                   if (!world.setBlock(wx, wy, placesBlockId)) {
                     // vertical bounds
                   } else if (!world.setBlock(wx, wy + 1, topId)) {

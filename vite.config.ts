@@ -2,7 +2,7 @@ import path from "node:path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/turfd/",
+  base: "/stratum/",
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

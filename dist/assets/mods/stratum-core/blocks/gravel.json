@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": { "identifier": "stratum:gravel" },
+    "components": {
+      "stratum:display_name": "Gravel",
+      "stratum:texture": { "all": "gravel" },
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 0.6,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:material": "dirt",
+      "stratum:loot_table": "stratum:gravel"
+    }
+  }
+}

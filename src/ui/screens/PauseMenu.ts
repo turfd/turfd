@@ -17,7 +17,7 @@ const U_DUSK_END =
 
 const TIME_SLIDER_STEPS = 1000;
 
-const PAUSE_STYLE_ID = "turfd-pause-styles";
+const PAUSE_STYLE_ID = "stratum-pause-styles";
 
 function skyPeriodLabel(phase: number): string {
   if (phase < U_DAWN_END) {

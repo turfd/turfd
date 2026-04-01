@@ -132,7 +132,7 @@ export class CompositePass {
     const glProgram = GlProgram.from({
       vertex: FILTER_VERT_SRC,
       fragment: fragSrc,
-      name: "turfd-composite",
+      name: "stratum-composite",
     });
 
     this._filter = new Filter({

@@ -1,9 +1,9 @@
-/** Room code helpers for multiplayer join flow (`ABC123` <-> `turfd-host-ABC123`). */
+/** Room code helpers for multiplayer join flow (`ABC123` <-> `stratum-host-ABC123`). */
 
 import type { HostPeerId } from "./hostPeerId";
 import { isHostPeerId } from "./hostPeerId";
 
-const PEER_ID_PREFIX = "turfd-host-";
+const PEER_ID_PREFIX = "stratum-host-";
 const ROOM_CODE_LENGTH = 6;
 const ROOM_CODE_REGEX = /^[A-Z0-9]{6}$/;
 

@@ -7,11 +7,11 @@ import type { Camera } from "../renderer/Camera";
 const BASE_URL = import.meta.env.BASE_URL;
 
 function ensureFonts(): void {
-  if (document.getElementById("turfd-nametag-fonts")) {
+  if (document.getElementById("stratum-nametag-fonts")) {
     return;
   }
   const style = document.createElement("style");
-  style.id = "turfd-nametag-fonts";
+  style.id = "stratum-nametag-fonts";
   style.textContent = `
     @font-face {
       font-family: 'M5x7';
@@ -32,7 +32,7 @@ export class NametagOverlay {
   init(mount: HTMLElement): void {
     ensureFonts();
     const layer = document.createElement("div");
-    layer.id = "turfd-nametag-layer";
+    layer.id = "stratum-nametag-layer";
     layer.style.cssText = [
       "position:absolute",
       "pointer-events:none",

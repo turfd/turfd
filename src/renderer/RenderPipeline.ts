@@ -477,7 +477,7 @@ export class RenderPipeline implements RenderPipelineLayers {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `turfd_${tsSingle}.png`;
+        a.download = `stratum_${tsSingle}.png`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -580,7 +580,7 @@ export class RenderPipeline implements RenderPipelineLayers {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `turfd_${ts}.png`;
+      a.download = `stratum_${ts}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
