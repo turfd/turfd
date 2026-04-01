@@ -555,7 +555,9 @@ function injectStyles(base: string): void {
       margin-bottom: 6px;
     }
     .mm-field input[type="text"],
-    .mm-field input[type="number"] {
+    .mm-field input[type="number"],
+    .mm-field input[type="email"],
+    .mm-field input[type="password"] {
       width: 100%;
       box-sizing: border-box;
       padding: 12px 14px;
@@ -569,7 +571,9 @@ function injectStyles(base: string): void {
       transition: border-color 0.14s ease;
     }
     .mm-field input[type="text"]:focus,
-    .mm-field input[type="number"]:focus {
+    .mm-field input[type="number"]:focus,
+    .mm-field input[type="email"]:focus,
+    .mm-field input[type="password"]:focus {
       outline: none;
       border-color: var(--mm-border-strong);
     }
@@ -590,7 +594,8 @@ function injectStyles(base: string): void {
 
     /* ── Online / settings: fill main column with tab panel ---------------- */
     .mm-online-panel,
-    .mm-settings-panel {
+    .mm-settings-panel,
+    .mm-profile-panel {
       width: 100%;
       max-width: 100%;
       margin-left: 0;
