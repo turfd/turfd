@@ -520,6 +520,24 @@ function injectStyles(base: string): void {
       text-align: center;
       line-height: 1.45;
     }
+    /* Host-world picker modal: same scroll + thumb behavior as Solo */
+    .mm-host-world-modal-card {
+      display: flex;
+      flex-direction: column;
+      width: min(40rem, 100%);
+      max-height: min(88vh, 720px);
+      min-height: 0;
+    }
+    .mm-host-world-modal-card .mm-worldlist {
+      flex: 1;
+      min-height: 140px;
+      max-height: none;
+      margin-bottom: 0;
+    }
+    .mm-host-world-modal-card .mm-modal-actions {
+      margin-top: 12px;
+      flex-shrink: 0;
+    }
     .mm-solo-footer {
       display: flex;
       justify-content: flex-start;
@@ -1330,49 +1348,14 @@ export class MainMenu {
             return;
           }
           for (const world of worlds) {
-            const row = document.createElement("div");
-            row.className = "mm-world-row";
-            const thumbWrap = document.createElement("div");
-            thumbWrap.className = "mm-world-thumb";
-            const previewUrl = world.previewImageDataUrl;
-            if (previewUrl !== undefined && previewUrl.length > 0) {
-              const img = document.createElement("img");
-              img.src = previewUrl;
-              img.alt = "";
-              img.decoding = "async";
-              thumbWrap.appendChild(img);
-            } else {
-              const ph = document.createElement("div");
-              ph.className = "mm-world-thumb-empty";
-              ph.setAttribute("aria-hidden", "true");
-              thumbWrap.appendChild(ph);
-            }
-            const info = document.createElement("div");
-            info.className = "mm-world-info";
-            const nameEl = document.createElement("div");
-            nameEl.className = "mm-world-name";
-            nameEl.textContent = world.name;
-            const metaEl = document.createElement("div");
-            metaEl.className = "mm-world-meta";
-            metaEl.textContent = `Seed ${world.seed} · ${formatDate(world.lastPlayedAt)}`;
-            info.appendChild(nameEl);
-            info.appendChild(metaEl);
-            const editBtn = document.createElement("button");
-            editBtn.type = "button";
-            editBtn.className = "mm-world-edit";
-            editBtn.textContent = "Edit";
-            editBtn.addEventListener("click", (ev) => {
-              ev.stopPropagation();
-              openEditModal(world, rerenderList);
-            });
-            row.appendChild(thumbWrap);
-            row.appendChild(info);
-            row.appendChild(editBtn);
-            row.addEventListener("click", () => {
+            appendWorldRowToList(list, world, () => {
               cleanup();
               resolve({ action: "load", uuid: world.uuid });
+            }, {
+              onEdit: (w) => {
+                openEditModal(w, rerenderList);
+              },
             });
-            list.appendChild(row);
           }
         };
 
@@ -1569,7 +1552,7 @@ export class MainMenu {
         const modal = document.createElement("div");
         modal.className = "mm-modal";
         const card = document.createElement("div");
-        card.className = "mm-modal-card";
+        card.className = "mm-modal-card mm-host-world-modal-card";
 
         const heading = document.createElement("h3");
         heading.className = "mm-modal-title";
@@ -1581,7 +1564,6 @@ export class MainMenu {
 
         const list = document.createElement("div");
         list.className = "mm-worldlist";
-        list.style.maxHeight = "min(40vh, 240px)";
 
         const actions = document.createElement("div");
         actions.className = "mm-modal-actions";
@@ -1600,25 +1582,10 @@ export class MainMenu {
             return;
           }
           for (const w of worlds) {
-            const row = document.createElement("button");
-            row.type = "button";
-            row.className = "mm-world-row";
-            const info = document.createElement("div");
-            info.className = "mm-world-info";
-            const nameEl = document.createElement("div");
-            nameEl.className = "mm-world-name";
-            nameEl.textContent = w.name;
-            const metaEl = document.createElement("div");
-            metaEl.className = "mm-world-meta";
-            metaEl.textContent = `Seed ${w.seed} · ${formatDate(w.lastPlayedAt)}`;
-            info.appendChild(nameEl);
-            info.appendChild(metaEl);
-            row.appendChild(info);
-            row.addEventListener("click", () => {
+            appendWorldRowToList(list, w, () => {
               modal.remove();
               openHostDetailsModal(w.uuid, prefs);
             });
-            list.appendChild(row);
           }
         })();
 
@@ -2228,6 +2195,57 @@ export class MainMenu {
 // ---------------------------------------------------------------------------
 // Small DOM helpers
 // ---------------------------------------------------------------------------
+
+/** World row matching Solo list: thumbnail, name/meta, optional Edit (stops propagation). */
+function appendWorldRowToList(
+  list: HTMLElement,
+  world: WorldMetadata,
+  onSelect: () => void,
+  edit?: { onEdit: (w: WorldMetadata) => void },
+): void {
+  const row = document.createElement("div");
+  row.className = "mm-world-row";
+  const thumbWrap = document.createElement("div");
+  thumbWrap.className = "mm-world-thumb";
+  const previewUrl = world.previewImageDataUrl;
+  if (previewUrl !== undefined && previewUrl.length > 0) {
+    const img = document.createElement("img");
+    img.src = previewUrl;
+    img.alt = "";
+    img.decoding = "async";
+    thumbWrap.appendChild(img);
+  } else {
+    const ph = document.createElement("div");
+    ph.className = "mm-world-thumb-empty";
+    ph.setAttribute("aria-hidden", "true");
+    thumbWrap.appendChild(ph);
+  }
+  const info = document.createElement("div");
+  info.className = "mm-world-info";
+  const nameEl = document.createElement("div");
+  nameEl.className = "mm-world-name";
+  nameEl.textContent = world.name;
+  const metaEl = document.createElement("div");
+  metaEl.className = "mm-world-meta";
+  metaEl.textContent = `Seed ${world.seed} · ${formatDate(world.lastPlayedAt)}`;
+  info.appendChild(nameEl);
+  info.appendChild(metaEl);
+  row.appendChild(thumbWrap);
+  row.appendChild(info);
+  if (edit !== undefined) {
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "mm-world-edit";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      edit.onEdit(world);
+    });
+    row.appendChild(editBtn);
+  }
+  row.addEventListener("click", onSelect);
+  list.appendChild(row);
+}
 
 function makeField(labelText: string): HTMLDivElement {
   const div = document.createElement("div");

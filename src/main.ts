@@ -108,9 +108,20 @@ async function main(): Promise<void> {
           roomPassword: result.roomPassword,
         };
       } else {
-        worldUuid = crypto.randomUUID();
-        seed = 0;
-        worldName = "Multiplayer World";
+        const remembered = localStorage.getItem("stratum_worldUuid");
+        const joinReuse =
+          remembered !== null && remembered.length > 0
+            ? await store.loadWorld(remembered)
+            : undefined;
+        if (joinReuse !== undefined) {
+          worldUuid = joinReuse.uuid;
+          seed = 0;
+          worldName = joinReuse.name;
+        } else {
+          worldUuid = crypto.randomUUID();
+          seed = 0;
+          worldName = "Multiplayer World";
+        }
         multiplayerJoinRoomCode = result.roomCode;
         multiplayerJoinPassword = result.password;
       }
