@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:coal_ore" },
+    "components": {
+      "turfd:display_name": "Coal Ore",
+      "turfd:texture": { "all": "coal_ore" },
+      "turfd:solid": true,
+      "turfd:transparent": false,
+      "turfd:water": false,
+      "turfd:hardness": 3,
+      "turfd:light_emission": 0,
+      "turfd:light_absorption": 15,
+      "turfd:material": "stone",
+      "turfd:loot_table": "turfd:coal_ore"
+    }
+  }
+}

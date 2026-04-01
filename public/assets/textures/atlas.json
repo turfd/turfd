@@ -1,0 +1,125 @@
+{
+  "frames": {
+    "air": {
+      "frame": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "dirt": {
+      "frame": { "x": 16, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "grass": {
+      "frame": { "x": 32, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "stone": {
+      "frame": { "x": 48, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "sand": {
+      "frame": { "x": 64, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "gravel": {
+      "frame": { "x": 80, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "bedrock": {
+      "frame": { "x": 96, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "wood_log": {
+      "frame": { "x": 112, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "leaves": {
+      "frame": { "x": 128, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "glass": {
+      "frame": { "x": 144, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "torch": {
+      "frame": { "x": 160, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "water": {
+      "frame": { "x": 176, "y": 0, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "coal_ore": {
+      "frame": { "x": 0, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "iron_ore": {
+      "frame": { "x": 16, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "gold_ore": {
+      "frame": { "x": 32, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "diamond_ore": {
+      "frame": { "x": 48, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "redstone_ore": {
+      "frame": { "x": 64, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "lapis_ore": {
+      "frame": { "x": 80, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "short_grass": {
+      "frame": { "x": 32, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "tall_grass_bottom": {
+      "frame": { "x": 48, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "tall_grass_top": {
+      "frame": { "x": 64, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "dandelion": {
+      "frame": { "x": 80, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    },
+    "poppy": {
+      "frame": { "x": 96, "y": 16, "w": 16, "h": 16 },
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 16, "h": 16 },
+      "sourceSize": { "w": 16, "h": 16 }
+    }
+  },
+  "meta": {
+    "image": "atlas.png",
+    "format": "RGBA8888",
+    "size": { "w": 256, "h": 256 },
+    "scale": "1"
+  }
+}

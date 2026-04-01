@@ -1,0 +1,542 @@
+/**
+ * Standalone PixiJS world renderer for the main menu background.
+ *
+ * Layers (back to front):
+ *  1. CSS canvas  — sky gradient + tiled bg.png terrain backdrop
+ *  2. PixiJS canvas (transparent BG) — tiles + composite lighting pass
+ *  3. DOM overlay (MainMenu)
+ *
+ * Zoom matches the game's adaptive formula (max 20 blocks visible horizontally).
+ * Lighting uses the full composite shader (OcclusionTexture + IndirectLightTexture).
+ */
+import { Application, Container, RenderTexture } from "pixi.js";
+import {
+  BLOCK_SIZE,
+  CHUNK_SIZE,
+  SKY_LIGHT_MAX,
+} from "../../core/constants";
+import { parseBlockJson } from "../../mods/parseBlockJson";
+import { AtlasLoader } from "../../renderer/AtlasLoader";
+import { OcclusionTexture } from "../../renderer/lighting/OcclusionTexture";
+import { IndirectLightTexture } from "../../renderer/lighting/IndirectLightTexture";
+import { CompositePass } from "../../renderer/lighting/CompositePass";
+import { buildMesh } from "../../renderer/chunk/TileDrawBatch";
+import { BlockRegistry } from "../../world/blocks/BlockRegistry";
+import { WorldGenerator } from "../../world/gen/WorldGenerator";
+import type { Chunk } from "../../world/chunk/Chunk";
+import type { World } from "../../world/World";
+
+// ---------------------------------------------------------------------------
+// Layout / world constants
+// ---------------------------------------------------------------------------
+
+const BLOCK_FILES = [
+  "air.json", "dirt.json", "grass.json", "short_grass.json",
+  "tall_grass_bottom.json", "tall_grass_top.json", "dandelion.json",
+  "poppy.json", "stone.json", "sand.json", "gravel.json", "bedrock.json",
+  "wood-log.json", "leaves.json", "wood-log-back.json", "leaves-back.json",
+  "glass.json", "torch.json", "water.json", "coal_ore.json",
+  "iron_ore.json", "gold_ore.json", "diamond_ore.json",
+  "redstone_ore.json", "lapis_ore.json",
+] as const;
+
+const MENU_SEED   = 31415;
+const CHUNKS_X    = 10;  // 320 blocks wide
+const CY_START    = -3;  // underground
+const CY_END      = 2;   // surface + canopy
+
+/**
+ * Adaptive zoom: same formula as Camera.getEffectiveZoom().
+ * Keeps at most MAX_VISIBLE_BLOCKS_X blocks visible across the screen width,
+ * but never drops below MIN_ZOOM.
+ */
+const MAX_VISIBLE_BLOCKS_X = 20;
+const MIN_ZOOM             = 2;
+
+function computeZoom(screenW: number): number {
+  return Math.max(MIN_ZOOM, screenW / (MAX_VISIBLE_BLOCKS_X * BLOCK_SIZE));
+}
+
+const PAN_SPEED_X       = 0.040;  // rad/s
+const PAN_RANGE_X_BLOCKS = 16;    // ±blocks
+const PAN_SPEED_Y       = 0.022;  // rad/s
+const PAN_RANGE_Y_PX    = 24;     // ±screen-pixels (vertical bob)
+
+// ---------------------------------------------------------------------------
+// Sky / background constants (mirror values from WorldTime.ts / RenderPipeline.ts)
+// ---------------------------------------------------------------------------
+
+/** Daytime sky colours at peak noon (0xRRGGBB). */
+const SKY_TOP     = 0x74b3ff;
+const SKY_HORIZON = 0xa8d8ff;
+const SKY_BOTTOM  = 0x6a8a9a;
+const SKY_WHITE   = 0xffffff;
+
+const BG_PARALLAX_X          = 0.15;
+const BG_PARALLAX_Y          = 0.48;
+const BG_HEIGHT_FRAC         = 0.80;
+const BG_VERTICAL_OFFSET_FRAC = 0.03;
+const BG_BASE_DARKNESS       = 0.28;
+
+/** Daytime lighting params passed to the composite shader. */
+const DAYTIME_LIGHTING = {
+  sunDir:       [0.45,  0.89]          as [number, number],
+  ambient:      1.0,
+  ambientTint:  [1.0, 1.0, 1.0]       as [number, number, number],
+  skyLightTint: [1.0, 0.98, 0.95]     as [number, number, number],
+  sunIntensity: 0.82,
+  sunTint:      [1.0, 0.98, 0.92]     as [number, number, number],
+  moonDir:      [-0.45, -0.89]        as [number, number],
+  moonIntensity: 0.0,
+  moonTint:     [0.6, 0.7, 1.0]       as [number, number, number],
+  heldTorch:    null,
+} as const;
+
+// ---------------------------------------------------------------------------
+// Colour helpers (mirror RenderPipeline.ts helpers)
+// ---------------------------------------------------------------------------
+
+function lerpColor(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  return (Math.round(ar + (br - ar) * t) << 16) |
+         (Math.round(ag + (bg - ag) * t) << 8)  |
+          Math.round(ab + (bb - ab) * t);
+}
+
+function hexToCss(hex: number): string {
+  return `#${(hex & 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+// ---------------------------------------------------------------------------
+// Minimal World adapter
+// ---------------------------------------------------------------------------
+
+class ChunkMap {
+  private readonly map = new Map<string, Chunk>();
+
+  constructor(
+    private readonly registry: BlockRegistry,
+    private readonly airId: number,
+  ) {}
+
+  add(chunk: Chunk): void {
+    this.map.set(`${chunk.coord.cx},${chunk.coord.cy}`, chunk);
+  }
+
+  getChunk(cx: number, cy: number): Chunk | undefined {
+    return this.map.get(`${cx},${cy}`);
+  }
+
+  getRegistry(): BlockRegistry { return this.registry; }
+  getAirBlockId(): number      { return this.airId; }
+
+  getSkyLight(wx: number, wy: number): number {
+    const cx = Math.floor(wx / CHUNK_SIZE);
+    const cy = Math.floor(wy / CHUNK_SIZE);
+    const chunk = this.map.get(`${cx},${cy}`);
+    if (!chunk) return SKY_LIGHT_MAX;
+    const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const ly = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    return chunk.skyLight[ly * CHUNK_SIZE + lx] ?? 0;
+  }
+
+  getBlockLight(_wx: number, _wy: number): number { return 0; }
+
+  asWorld(): World { return this as unknown as World; }
+}
+
+// ---------------------------------------------------------------------------
+// Sky-light propagation
+// ---------------------------------------------------------------------------
+
+function propagateSkyLight(chunkMap: ChunkMap, registry: BlockRegistry): void {
+  for (let cx = 0; cx < CHUNKS_X; cx++) {
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      let inSky = true;
+      for (let cy = CY_END; cy >= CY_START; cy--) {
+        const chunk = chunkMap.getChunk(cx, cy);
+        for (let ly = CHUNK_SIZE - 1; ly >= 0; ly--) {
+          const idx = ly * CHUNK_SIZE + lx;
+          if (!chunk) { inSky = false; continue; }
+          const solid = registry.isSolid(chunk.blocks[idx] ?? 0);
+          chunk.skyLight[idx] = solid ? 0 : (inSky ? SKY_LIGHT_MAX : 0);
+          if (solid) inSky = false;
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MenuBackground
+// ---------------------------------------------------------------------------
+
+export class MenuBackground {
+  private app: Application | null = null;
+  private rafId: number | null = null;
+  private startTime = 0;
+  private destroyed = false;
+
+  // World rendering
+  private worldContainer: Container | null = null;
+  private albedoRT: RenderTexture | null = null;
+  private occlusion: OcclusionTexture | null = null;
+  private indirect: IndirectLightTexture | null = null;
+  private composite: CompositePass | null = null;
+  private chunkMap: ChunkMap | null = null;
+
+  // Sky canvas
+  private skyCanvas: HTMLCanvasElement | null = null;
+  private skyCtx: CanvasRenderingContext2D | null = null;
+  private bgImage: HTMLImageElement | null = null;
+
+  private baseX = 0;
+  private baseY = 0;
+  private panRangeXPx = 0;
+  private zoom = MIN_ZOOM;
+
+  private lastCenterCX = -9999;
+  private lastCenterCY = -9999;
+
+  async init(mount: HTMLElement): Promise<void> {
+    // -- Sky Canvas (inserted first = lowest z-order) -----------------------
+    const skyCanvas = document.createElement("canvas");
+    skyCanvas.style.cssText =
+      "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
+    if (mount.firstChild) {
+      mount.insertBefore(skyCanvas, mount.firstChild);
+    } else {
+      mount.appendChild(skyCanvas);
+    }
+    this.skyCanvas = skyCanvas;
+    this.skyCtx = skyCanvas.getContext("2d");
+
+    // Start loading bg.png in parallel with PixiJS init
+    const bgPromise = this.loadBgImage(
+      `${import.meta.env.BASE_URL}assets/textures/bg.png`,
+    );
+
+    // -- PixiJS init --------------------------------------------------------
+    const app = new Application();
+    await app.init({
+      autoStart: false,
+      resizeTo: mount,
+      antialias: false,
+      preference: "webgl",
+      backgroundAlpha: 0,  // transparent — sky canvas shows through air pixels
+      resolution: window.devicePixelRatio >= 1 ? window.devicePixelRatio : 1,
+      autoDensity: true,
+    });
+
+    if (this.destroyed) { app.destroy(); return; }
+
+    const pixiCanvas = app.canvas;
+    pixiCanvas.style.cssText =
+      "position:absolute;inset:0;width:100%;height:100%;" +
+      "image-rendering:pixelated;z-index:1;pointer-events:none;";
+    // Insert after skyCanvas but before any overlay DOM
+    skyCanvas.insertAdjacentElement("afterend", pixiCanvas);
+    this.app = app;
+
+    // -- Atlas + registry ---------------------------------------------------
+    const atlas = new AtlasLoader();
+    await atlas.load();
+    if (this.destroyed) { app.destroy(); return; }
+
+    const registry = new BlockRegistry();
+    const base = import.meta.env.BASE_URL;
+    const blockDefs = await Promise.all(
+      BLOCK_FILES.map(async (file) => {
+        const res = await fetch(`${base}assets/mods/turfd-core/blocks/${file}`);
+        if (!res.ok) throw new Error(`Block load failed: ${file}`);
+        return parseBlockJson(await res.json());
+      }),
+    );
+    for (const def of blockDefs) registry.register(def);
+    if (this.destroyed) { app.destroy(); return; }
+
+    // -- World generation ---------------------------------------------------
+    const generator  = new WorldGenerator(MENU_SEED, registry);
+    const chunkMap   = new ChunkMap(
+      registry,
+      registry.getByIdentifier("turfd:air").id,
+    );
+    this.chunkMap = chunkMap;
+
+    const dpr     = app.renderer.resolution;
+    const screenW = app.renderer.width  / dpr;
+    const screenH = app.renderer.height / dpr;
+    const zoom    = computeZoom(screenW);
+    this.zoom     = zoom;
+
+    const worldContainer = new Container();
+    worldContainer.scale.set(zoom);
+    this.worldContainer = worldContainer;
+
+    for (let cy = CY_START; cy <= CY_END; cy++) {
+      for (let cx = 0; cx < CHUNKS_X; cx++) {
+        const chunk = generator.generateChunk({ cx, cy });
+        chunkMap.add(chunk);
+        const mesh = buildMesh(chunk, registry, atlas);
+        mesh.position.set(
+          cx  * CHUNK_SIZE * BLOCK_SIZE,
+          -cy * CHUNK_SIZE * BLOCK_SIZE,
+        );
+        worldContainer.addChild(mesh);
+      }
+    }
+
+    propagateSkyLight(chunkMap, registry);
+
+    // -- Lighting pipeline --------------------------------------------------
+    const albedoRT = RenderTexture.create({
+      width:  app.renderer.width,
+      height: app.renderer.height,
+      dynamic: true,
+    });
+    this.albedoRT = albedoRT;
+
+    const occlusion = new OcclusionTexture();
+    const indirect  = new IndirectLightTexture();
+    const composite = new CompositePass(albedoRT, occlusion, indirect);
+    composite.resize(screenW, screenH);
+    this.occlusion = occlusion;
+    this.indirect  = indirect;
+    this.composite = composite;
+
+    app.stage.addChild(worldContainer);
+    app.stage.addChild(composite.displayObject);
+
+    // -- Camera baseline (surface at 55% down screen) -----------------------
+    const midWX    = Math.floor((CHUNKS_X * CHUNK_SIZE) / 2);
+    const surfaceY = generator.getSurfaceHeight(midWX);
+
+    this.baseX = screenW / 2 - (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2;
+    this.baseY = screenH * 0.55 + (surfaceY + 1) * BLOCK_SIZE * zoom;
+    this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
+
+    worldContainer.position.set(this.baseX, this.baseY);
+
+    // Await bg image (non-blocking — it may still be null if load fails)
+    this.bgImage = await bgPromise.catch(() => null);
+
+    this.startTime = performance.now();
+    this.rafId = requestAnimationFrame((t) => this.animate(t));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sky canvas rendering
+  // ---------------------------------------------------------------------------
+
+  private paintSky(worldContainerX: number, worldContainerY: number): void {
+    const cvs = this.skyCanvas;
+    const ctx = this.skyCtx;
+    if (!cvs || !ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const cw  = Math.max(1, Math.round(cvs.clientWidth  * dpr));
+    const ch  = Math.max(1, Math.round(cvs.clientHeight * dpr));
+    if (cvs.width !== cw || cvs.height !== ch) {
+      cvs.width  = cw;
+      cvs.height = ch;
+    }
+
+    // -- Sky gradient (daytime with horizon haze) ---------------------------
+    const sunIntensity = DAYTIME_LIGHTING.sunIntensity;
+    const haze = smoothstep(0.34, 0.72, sunIntensity);
+    const towardWhite = (c: number, amt: number): number =>
+      lerpColor(c, SKY_WHITE, amt * haze);
+
+    const midHigh = lerpColor(SKY_TOP,     SKY_HORIZON, 0.35);
+    const midLow  = lerpColor(SKY_HORIZON, SKY_BOTTOM,  0.45);
+
+    const grd = ctx.createLinearGradient(0, 0, 0, ch);
+    grd.addColorStop(0.00, hexToCss(SKY_TOP));
+    grd.addColorStop(0.14, hexToCss(lerpColor(SKY_TOP, midHigh, 0.55)));
+    grd.addColorStop(0.30, hexToCss(midHigh));
+    grd.addColorStop(0.44, hexToCss(towardWhite(midHigh,    0.14)));
+    grd.addColorStop(0.52, hexToCss(towardWhite(SKY_HORIZON, 0.36)));
+    grd.addColorStop(0.58, hexToCss(towardWhite(SKY_HORIZON, 0.58)));
+    grd.addColorStop(0.65, hexToCss(towardWhite(SKY_HORIZON, 0.40)));
+    grd.addColorStop(0.75, hexToCss(towardWhite(midLow,      0.22)));
+    grd.addColorStop(0.88, hexToCss(midLow));
+    grd.addColorStop(1.00, hexToCss(SKY_BOTTOM));
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, cw, ch);
+
+    // -- bg.png tiled background --------------------------------------------
+    const img = this.bgImage;
+    if (img && img.height > 0) {
+      // camX in un-zoomed world pixels (mirrors camera.getPosition().x)
+      const camX   = (cw / (2 * dpr) - worldContainerX) / this.zoom;
+      const drawH  = Math.max(1, Math.round(ch * BG_HEIGHT_FRAC));
+      const drawW  = Math.max(1, Math.round((img.width / img.height) * drawH));
+      if (drawW > 0) {
+        const offsetX   = Math.round(camX * BG_PARALLAX_X);
+        const yOffset   = Math.round(ch * BG_VERTICAL_OFFSET_FRAC +
+                          worldContainerY * BG_PARALLAX_Y);
+        const startTile = Math.floor(offsetX / drawW) - 1;
+        const endTile   = Math.floor((offsetX + cw) / drawW) + 1;
+
+        const prevSmoothing   = ctx.imageSmoothingEnabled;
+        const prevAlpha       = ctx.globalAlpha;
+        ctx.imageSmoothingEnabled = false;
+        ctx.globalAlpha = 1 - BG_BASE_DARKNESS;  // daytime tint
+
+        for (let tile = startTile; tile <= endTile; tile++) {
+          const sx = tile * drawW - offsetX;
+          if ((tile & 1) === 0) {
+            ctx.drawImage(img, sx, yOffset, drawW, drawH);
+          } else {
+            ctx.save();
+            ctx.translate(sx + drawW, yOffset);
+            ctx.scale(-1, 1);
+            ctx.drawImage(img, 0, 0, drawW, drawH);
+            ctx.restore();
+          }
+        }
+
+        ctx.imageSmoothingEnabled = prevSmoothing;
+        ctx.globalAlpha = prevAlpha;
+      }
+    }
+
+    // -- Sun disc -----------------------------------------------------------
+    const sunAlpha = Math.min(1, sunIntensity / 0.65);
+    if (sunAlpha > 0.04) {
+      const [sx, sy] = DAYTIME_LIGHTING.sunDir;
+      const spread = cw * 0.38;
+      const baseY  = ch * 0.16;
+      ctx.beginPath();
+      ctx.arc(
+        cw * 0.5 + sx * spread,
+        baseY - sy * ch * 0.2,
+        Math.round(16 * dpr), 0, Math.PI * 2,
+      );
+      ctx.fillStyle = `rgba(255,243,176,${sunAlpha})`;
+      ctx.fill();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Animate loop
+  // ---------------------------------------------------------------------------
+
+  private animate(now: number): void {
+    if (this.destroyed || !this.app || !this.worldContainer) return;
+
+    const app            = this.app;
+    const worldContainer = this.worldContainer;
+    const occlusion      = this.occlusion;
+    const indirect       = this.indirect;
+    const composite      = this.composite;
+    const chunkMap       = this.chunkMap;
+
+    // -- Camera pan ---------------------------------------------------------
+    const t = (now - this.startTime) / 1000;
+    worldContainer.x = this.baseX + Math.sin(t * PAN_SPEED_X) * this.panRangeXPx;
+    worldContainer.y = this.baseY + Math.sin(t * PAN_SPEED_Y) * PAN_RANGE_Y_PX;
+
+    // -- Sky / background (CSS canvas) --------------------------------------
+    this.paintSky(worldContainer.x, worldContainer.y);
+
+    // -- Lighting uniforms --------------------------------------------------
+    if (occlusion && indirect && composite && chunkMap) {
+      const dpr = app.renderer.resolution;
+      const sw  = app.renderer.width  / dpr;
+      const sh  = app.renderer.height / dpr;
+
+      const localCX     = (sw / 2 - worldContainer.x) / this.zoom;
+      const localCY     = (sh / 2 - worldContainer.y) / this.zoom;
+      const centerChunkX = Math.floor(localCX / (BLOCK_SIZE * CHUNK_SIZE));
+      const centerChunkY = Math.floor(-localCY / (BLOCK_SIZE * CHUNK_SIZE));
+
+      if (centerChunkX !== this.lastCenterCX || centerChunkY !== this.lastCenterCY) {
+        if (occlusion.rebuild(centerChunkX, centerChunkY, chunkMap.asWorld())) {
+          occlusion.upload();
+        }
+        if (indirect.rebuild(centerChunkX, centerChunkY, chunkMap.asWorld())) {
+          indirect.upload();
+        }
+        this.lastCenterCX = centerChunkX;
+        this.lastCenterCY = centerChunkY;
+      }
+
+      const tlX        = (0 - worldContainer.x) / this.zoom;
+      const tlY        = (0 - worldContainer.y) / this.zoom;
+      composite.updateUniforms({
+        ...DAYTIME_LIGHTING,
+        cameraWorld:     [tlX / BLOCK_SIZE, -tlY / BLOCK_SIZE],
+        blockPixels:     BLOCK_SIZE * this.zoom,
+        occlusionOrigin: [occlusion.originX, occlusion.originY],
+        occlusionSize:   OcclusionTexture.REGION_BLOCKS,
+      });
+    }
+
+    // -- Two-pass render ----------------------------------------------------
+    if (this.albedoRT && composite) {
+      app.renderer.render({ container: worldContainer, target: this.albedoRT });
+      worldContainer.visible = false;
+      app.render();
+      worldContainer.visible = true;
+    } else {
+      app.render();
+    }
+
+    this.rafId = requestAnimationFrame((t) => this.animate(t));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  private loadBgImage(url: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.decoding = "async";
+      img.onload  = () => resolve(img);
+      img.onerror = () => reject(new Error(`Failed to load bg: ${url}`));
+      img.src = url;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cleanup
+  // ---------------------------------------------------------------------------
+
+  destroy(): void {
+    this.destroyed = true;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.occlusion?.destroy();
+    this.indirect?.destroy();
+    this.composite?.destroy();
+    this.albedoRT?.destroy(true);
+    this.occlusion     = null;
+    this.indirect      = null;
+    this.composite     = null;
+    this.albedoRT      = null;
+    this.worldContainer = null;
+    this.chunkMap      = null;
+
+    if (this.app) {
+      this.app.canvas.parentNode?.removeChild(this.app.canvas);
+      this.app.destroy();
+      this.app = null;
+    }
+    if (this.skyCanvas) {
+      this.skyCanvas.parentNode?.removeChild(this.skyCanvas);
+      this.skyCanvas = null;
+      this.skyCtx    = null;
+    }
+    this.bgImage = null;
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "format_version": "1.0.0",
+  "loot_tables": {
+    "turfd:stone": {
+      "entries": [
+        { "itemKey": "turfd:stone", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:dirt": {
+      "entries": [
+        { "itemKey": "turfd:dirt", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:grass": {
+      "entries": [
+        { "itemKey": "turfd:dirt", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:sand": {
+      "entries": [
+        { "itemKey": "turfd:sand", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:gravel": {
+      "entries": [
+        { "itemKey": "turfd:gravel", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:glass": {
+      "entries": []
+    },
+    "turfd:wood_log": {
+      "entries": [
+        { "itemKey": "turfd:wood_log", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:wood_log_back": {
+      "entries": [
+        { "itemKey": "turfd:wood_log_back", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:leaves": {
+      "entries": [
+        { "itemKey": "turfd:leaves", "countMin": 0, "countMax": 1, "chance": 0.2 }
+      ]
+    },
+    "turfd:leaves_back": {
+      "entries": [
+        { "itemKey": "turfd:leaves_back", "countMin": 0, "countMax": 1, "chance": 0.2 }
+      ]
+    },
+    "turfd:coal_ore": {
+      "entries": [
+        { "itemKey": "turfd:coal", "countMin": 1, "countMax": 2, "chance": 1.0 }
+      ]
+    },
+    "turfd:iron_ore": {
+      "entries": [
+        { "itemKey": "turfd:iron_ore", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:gold_ore": {
+      "entries": [
+        { "itemKey": "turfd:gold_ore", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:diamond_ore": {
+      "entries": [
+        { "itemKey": "turfd:diamond", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:lapis_ore": {
+      "entries": [
+        { "itemKey": "turfd:lapis", "countMin": 2, "countMax": 5, "chance": 1.0 }
+      ]
+    },
+    "turfd:redstone_ore": {
+      "entries": [
+        { "itemKey": "turfd:redstone", "countMin": 2, "countMax": 5, "chance": 1.0 }
+      ]
+    },
+    "turfd:torch": {
+      "entries": [
+        { "itemKey": "turfd:torch", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:dandelion": {
+      "entries": [
+        { "itemKey": "turfd:dandelion", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:poppy": {
+      "entries": [
+        { "itemKey": "turfd:poppy", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:short_grass": {
+      "entries": [
+        { "itemKey": "turfd:short_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:tall_grass_bottom": {
+      "entries": [
+        { "itemKey": "turfd:tall_grass_bottom", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:tall_grass_top": {
+      "entries": [
+        { "itemKey": "turfd:tall_grass_top", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "turfd:bedrock": {
+      "entries": []
+    },
+    "turfd:air": {
+      "entries": []
+    },
+    "turfd:water": {
+      "entries": []
+    }
+  }
+}

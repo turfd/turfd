@@ -1,0 +1,19 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:stone" },
+    "components": {
+      "turfd:display_name": "Stone",
+      "turfd:texture": { "all": "stone" },
+      "turfd:random_flip_x": true,
+      "turfd:solid": true,
+      "turfd:transparent": false,
+      "turfd:water": false,
+      "turfd:hardness": 4,
+      "turfd:light_emission": 0,
+      "turfd:light_absorption": 15,
+      "turfd:material": "stone",
+      "turfd:loot_table": "turfd:stone"
+    }
+  }
+}

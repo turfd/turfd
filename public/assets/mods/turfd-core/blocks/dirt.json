@@ -1,0 +1,19 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:dirt" },
+    "components": {
+      "turfd:display_name": "Dirt",
+      "turfd:texture": { "all": "dirt" },
+      "turfd:random_flip_x": true,
+      "turfd:solid": true,
+      "turfd:transparent": false,
+      "turfd:water": false,
+      "turfd:hardness": 0.5,
+      "turfd:light_emission": 0,
+      "turfd:light_absorption": 15,
+      "turfd:material": "dirt",
+      "turfd:loot_table": "turfd:dirt"
+    }
+  }
+}

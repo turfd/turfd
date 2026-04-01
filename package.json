@@ -1,0 +1,25 @@
+{
+  "name": "turfd",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.101.1",
+    "fflate": "^0.8.2",
+    "idb": "^8.0.0",
+    "peerjs": "^1.5.4",
+    "pixi.js": "^8.8.0",
+    "simplex-noise": "^4.0.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.2.0"
+  }
+}

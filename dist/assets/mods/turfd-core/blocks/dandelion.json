@@ -1,0 +1,21 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:dandelion" },
+    "components": {
+      "turfd:display_name": "Dandelion",
+      "turfd:texture": { "all": "dandelion" },
+      "turfd:solid": false,
+      "turfd:transparent": true,
+      "turfd:water": false,
+      "turfd:hardness": 0.05,
+      "turfd:light_emission": 0,
+      "turfd:light_absorption": 0,
+      "turfd:material": "grass",
+      "turfd:replaceable": true,
+      "turfd:tall_grass": "none",
+      "turfd:loot_table": "turfd:dandelion",
+      "turfd:plant_foot_offset_px": 5
+    }
+  }
+}

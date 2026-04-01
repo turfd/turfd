@@ -1,0 +1,17 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:water" },
+    "components": {
+      "turfd:display_name": "Water",
+      "turfd:texture": { "all": "water" },
+      "turfd:solid": false,
+      "turfd:transparent": true,
+      "turfd:water": true,
+      "turfd:hardness": 0,
+      "turfd:light_emission": 0,
+      "turfd:light_absorption": 2,
+      "turfd:material": "generic"
+    }
+  }
+}

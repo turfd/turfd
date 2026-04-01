@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:leaves_back" },
+    "components": {
+      "turfd:display_name": "Background Leaves",
+      "turfd:texture": { "all": "leaves" },
+      "turfd:solid": false,
+      "turfd:transparent": true,
+      "turfd:water": false,
+      "turfd:hardness": 0.18,
+      "turfd:light_emission": 0,
+      "turfd:light_absorption": 2,
+      "turfd:material": "wood",
+      "turfd:loot_table": "turfd:leaves_back"
+    }
+  }
+}

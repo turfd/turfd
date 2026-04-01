@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:torch" },
+    "components": {
+      "turfd:display_name": "Torch",
+      "turfd:texture": { "all": "torch" },
+      "turfd:solid": false,
+      "turfd:transparent": true,
+      "turfd:water": false,
+      "turfd:hardness": 0,
+      "turfd:light_emission": 14,
+      "turfd:light_absorption": 0,
+      "turfd:material": "generic",
+      "turfd:loot_table": "turfd:torch"
+    }
+  }
+}

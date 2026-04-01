@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "turfd:block": {
+    "description": { "identifier": "turfd:iron_ore" },
+    "components": {
+      "turfd:display_name": "Iron Ore",
+      "turfd:texture": { "all": "iron_ore" },
+      "turfd:solid": true,
+      "turfd:transparent": false,
+      "turfd:water": false,
+      "turfd:hardness": 4,
+      "turfd:light_emission": 0,
+      "turfd:light_absorption": 15,
+      "turfd:material": "stone",
+      "turfd:loot_table": "turfd:iron_ore"
+    }
+  }
+}
