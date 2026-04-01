@@ -26,6 +26,27 @@ export type RoomComment = {
   author_username: string;
 };
 
+/** PostgREST may return jsonb as an array, a JSON string, or one row as an object. */
+function roomListRowsFromRpc(data: unknown): Record<string, unknown>[] {
+  if (data === null || data === undefined) {
+    return [];
+  }
+  let rows: unknown[] = [];
+  if (Array.isArray(data)) {
+    rows = data;
+  } else if (typeof data === "string") {
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      rows = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      rows = [];
+    }
+  } else if (typeof data === "object" && "room_code" in (data as object)) {
+    rows = [data];
+  }
+  return rows.filter((x): x is Record<string, unknown> => x !== null && typeof x === "object");
+}
+
 function asObjectArray(raw: unknown): Record<string, unknown>[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -51,10 +72,15 @@ export async function listStratumRooms(
     p_offset: opts.offset ?? 0,
   });
   if (error !== null) {
-    console.warn("[roomDirectoryApi] listStratumRooms:", error.message);
+    console.warn(
+      "[roomDirectoryApi] listStratumRooms:",
+      error.message,
+      error.code ?? "",
+      error.details ?? "",
+    );
     return [];
   }
-  return asObjectArray(data).map((row) => ({
+  return roomListRowsFromRpc(data).map((row) => ({
     room_code: String(row.room_code ?? ""),
     room_title: String(row.room_title ?? ""),
     motd: String(row.motd ?? ""),

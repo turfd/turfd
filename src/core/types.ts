@@ -96,5 +96,7 @@ export type GameEvent =
       senderLabel?: string;
     }
   | { type: "ui:chat-set-open"; open: boolean }
+  /** True while chat input is focused for typing (widen bar, hide hotbar). */
+  | { type: "ui:chat-compose"; open: boolean }
   | { type: "game:chat-submit"; text: string }
   | { type: "game:chat-closed" };

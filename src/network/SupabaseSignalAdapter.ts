@@ -20,25 +20,33 @@ export type RoomPublishMeta = {
 export class SupabaseSignalAdapter {
   private readonly client: SupabaseClient;
 
-  private readonly auth: IAuthProvider;
-
-  constructor(client: SupabaseClient, auth: IAuthProvider) {
+  constructor(client: SupabaseClient) {
     this.client = client;
-    this.auth = auth;
   }
 
   /**
-   * Registers this host's room for cross-client discovery. No-op if not signed in.
-   * Uses RPC `upsert_stratum_room_session` (password hashing and RLS on the table).
+   * Registers this host's room for cross-client discovery.
+   * Uses Supabase Auth JWT (not only {@link IAuthProvider#getSession}) so the RPC runs as the signed-in user.
+   * @returns false if the room was not written to the directory (check console for details).
    */
   async publishRoom(
     roomCode: RoomCode,
     hostPeerId: HostPeerId,
     meta?: RoomPublishMeta,
-  ): Promise<void> {
-    const session = this.auth.getSession();
-    if (session === null) {
-      return;
+  ): Promise<boolean> {
+    const {
+      data: { session: sbSession },
+      error: sessionErr,
+    } = await this.client.auth.getSession();
+    if (sessionErr !== null) {
+      console.warn("[SupabaseSignalAdapter] publishRoom: auth getSession", sessionErr.message);
+      return false;
+    }
+    if (sbSession === null) {
+      console.warn(
+        "[SupabaseSignalAdapter] publishRoom: no Supabase session — sign in on Profile before hosting for the online list.",
+      );
+      return false;
     }
     const title = meta?.roomTitle?.trim() || "Room";
     const motd = meta?.motd ?? "";
@@ -55,13 +63,24 @@ export class SupabaseSignalAdapter {
       p_password_plain: passwordPlain,
     });
     if (error !== null) {
-      console.warn("[SupabaseSignalAdapter] publishRoom:", error.message);
+      console.warn(
+        "[SupabaseSignalAdapter] publishRoom RPC failed:",
+        error.message,
+        error.code ?? "",
+        error.details ?? "",
+        error.hint ?? "",
+      );
+      return false;
     }
+    return true;
   }
 
   /** Host heartbeat: refresh lease and `updated_at` for directory sorting. */
   async touchRoomSession(roomCode: RoomCode): Promise<void> {
-    if (this.auth.getSession() === null) {
+    const {
+      data: { session },
+    } = await this.client.auth.getSession();
+    if (session === null) {
       return;
     }
     const { error } = await this.client.rpc("touch_stratum_room_session", {
@@ -74,7 +93,9 @@ export class SupabaseSignalAdapter {
 
   /** Remove relay entry when the host stops multiplayer. */
   async clearRoom(roomCode: RoomCode): Promise<void> {
-    const session = this.auth.getSession();
+    const {
+      data: { session },
+    } = await this.client.auth.getSession();
     if (session === null) {
       return;
     }
@@ -82,7 +103,7 @@ export class SupabaseSignalAdapter {
       .from("stratum_room_sessions")
       .delete()
       .eq("room_code", roomCode)
-      .eq("host_user_id", session.userId);
+      .eq("host_user_id", session.user.id);
     if (error !== null) {
       console.warn("[SupabaseSignalAdapter] clearRoom:", error.message);
     }
@@ -114,5 +135,5 @@ export function createSupabaseSignalRelay(
   if (client === null) {
     return null;
   }
-  return new SupabaseSignalAdapter(client, auth);
+  return new SupabaseSignalAdapter(client);
 }

@@ -39,6 +39,7 @@ const HOTBAR_NAME_CLEAR_MS = 280;
 
 export class InventoryUI {
   private readonly root: HTMLDivElement;
+  private readonly hotbarStackEl: HTMLDivElement;
   private readonly hotbarSlots: HTMLDivElement[] = [];
   private readonly hotbarIcons: HTMLDivElement[] = [];
   private readonly hotbarCounts: HTMLSpanElement[] = [];
@@ -243,6 +244,8 @@ export class InventoryUI {
     const hotbarStack = document.createElement("div");
     hotbarStack.className = "inv-hotbar-stack";
     hotbarStack.style.pointerEvents = "none";
+    hotbarStack.style.transition = "opacity 0.22s ease, visibility 0.22s ease";
+    this.hotbarStackEl = hotbarStack;
 
     const hotbarName = document.createElement("div");
     hotbarName.className = "inv-hotbar-item-name";
@@ -573,6 +576,12 @@ export class InventoryUI {
       countEl.textContent = "";
       countEl.classList.remove("inv-slot-count--white");
     }
+  }
+
+  /** Toggle bottom hotbar strip (e.g. hidden while chat typing is expanded). */
+  setHotbarStackVisible(visible: boolean): void {
+    this.hotbarStackEl.style.opacity = visible ? "1" : "0";
+    this.hotbarStackEl.style.visibility = visible ? "visible" : "hidden";
   }
 
   destroy(): void {

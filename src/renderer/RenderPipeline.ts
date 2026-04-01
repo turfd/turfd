@@ -53,8 +53,8 @@ const BG_VERTICAL_OFFSET_FRAC = 0.03;
 const BG_BASE_DARKNESS = 0.28;
 const BG_NIGHT_DARKNESS_EXTRA = 0.36;
 /**
- * Night darkening strength for the parallax backdrop, expressed as equivalent black-overlay alpha
- * (mapped to a multiply factor on the scratch buffer — see {@link paintBackgroundTiled}).
+ * Night backdrop dim strength (0 = none, ~0.42 ≈ strong). Applied via per-draw {@link CanvasRenderingContext2D.filter}
+ * brightness on the scratch buffer — avoids a rectangular overlay on the sky canvas (hard edge at yOffset).
  */
 const BG_TERRAIN_NIGHT_EXTRA = 0.42;
 const BG_UNDERGROUND_FADE_START = 64;
@@ -273,10 +273,13 @@ export class RenderPipeline implements RenderPipelineLayers {
     const midLow = lerpColor(horizon, bottom, 0.45);
 
     /**
-     * Day-only horizon brightening (Minecraft-style). Fades out for sunrise/sunset and night so
-     * orange/purple twilight and dark skies stay intact.
+     * Day-only horizon brightening (Minecraft-style). Must stay off while sun/ambient are still
+     * low or it lerps dawn/dusk palette stops toward white and reads as muddy, desaturated twilight.
+     * (Sky palette keys in WorldTime stay unchanged; this only gates the extra paint pass.)
      */
-    const haze = smoothstep(0.34, 0.72, lighting.sunIntensity);
+    const hazeSun = smoothstep(0.34, 0.72, lighting.sunIntensity);
+    const hazeAmb = smoothstep(0.44, 0.82, lighting.ambient);
+    const haze = hazeSun * hazeAmb;
     const towardWhite = (c: number, amount: number): number =>
       lerpColor(c, SKY_WHITE, amount * haze);
 
@@ -378,12 +381,26 @@ export class RenderPipeline implements RenderPipelineLayers {
       scvs.height = ch;
     }
 
+    const dayFactor = clamp01(lighting.sunIntensity / 0.65);
+    const nightTerrainT = smoothstep(0.12, 0.88, 1 - dayFactor);
+    const terrainNightStrength = nightTerrainT * BG_TERRAIN_NIGHT_EXTRA;
+
     sctx.setTransform(1, 0, 0, 1, 0, 0);
     sctx.globalAlpha = 1;
     sctx.globalCompositeOperation = "source-over";
     sctx.clearRect(0, 0, cw, ch);
-    sctx.globalAlpha = bgAlpha;
     sctx.imageSmoothingEnabled = false;
+    sctx.globalAlpha = bgAlpha;
+
+    const useCanvasFilter = typeof sctx.filter === "string";
+    if (terrainNightStrength > 0.001 && useCanvasFilter) {
+      const b = Math.max(
+        0.34,
+        Math.min(1, 1 - terrainNightStrength * 1.02),
+      );
+      sctx.filter = `brightness(${b})`;
+    }
+
     for (let tile = startTile; tile <= endTile; tile++) {
       const screenX = tile * drawW - offsetX;
       if ((tile & 1) === 0) {
@@ -397,13 +414,11 @@ export class RenderPipeline implements RenderPipelineLayers {
       sctx.restore();
     }
 
-    const dayFactor = clamp01(lighting.sunIntensity / 0.65);
-    const nightTerrainT = smoothstep(0.12, 0.88, 1 - dayFactor);
-    const terrainNightAlpha = nightTerrainT * BG_TERRAIN_NIGHT_EXTRA;
-    // Darken only non-transparent pixels: multiply leaves alpha=0 regions untouched so the sky
-    // gradient shows through PNG cut-outs with no rectangular “filter” seam.
-    if (terrainNightAlpha > 0.001) {
-      const m = Math.round(255 * (1 - terrainNightAlpha));
+    sctx.filter = "none";
+    sctx.globalAlpha = 1;
+
+    if (terrainNightStrength > 0.001 && !useCanvasFilter) {
+      const m = Math.round(255 * (1 - terrainNightStrength));
       if (m < 255) {
         sctx.globalCompositeOperation = "multiply";
         sctx.fillStyle = `rgb(${m},${m},${m})`;
@@ -411,7 +426,6 @@ export class RenderPipeline implements RenderPipelineLayers {
         sctx.globalCompositeOperation = "source-over";
       }
     }
-    sctx.globalAlpha = 1;
 
     ctx.globalAlpha = 1;
     ctx.imageSmoothingEnabled = false;

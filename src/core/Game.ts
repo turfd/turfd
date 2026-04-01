@@ -170,6 +170,8 @@ export class Game {
   private _chatOverlay: ChatOverlay | null = null;
   private _nametagOverlay: NametagOverlay | null = null;
   private _chatOpen = false;
+  /** After init, announce joins/leaves in chat (avoids noise from roster replay). */
+  private _chatRoomAnnounceEnabled = false;
   private _pingPendingAt: number | null = null;
   private _modPersistTimer: ReturnType<typeof setTimeout> | null = null;
   /** CHUNK_DATA received before `World` exists (multiplayer join); flushed after `world.init`. */
@@ -504,6 +506,11 @@ export class Game {
     );
     await inventoryUI.loadAtlasLayout();
     this.inventoryUI = inventoryUI;
+    this.networkUnsubs.push(
+      this.bus.on("ui:chat-compose", (e) => {
+        this.inventoryUI?.setHotbarStackVisible(!e.open);
+      }),
+    );
 
     this.cursorStackUI = new CursorStackUI(
       this.mount,
@@ -567,6 +574,7 @@ export class Game {
     });
     this.bus.emit({ type: "game:worldLoaded", name: this.worldName } satisfies GameEvent);
     await this._maybeAutoHostFromMenu();
+    this._chatRoomAnnounceEnabled = true;
   }
 
   private _defaultRoomListingMeta(): RoomPublishMeta {
@@ -614,13 +622,20 @@ export class Game {
       this._emitNetworkRoleForUi();
       const roomCode = peerIdToRoomCode(hostPeerId);
       if (roomCode !== null) {
-        void this._signalRelay.publishRoom(roomCode, hostPeerId, {
+        const listed = await this._signalRelay.publishRoom(roomCode, hostPeerId, {
           roomTitle: spec.roomTitle,
           motd: spec.motd,
           worldName: this.worldName,
           isPrivate: spec.isPrivate,
           passwordPlain: spec.isPrivate ? spec.roomPassword : undefined,
         });
+        if (!listed) {
+          this.bus.emit({
+            type: "net:error",
+            message:
+              "Your room is open for friends with a code, but it was not added to the online list. Sign in on Profile, check the browser console, and ensure the latest supabase/schema.sql is applied in your project.",
+          } satisfies GameEvent);
+        }
         this._startRoomRelayHeartbeat(roomCode);
         this.bus.emit({ type: "net:room-code", roomCode } satisfies GameEvent);
       }
@@ -877,11 +892,47 @@ export class Game {
           if (this._moderation.isOp(e.displayName, e.accountId)) {
             this._opPeerIds.add(e.peerId);
           }
+          const localId = this.adapter.getLocalPeerId();
+          if (
+            this._chatRoomAnnounceEnabled &&
+            localId !== null &&
+            e.peerId !== localId
+          ) {
+            const line = `${e.displayName} joined the room.`;
+            this.bus.emit({
+              type: "ui:chat-line",
+              kind: "system",
+              text: line,
+            } satisfies GameEvent);
+            this.adapter.broadcast({
+              type: MsgType.SYSTEM_MESSAGE,
+              text: line,
+            });
+          }
         }
       }),
     );
     this.networkUnsubs.push(
       this.bus.on("net:peer-left", (e) => {
+        const left = this._sessionRoster.get(e.peerId);
+        const st = this.adapter.state;
+        if (
+          left !== undefined &&
+          this._chatRoomAnnounceEnabled &&
+          st.status === "connected" &&
+          st.role === "host"
+        ) {
+          const line = `${left.displayName} left the room.`;
+          this.bus.emit({
+            type: "ui:chat-line",
+            kind: "system",
+            text: line,
+          } satisfies GameEvent);
+          this.adapter.broadcast({
+            type: MsgType.SYSTEM_MESSAGE,
+            text: line,
+          });
+        }
         this.world?.removeRemotePlayer(e.peerId);
         this._sessionRoster.delete(e.peerId);
         this._mutedPeerIds.delete(e.peerId);
@@ -979,17 +1030,24 @@ export class Game {
         }
         void this.adapter
           .host(PEERJS_CLOUD)
-          .then((hostPeerId) => {
+          .then(async (hostPeerId) => {
             this._registerHostMultiplayerSetup();
             this._emitNetworkRoleForUi();
             const roomCode = peerIdToRoomCode(hostPeerId);
             if (roomCode !== null) {
               if (this._signalRelay !== null) {
-                void this._signalRelay.publishRoom(
+                const listed = await this._signalRelay.publishRoom(
                   roomCode,
                   hostPeerId,
                   this._defaultRoomListingMeta(),
                 );
+                if (!listed) {
+                  this.bus.emit({
+                    type: "net:error",
+                    message:
+                      "Room is live with a code, but the online list did not update. Sign in on Profile and confirm supabase/schema.sql (including upsert_stratum_room_session) is deployed.",
+                  } satisfies GameEvent);
+                }
                 this._startRoomRelayHeartbeat(roomCode);
               }
               this.bus.emit({ type: "net:room-code", roomCode } satisfies GameEvent);
