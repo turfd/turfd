@@ -29,12 +29,6 @@ uniform float uTorchRadius;
 uniform float uTorchIntensity;
 uniform vec3 uTorchColor;
 
-const int MAX_STEPS = 128;
-const float STEP_SIZE = 0.25;
-const float MAX_SHADOW_RAY_BLOCKS = 32.0;
-const float SHADOW_RAY_START_OFFSET = 0.0;
-const float SHADOW_ABSORB = 1.0;
-
 /** Floor so fully-shadowed areas aren't pitch black (day baseline; night blends higher). */
 const float SHADOW_FLOOR_DAY = 0.20;
 const float SHADOW_FLOOR_NIGHT = 0.34;
@@ -42,33 +36,6 @@ const float SHADOW_FLOOR_NIGHT = 0.34;
 /** Smooth UV — maps sub-block positions so bilinear filtering blends at block edges. */
 vec2 smoothOcclusionUV(vec2 worldPosBlocks) {
   return (worldPosBlocks - uOcclusionOrigin) / uOcclusionSize;
-}
-
-/**
- * Ray-marched transmittance with gradual absorption (used for torch / point lights only).
- */
-float rayTransmittance(vec2 worldPos, vec2 rayDir) {
-  float T = 1.0;
-  vec2 dir = normalize(rayDir);
-  vec2 rayPos = worldPos + dir * SHADOW_RAY_START_OFFSET;
-  for (int i = 0; i < MAX_STEPS; i++) {
-    float marched = SHADOW_RAY_START_OFFSET + float(i) * STEP_SIZE;
-    if (marched > MAX_SHADOW_RAY_BLOCKS) {
-      break;
-    }
-    vec2 occUV = smoothOcclusionUV(rayPos);
-    if (occUV.x < 0.0 || occUV.x > 1.0 || occUV.y < 0.0 || occUV.y > 1.0) {
-      T *= exp(-SHADOW_ABSORB * STEP_SIZE * 1.2);
-      break;
-    }
-    float occ = texture(uOcclusion, occUV).r;
-    T *= exp(-SHADOW_ABSORB * STEP_SIZE * occ);
-    if (T < 0.002) {
-      break;
-    }
-    rayPos += dir * STEP_SIZE;
-  }
-  return T;
 }
 
 /** Indirect sky sample; UV clamp keeps offsets near region edges stable. */
@@ -158,6 +125,8 @@ void main() {
   indirect += indirectBlock * vec3(1.0, 0.85, 0.65) * 1.2;
   light += indirect;
 
+  // Held torch: isotropic falloff like block-light BFS (no view-ray shadow march — that
+  // read as a directional beam vs placed torches, which use flood-fill only).
   if (uTorchActive > 0.5) {
     vec2 toTorch = uTorchWorldPos - worldPos;
     float dist = length(toTorch);
@@ -165,10 +134,7 @@ void main() {
       float n = dist / max(uTorchRadius, 1e-4);
       float atten = max(0.0, 1.0 - n);
       atten = atten * atten * 0.7 + atten * 0.3;
-      vec2 rayTorch = dist > 1e-4 ? toTorch / dist : vec2(0.0, 1.0);
-      float torchT = rayTransmittance(worldPos, rayTorch);
-      vec3 torchContrib = uTorchColor * uTorchIntensity * atten * torchT;
-      light += torchContrib;
+      light += uTorchColor * uTorchIntensity * atten;
     }
   }
 

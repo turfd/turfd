@@ -5,6 +5,7 @@ import { Assets, Graphics, Sprite, Texture } from "pixi.js";
 import type { AudioEngine } from "../audio/AudioEngine";
 import { BLOCK_SIZE, REACH_BLOCKS, PLAYER_HEIGHT, PLAYER_WIDTH } from "../core/constants";
 import type { EventBus } from "../core/EventBus";
+import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { AtlasLoader } from "../renderer/AtlasLoader";
@@ -150,9 +151,10 @@ export class EntityManager {
       if (sprite === undefined) {
         continue;
       }
+      // World Y is up; sin*amplitude alone would dip below rest and clip into the ground.
       const bob = item.pulling
         ? 0
-        : Math.sin(this.droppedBobPhase * 1.25 + id.length * 0.7) * 3;
+        : (Math.sin(this.droppedBobPhase * 1.25 + id.length * 0.7) * 0.5 + 0.5) * 3;
       sprite.rotation = 0;
       const ix = item.x;
       const iy = item.y + bob;
@@ -183,12 +185,14 @@ export class EntityManager {
     const centerY = -iy - PLAYER_HEIGHT * 0.5;
     const mouseX = this.input.mouseWorldPos.x;
     const mouseY = this.input.mouseWorldPos.y;
-    const dx = mouseX - centerX;
-    const dy = mouseY - centerY;
-    const dist = Math.hypot(dx, dy);
-    const dirX =
-      dist > 0.001 ? dx / dist : playerState.facingRight ? 1 : -1;
-    const dirY = dist > 0.001 ? dy / dist : 0;
+    const { dirX, dirY } = getAimUnitVectorFromFeet(
+      ix,
+      iy,
+      mouseX,
+      mouseY,
+      playerState.facingRight,
+    );
+    const dist = Math.hypot(mouseX - centerX, mouseY - centerY);
 
     const startOffsetPx = BLOCK_SIZE;
     const maxLenPx = REACH_BLOCKS * BLOCK_SIZE;

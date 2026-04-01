@@ -52,6 +52,11 @@ const BG_HEIGHT_FRAC = 0.8;
 const BG_VERTICAL_OFFSET_FRAC = 0.03;
 const BG_BASE_DARKNESS = 0.28;
 const BG_NIGHT_DARKNESS_EXTRA = 0.36;
+/**
+ * Night darkening strength for the parallax backdrop, expressed as equivalent black-overlay alpha
+ * (mapped to a multiply factor on the scratch buffer — see {@link paintBackgroundTiled}).
+ */
+const BG_TERRAIN_NIGHT_EXTRA = 0.42;
 const BG_UNDERGROUND_FADE_START = 64;
 const BG_UNDERGROUND_FADE_RANGE = 224;
 
@@ -85,6 +90,9 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _skyCssH = 0;
   private _bgImage: HTMLImageElement | null = null;
   private _bgImageLoaded = false;
+  /** Off-DOM buffer: tiles + night multiply; transparent where `bg.png` is transparent so sky shows through. */
+  private _bgScratchCanvas: HTMLCanvasElement | null = null;
+  private _bgScratchCtx: CanvasRenderingContext2D | null = null;
 
   private lastScreenW = 0;
   private lastScreenH = 0;
@@ -351,24 +359,65 @@ export class RenderPipeline implements RenderPipelineLayers {
     if (bgAlpha <= 0.001) {
       return;
     }
-    const prevAlpha = ctx.globalAlpha;
-    ctx.globalAlpha = bgAlpha;
-    ctx.imageSmoothingEnabled = false;
+
+    let sctx = this._bgScratchCtx;
+    let scvs = this._bgScratchCanvas;
+    if (scvs === null || sctx === null) {
+      const c = document.createElement("canvas");
+      const x = c.getContext("2d", { alpha: true });
+      if (x === null) {
+        return;
+      }
+      this._bgScratchCanvas = c;
+      this._bgScratchCtx = x;
+      scvs = c;
+      sctx = x;
+    }
+    if (scvs.width !== cw || scvs.height !== ch) {
+      scvs.width = cw;
+      scvs.height = ch;
+    }
+
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.globalAlpha = 1;
+    sctx.globalCompositeOperation = "source-over";
+    sctx.clearRect(0, 0, cw, ch);
+    sctx.globalAlpha = bgAlpha;
+    sctx.imageSmoothingEnabled = false;
     for (let tile = startTile; tile <= endTile; tile++) {
       const screenX = tile * drawW - offsetX;
       if ((tile & 1) === 0) {
-        ctx.drawImage(img, screenX, yOffset, drawW, drawH);
+        sctx.drawImage(img, screenX, yOffset, drawW, drawH);
         continue;
       }
-      ctx.save();
-      ctx.translate(screenX + drawW, yOffset);
-      ctx.scale(-1, 1);
-      ctx.drawImage(img, 0, 0, drawW, drawH);
-      ctx.restore();
+      sctx.save();
+      sctx.translate(screenX + drawW, yOffset);
+      sctx.scale(-1, 1);
+      sctx.drawImage(img, 0, 0, drawW, drawH);
+      sctx.restore();
     }
 
-    // Time-of-day tint: always a bit darker, with stronger darkening at night.
     const dayFactor = clamp01(lighting.sunIntensity / 0.65);
+    const nightTerrainT = smoothstep(0.12, 0.88, 1 - dayFactor);
+    const terrainNightAlpha = nightTerrainT * BG_TERRAIN_NIGHT_EXTRA;
+    // Darken only non-transparent pixels: multiply leaves alpha=0 regions untouched so the sky
+    // gradient shows through PNG cut-outs with no rectangular “filter” seam.
+    if (terrainNightAlpha > 0.001) {
+      const m = Math.round(255 * (1 - terrainNightAlpha));
+      if (m < 255) {
+        sctx.globalCompositeOperation = "multiply";
+        sctx.fillStyle = `rgb(${m},${m},${m})`;
+        sctx.fillRect(0, 0, cw, ch);
+        sctx.globalCompositeOperation = "source-over";
+      }
+    }
+    sctx.globalAlpha = 1;
+
+    ctx.globalAlpha = 1;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(scvs, 0, 0);
+
+    // Time-of-day tint: always a bit darker, with stronger darkening at night.
     const moonLift = clamp01(lighting.moonIntensity / 0.22) * 0.15;
     const darkness = clamp01(
       BG_BASE_DARKNESS + (1 - dayFactor) * BG_NIGHT_DARKNESS_EXTRA - moonLift,
@@ -378,7 +427,6 @@ export class RenderPipeline implements RenderPipelineLayers {
       ctx.fillRect(0, 0, cw, ch);
     }
 
-    ctx.globalAlpha = prevAlpha;
     ctx.imageSmoothingEnabled = prevSmoothing;
   }
 
@@ -663,6 +711,8 @@ export class RenderPipeline implements RenderPipelineLayers {
       this._skyCssCanvas?.remove();
       this._skyCssCanvas = null;
       this._skyCssCtx = null;
+      this._bgScratchCanvas = null;
+      this._bgScratchCtx = null;
       this._bgImage = null;
       this._bgImageLoaded = false;
       this.layerSky.removeChildren();

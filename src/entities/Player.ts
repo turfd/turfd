@@ -9,12 +9,17 @@ import {
   BLOCK_SIZE,
   BREAK_TIME_BASE,
   HOTBAR_SIZE,
+  ITEM_THROW_SPAWN_OFFSET_PX,
+  ITEM_THROW_SPEED_PX,
   PLAYER_HEIGHT,
   PLAYER_WIDTH,
   REACH_BLOCKS,
   STEP_INTERVAL,
+  WORLD_Y_MAX,
+  WORLD_Y_MIN,
 } from "../core/constants";
 import type { InputAction } from "../input/bindings";
+import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
 import type { ItemDefinition } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
@@ -334,6 +339,28 @@ export class Player {
       state.hotbarSlot = (state.hotbarSlot + step + HOTBAR_SIZE) % HOTBAR_SIZE;
     }
 
+    if (input.isJustPressed("dropItem") && !input.isWorldInputBlocked()) {
+      const dropSlot = state.hotbarSlot % HOTBAR_SIZE;
+      const dropStack = this.inventory.getStack(dropSlot);
+      if (dropStack !== null && this.inventory.consumeOneFromSlot(dropSlot)) {
+        const { dirX, dirY } = getAimUnitVectorFromFeet(
+          state.position.x,
+          state.position.y,
+          input.mouseWorldPos.x,
+          input.mouseWorldPos.y,
+          state.facingRight,
+        );
+        const spd = ITEM_THROW_SPEED_PX;
+        const vx = dirX * spd;
+        const vy = dirY * spd;
+        const chestY = state.position.y + PLAYER_HEIGHT * 0.5;
+        const off = ITEM_THROW_SPAWN_OFFSET_PX;
+        const sx = state.position.x + dirX * off;
+        const sy = chestY - dirY * off;
+        world.spawnItem(dropStack.itemId, 1, sx, sy, vx, vy);
+      }
+    }
+
     if (input.isJustPressed("toggleBackgroundMode") && !input.isWorldInputBlocked()) {
       state.backgroundEditMode = !state.backgroundEditMode;
       state.breakTarget = null;
@@ -388,25 +415,53 @@ export class Player {
                 blockId: 0,
                 layer: "bg",
               } satisfies GameEvent);
-            } else {
-              const topNeighbor =
-                def.tallGrass === "bottom" ? world.getBlock(wx, wy + 1) : null;
+            } else if (def.tallGrass === "bottom" || def.tallGrass === "top") {
+              const bottomWy =
+                def.tallGrass === "bottom" ? wy : wy - 1;
+              const topWy = bottomWy + 1;
+              const bottomOk =
+                bottomWy >= WORLD_Y_MIN && bottomWy <= WORLD_Y_MAX;
+              const topOk = topWy >= WORLD_Y_MIN && topWy <= WORLD_Y_MAX;
+              const bottomCell = bottomOk ? world.getBlock(wx, bottomWy) : null;
+              const topCell = topOk ? world.getBlock(wx, topWy) : null;
+              const fullPlant =
+                bottomCell !== null &&
+                bottomCell.tallGrass === "bottom" &&
+                topCell !== null &&
+                topCell.tallGrass === "top";
 
-              world.spawnLootForBrokenBlock(def.id, wx, wy);
-              world.setBlock(wx, wy, 0);
-
-              if (topNeighbor !== null && topNeighbor.tallGrass === "top") {
-                world.spawnLootForBrokenBlock(topNeighbor.id, wx, wy + 1);
-                world.setBlock(wx, wy + 1, 0);
+              if (fullPlant && bottomCell !== null) {
+                world.spawnLootForBrokenBlock(bottomCell.id, wx, bottomWy);
+                world.setBlock(wx, topWy, 0);
+                world.setBlock(wx, bottomWy, 0);
                 this.bus.emit({
                   type: "game:block-changed",
                   wx,
-                  wy: wy + 1,
+                  wy: topWy,
+                  blockId: 0,
+                  layer: "fg",
+                } satisfies GameEvent);
+                this.bus.emit({
+                  type: "game:block-changed",
+                  wx,
+                  wy: bottomWy,
+                  blockId: 0,
+                  layer: "fg",
+                } satisfies GameEvent);
+              } else {
+                world.spawnLootForBrokenBlock(def.id, wx, wy);
+                world.setBlock(wx, wy, 0);
+                this.bus.emit({
+                  type: "game:block-changed",
+                  wx,
+                  wy,
                   blockId: 0,
                   layer: "fg",
                 } satisfies GameEvent);
               }
-
+            } else {
+              world.spawnLootForBrokenBlock(def.id, wx, wy);
+              world.setBlock(wx, wy, 0);
               this.bus.emit({
                 type: "game:block-changed",
                 wx,

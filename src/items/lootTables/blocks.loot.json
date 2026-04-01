@@ -101,12 +101,12 @@
     },
     "stratum:tall_grass_bottom": {
       "entries": [
-        { "itemKey": "stratum:tall_grass_bottom", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:tall_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
     "stratum:tall_grass_top": {
       "entries": [
-        { "itemKey": "stratum:tall_grass_top", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:tall_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
     "stratum:bedrock": {

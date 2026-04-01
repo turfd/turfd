@@ -121,7 +121,7 @@ export class CompositePass {
       },
       uTorchActive: { value: 0, type: "f32" },
       uTorchWorldPos: { value: new Float32Array(2), type: "vec2<f32>" },
-      uTorchRadius: { value: 12, type: "f32" },
+      uTorchRadius: { value: 14, type: "f32" },
       uTorchIntensity: { value: 0, type: "f32" },
       uTorchColor: {
         value: new Float32Array([1.0, 0.85, 0.55]),

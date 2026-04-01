@@ -9,12 +9,36 @@ import type {
   WorldMetadata,
 } from "../../persistence/IndexedDBStore";
 import { readVolumeStored, VOL_KEYS } from "../../audio/volumeSettings";
+import { HOST_PEER_SUFFIX_ALPHABET } from "../../network/hostPeerId";
+import {
+  getMyRoomRating,
+  listStratumRoomComments,
+  listStratumRooms,
+  postStratumRoomComment,
+  setStratumRoomRating,
+  type ListedRoom,
+} from "../../network/roomDirectoryApi";
 import { MenuBackground } from "./MenuBackground";
 
 export type MainMenuResult =
   | { action: "new"; name: string; seed: number }
   | { action: "load"; uuid: string }
-  | { action: "multiplayer-join"; roomCode: string };
+  | { action: "multiplayer-join"; roomCode: string; password?: string }
+  | {
+      action: "multiplayer-host";
+      worldUuid: string;
+      roomTitle: string;
+      motd: string;
+      isPrivate: boolean;
+      roomPassword?: string;
+    };
+
+const STRATUM_ROOM_HOST_PREFS_KEY = "stratum_room_host_prefs";
+const ROOM_TITLE_MAX_LEN = 48;
+const ROOM_MOTD_MAX_LEN = 280;
+const ROOM_CODE_VALID = new RegExp(
+  `^[${HOST_PEER_SUFFIX_ALPHABET}]{6}$`,
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -722,6 +746,174 @@ function injectStyles(base: string): void {
       margin-top: 8px;
     }
 
+    /* ── Rooms (online tab) ───────────────────── */
+    .mm-rooms-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      margin-bottom: 12px;
+    }
+    .mm-rooms-toolbar .mm-field { margin-bottom: 0; flex: 1; min-width: 140px; }
+    .mm-rooms-actions { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+    .mm-rooms-list {
+      flex: 1;
+      min-height: 180px;
+      max-height: min(52vh, 420px);
+      overflow-y: auto;
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-md);
+      corner-shape: squircle;
+      background: var(--mm-surface-deep);
+    }
+    .mm-rooms-list::-webkit-scrollbar { width: 4px; }
+    .mm-rooms-list::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-rooms-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--mm-border);
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      box-sizing: border-box;
+      background: transparent;
+      border-left: none;
+      border-right: none;
+      border-top: none;
+      color: inherit;
+      font-family: inherit;
+    }
+    .mm-rooms-row:last-child { border-bottom: none; }
+    .mm-rooms-row:hover { background: rgba(255, 255, 255, 0.04); }
+    .mm-rooms-row-title {
+      font-family: 'BoldPixels', monospace;
+      font-size: 15px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--mm-ink);
+    }
+    .mm-rooms-row-meta {
+      font-family: 'M5x7', monospace;
+      font-size: 15px;
+      color: var(--mm-ink-soft);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .mm-rooms-empty {
+      padding: 2rem 1rem;
+      text-align: center;
+      font-family: 'M5x7', monospace;
+      color: var(--mm-ink-soft);
+      line-height: 1.45;
+    }
+    .mm-modal-full {
+      padding: 0;
+      align-items: stretch;
+    }
+    .mm-modal-full-card {
+      width: 100%;
+      height: 100%;
+      max-width: none;
+      border-radius: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      animation: mm-modal-card-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+    .mm-modal-full-header {
+      flex-shrink: 0;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--mm-border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .mm-modal-full-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 1rem 1.25rem 1.5rem;
+    }
+    .mm-modal-full-footer {
+      flex-shrink: 0;
+      padding: 1rem 1.25rem;
+      border-top: 1px solid var(--mm-border);
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .mm-comments-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+    .mm-comment-item {
+      padding: 10px 12px;
+      background: var(--mm-surface-deep);
+      border-radius: var(--mm-radius-sm);
+      border: 1px solid var(--mm-border);
+    }
+    .mm-comment-author {
+      font-family: 'BoldPixels', monospace;
+      font-size: 12px;
+      color: var(--mm-ink-mid);
+      margin-bottom: 4px;
+    }
+    .mm-comment-body {
+      font-family: 'M5x7', monospace;
+      font-size: 16px;
+      color: var(--mm-ink-mid);
+      line-height: 1.4;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .mm-stars-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+    .mm-star-btn {
+      min-width: 36px;
+      padding: 6px 8px;
+      font-family: 'M5x7', monospace;
+      font-size: 15px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      color: var(--mm-ink-mid);
+      border-radius: var(--mm-radius-sm);
+      cursor: pointer;
+    }
+    .mm-star-btn:hover, .mm-star-btn.mm-star-btn-active {
+      border-color: var(--mm-border-strong);
+      color: var(--mm-ink);
+    }
+    select.mm-select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      color: var(--mm-ink);
+      font-family: 'M5x7', monospace;
+      font-size: 17px;
+      border-radius: var(--mm-radius-sm);
+      cursor: pointer;
+    }
+    textarea.mm-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 88px;
+      padding: 12px 14px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      color: var(--mm-ink);
+      font-family: 'M5x7', monospace;
+      font-size: 17px;
+      border-radius: var(--mm-radius-sm);
+      resize: vertical;
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .mm-nav-btn, .mm-btn, .mm-discord, .mm-world-row { transition: none; }
       .mm-modal,
@@ -796,6 +988,14 @@ export class MainMenu {
     return new Promise<MainMenuResult>((resolve) => {
       const root = document.createElement("div");
       root.className = "mm-root";
+
+      let onlinePollTimer: ReturnType<typeof setInterval> | null = null;
+      function clearOnlinePoll(): void {
+        if (onlinePollTimer !== null) {
+          clearInterval(onlinePollTimer);
+          onlinePollTimer = null;
+        }
+      }
 
       // -- Top bar (Discord button) ------------------------------------------
       const topbar = document.createElement("div");
@@ -889,7 +1089,7 @@ export class MainMenu {
 
       const navMeta = document.createElement("div");
       navMeta.className = "mm-nav-meta";
-      navMeta.textContent = "Phase 1 complete - Phase 2 multiplayer next.";
+      navMeta.textContent = "Browse rooms online or host from Solo saves.";
       nav.appendChild(navMeta);
 
       function setActiveTab(tab: NavTab): void {
@@ -911,7 +1111,9 @@ export class MainMenu {
       let pendingDeleteUuid: string | null = null;
 
       function closeModal(): void {
-        root.querySelector(".mm-modal")?.remove();
+        for (const el of root.querySelectorAll(".mm-modal")) {
+          el.remove();
+        }
         pendingDeleteUuid = null;
       }
 
@@ -1185,52 +1387,103 @@ export class MainMenu {
         void rerenderList();
       }
 
-      function renderOnline(): void {
-        disposeProfile();
-        content.replaceChildren();
+      function loadHostPrefs(): {
+        roomTitle: string;
+        motd: string;
+        isPrivate: boolean;
+        worldUuid: string;
+      } {
+        try {
+          const raw = localStorage.getItem(STRATUM_ROOM_HOST_PREFS_KEY);
+          if (raw === null) {
+            return {
+              roomTitle: "",
+              motd: "",
+              isPrivate: false,
+              worldUuid: "",
+            };
+          }
+          const j = JSON.parse(raw) as Record<string, unknown>;
+          return {
+            roomTitle: typeof j.roomTitle === "string" ? j.roomTitle : "",
+            motd: typeof j.motd === "string" ? j.motd : "",
+            isPrivate: j.isPrivate === true,
+            worldUuid: typeof j.worldUuid === "string" ? j.worldUuid : "",
+          };
+        } catch {
+          return {
+            roomTitle: "",
+            motd: "",
+            isPrivate: false,
+            worldUuid: "",
+          };
+        }
+      }
+
+      function saveHostPrefs(p: {
+        roomTitle: string;
+        motd: string;
+        isPrivate: boolean;
+        worldUuid: string;
+      }): void {
+        localStorage.setItem(
+          STRATUM_ROOM_HOST_PREFS_KEY,
+          JSON.stringify({
+            roomTitle: p.roomTitle,
+            motd: p.motd,
+            isPrivate: p.isPrivate,
+            worldUuid: p.worldUuid,
+          }),
+        );
+      }
+
+      function openJoinByCodeModal(): void {
         closeModal();
+        const modal = document.createElement("div");
+        modal.className = "mm-modal";
+        const card = document.createElement("div");
+        card.className = "mm-modal-card";
 
-        const panel = document.createElement("div");
-        panel.className = "mm-panel mm-online-panel";
+        const heading = document.createElement("h3");
+        heading.className = "mm-modal-title";
+        heading.textContent = "Join with code";
 
-        const title = document.createElement("p");
-        title.className = "mm-panel-title";
-        title.textContent = "Join Multiplayer";
-        panel.appendChild(title);
-
-        const note = document.createElement("p");
-        note.className = "mm-note";
-        note.textContent =
-          "Enter the 6-character room code shared by your host.";
-        panel.appendChild(note);
+        const meta = document.createElement("p");
+        meta.className = "mm-modal-meta";
+        meta.textContent =
+          "Enter the 6-character code your friend shared (no I, O, 0, or 1).";
 
         const roomField = makeField("Room code");
         const roomInput = document.createElement("input");
         roomInput.type = "text";
         roomInput.maxLength = 6;
-        roomInput.placeholder = "ABC123";
+        roomInput.placeholder = "ABC234";
         roomInput.autocomplete = "off";
         roomInput.spellcheck = false;
         roomField.appendChild(roomInput);
-        panel.appendChild(roomField);
-
-        const joinBtn = makeBtn("Join", "mm-btn");
-        panel.appendChild(joinBtn);
 
         const errEl = document.createElement("div");
         errEl.className = "mm-feedback-error";
-        panel.appendChild(errEl);
 
+        const actions = document.createElement("div");
+        actions.className = "mm-modal-actions";
+        const cancelBtn = makeBtn("Cancel", "mm-btn mm-btn-subtle");
+        cancelBtn.addEventListener("click", closeModal);
+        const goBtn = makeBtn("Join", "mm-btn");
         const attemptJoin = (): void => {
           const code = roomInput.value.trim().toUpperCase();
-          if (!/^[A-Z0-9]{6}$/.test(code)) {
-            errEl.textContent = "Room code must be 6 letters or numbers.";
+          if (!ROOM_CODE_VALID.test(code)) {
+            errEl.textContent =
+              "Use six characters from A–Z and 2–9 (excludes I, O, 0, 1).";
             return;
           }
           cleanup();
           resolve({ action: "multiplayer-join", roomCode: code });
         };
-        joinBtn.addEventListener("click", attemptJoin);
+        goBtn.addEventListener("click", attemptJoin);
+        actions.appendChild(cancelBtn);
+        actions.appendChild(goBtn);
+
         roomInput.addEventListener("input", () => {
           roomInput.value = roomInput.value.toUpperCase();
           errEl.textContent = "";
@@ -1239,8 +1492,653 @@ export class MainMenu {
           if (ev.key === "Enter") attemptJoin();
         });
 
-        content.appendChild(panel);
+        card.appendChild(heading);
+        card.appendChild(meta);
+        card.appendChild(roomField);
+        card.appendChild(errEl);
+        card.appendChild(actions);
+        modal.appendChild(card);
+        modal.addEventListener("click", (ev) => {
+          if (ev.target === modal) closeModal();
+        });
+        root.appendChild(modal);
         roomInput.focus();
+      }
+
+      function openHostWorldFlow(): void {
+        if (auth.getSession() === null) {
+          closeModal();
+          const modal = document.createElement("div");
+          modal.className = "mm-modal";
+          const card = document.createElement("div");
+          card.className = "mm-modal-card";
+          const h = document.createElement("h3");
+          h.className = "mm-modal-title";
+          h.textContent = "Sign in to host";
+          const p = document.createElement("p");
+          p.className = "mm-note";
+          p.textContent =
+            "Hosting a room for the directory requires an account. Open Profile to sign in.";
+          const actions = document.createElement("div");
+          actions.className = "mm-modal-actions";
+          const closeSign = makeBtn("Close", "mm-btn mm-btn-subtle");
+          closeSign.addEventListener("click", closeModal);
+          actions.appendChild(closeSign);
+          card.appendChild(h);
+          card.appendChild(p);
+          card.appendChild(actions);
+          modal.appendChild(card);
+          modal.addEventListener("click", (ev) => {
+            if (ev.target === modal) closeModal();
+          });
+          root.appendChild(modal);
+          return;
+        }
+        if (auth.getSupabaseClient() === null) {
+          closeModal();
+          const modal = document.createElement("div");
+          modal.className = "mm-modal";
+          const card = document.createElement("div");
+          card.className = "mm-modal-card";
+          const h = document.createElement("h3");
+          h.className = "mm-modal-title";
+          h.textContent = "Supabase not configured";
+          const p = document.createElement("p");
+          p.className = "mm-note";
+          p.textContent =
+            "Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to publish a room. You can still join with a code.";
+          const actions = document.createElement("div");
+          actions.className = "mm-modal-actions";
+          const b = makeBtn("Close", "mm-btn mm-btn-subtle");
+          b.addEventListener("click", closeModal);
+          actions.appendChild(b);
+          card.appendChild(h);
+          card.appendChild(p);
+          card.appendChild(actions);
+          modal.appendChild(card);
+          modal.addEventListener("click", (ev) => {
+            if (ev.target === modal) closeModal();
+          });
+          root.appendChild(modal);
+          return;
+        }
+
+        closeModal();
+        const prefs = loadHostPrefs();
+
+        const modal = document.createElement("div");
+        modal.className = "mm-modal";
+        const card = document.createElement("div");
+        card.className = "mm-modal-card";
+
+        const heading = document.createElement("h3");
+        heading.className = "mm-modal-title";
+        heading.textContent = "Choose world";
+
+        const note = document.createElement("p");
+        note.className = "mm-modal-meta";
+        note.textContent = "Pick the save file players will load from your room.";
+
+        const list = document.createElement("div");
+        list.className = "mm-worldlist";
+        list.style.maxHeight = "min(40vh, 240px)";
+
+        const actions = document.createElement("div");
+        actions.className = "mm-modal-actions";
+        const cancelBtn = makeBtn("Cancel", "mm-btn mm-btn-subtle");
+        cancelBtn.addEventListener("click", closeModal);
+        actions.appendChild(cancelBtn);
+
+        void (async () => {
+          const worlds = (await store.listWorlds()).sort(sortWorldsByLastPlayed);
+          if (!list.isConnected) return;
+          if (worlds.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "mm-world-empty";
+            empty.textContent = "Create a world in Solo first.";
+            list.appendChild(empty);
+            return;
+          }
+          for (const w of worlds) {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "mm-world-row";
+            const info = document.createElement("div");
+            info.className = "mm-world-info";
+            const nameEl = document.createElement("div");
+            nameEl.className = "mm-world-name";
+            nameEl.textContent = w.name;
+            const metaEl = document.createElement("div");
+            metaEl.className = "mm-world-meta";
+            metaEl.textContent = `Seed ${w.seed} · ${formatDate(w.lastPlayedAt)}`;
+            info.appendChild(nameEl);
+            info.appendChild(metaEl);
+            row.appendChild(info);
+            row.addEventListener("click", () => {
+              modal.remove();
+              openHostDetailsModal(w.uuid, prefs);
+            });
+            list.appendChild(row);
+          }
+        })();
+
+        card.appendChild(heading);
+        card.appendChild(note);
+        card.appendChild(list);
+        card.appendChild(actions);
+        modal.appendChild(card);
+        modal.addEventListener("click", (ev) => {
+          if (ev.target === modal) closeModal();
+        });
+        root.appendChild(modal);
+      }
+
+      function openHostDetailsModal(
+        worldUuid: string,
+        prefs: ReturnType<typeof loadHostPrefs>,
+      ): void {
+        closeModal();
+        const modal = document.createElement("div");
+        modal.className = "mm-modal";
+        const card = document.createElement("div");
+        card.className = "mm-modal-card";
+
+        const heading = document.createElement("h3");
+        heading.className = "mm-modal-title";
+        heading.textContent = "Room details";
+
+        const titleField = makeField(`Room name (max ${ROOM_TITLE_MAX_LEN})`);
+        const titleInput = document.createElement("input");
+        titleInput.type = "text";
+        titleInput.maxLength = ROOM_TITLE_MAX_LEN;
+        titleInput.value =
+          prefs.worldUuid === worldUuid && prefs.roomTitle.trim() !== ""
+            ? prefs.roomTitle
+            : "My room";
+        titleField.appendChild(titleInput);
+
+        const motdField = makeField(`Description / MOTD (max ${ROOM_MOTD_MAX_LEN})`);
+        const motdInput = document.createElement("textarea");
+        motdInput.className = "mm-textarea";
+        motdInput.maxLength = ROOM_MOTD_MAX_LEN;
+        motdInput.value = prefs.motd;
+        motdField.appendChild(motdInput);
+
+        const countEl = document.createElement("p");
+        countEl.className = "mm-modal-meta";
+        const updateCount = (): void => {
+          countEl.textContent = `${motdInput.value.length} / ${ROOM_MOTD_MAX_LEN} characters`;
+        };
+        updateCount();
+        motdInput.addEventListener("input", updateCount);
+
+        const privRow = document.createElement("div");
+        privRow.className = "mm-settings-row";
+        privRow.style.marginBottom = "8px";
+        const privLab = document.createElement("label");
+        privLab.textContent = "Private";
+        const privCb = document.createElement("input");
+        privCb.type = "checkbox";
+        privCb.checked = prefs.isPrivate;
+        privRow.appendChild(privLab);
+        privRow.appendChild(privCb);
+
+        const passField = makeField("Room password (min 4, not saved in browser)");
+        const passInput = document.createElement("input");
+        passInput.type = "password";
+        passInput.autocomplete = "new-password";
+        passField.appendChild(passInput);
+
+        const syncPassField = (): void => {
+          passField.style.display = privCb.checked ? "block" : "none";
+        };
+        syncPassField();
+        privCb.addEventListener("change", syncPassField);
+
+        const errEl = document.createElement("div");
+        errEl.className = "mm-feedback-error";
+
+        const actions = document.createElement("div");
+        actions.className = "mm-modal-actions";
+        const backBtn = makeBtn("Back", "mm-btn mm-btn-subtle");
+        backBtn.addEventListener("click", () => {
+          modal.remove();
+          openHostWorldFlow();
+        });
+        const hostBtn = makeBtn("Host", "mm-btn");
+        hostBtn.addEventListener("click", () => {
+          const roomTitle = titleInput.value.trim();
+          if (roomTitle.length < 1) {
+            errEl.textContent = "Enter a room name.";
+            return;
+          }
+          const motd = motdInput.value.slice(0, ROOM_MOTD_MAX_LEN);
+          const isPrivate = privCb.checked;
+          const pw = passInput.value;
+          if (isPrivate && pw.trim().length < 4) {
+            errEl.textContent = "Private rooms need a password of at least 4 characters.";
+            return;
+          }
+          saveHostPrefs({
+            roomTitle,
+            motd,
+            isPrivate,
+            worldUuid,
+          });
+          cleanup();
+          resolve({
+            action: "multiplayer-host",
+            worldUuid,
+            roomTitle,
+            motd,
+            isPrivate,
+            roomPassword: isPrivate ? pw : undefined,
+          });
+        });
+        actions.appendChild(backBtn);
+        actions.appendChild(hostBtn);
+
+        card.appendChild(heading);
+        card.appendChild(titleField);
+        card.appendChild(motdField);
+        card.appendChild(countEl);
+        card.appendChild(privRow);
+        card.appendChild(passField);
+        card.appendChild(errEl);
+        card.appendChild(actions);
+        modal.appendChild(card);
+        modal.addEventListener("click", (ev) => {
+          if (ev.target === modal) closeModal();
+        });
+        root.appendChild(modal);
+        titleInput.focus();
+      }
+
+      function openRoomDetailModal(room: ListedRoom, client: NonNullable<ReturnType<IAuthProvider["getSupabaseClient"]>>): void {
+        closeModal();
+        const modal = document.createElement("div");
+        modal.className = "mm-modal mm-modal-full";
+        const card = document.createElement("div");
+        card.className = "mm-modal-card mm-modal-full-card";
+
+        const header = document.createElement("div");
+        header.className = "mm-modal-full-header";
+        const headText = document.createElement("div");
+        const hTitle = document.createElement("h3");
+        hTitle.className = "mm-modal-title";
+        hTitle.style.margin = "0 0 6px";
+        hTitle.textContent = room.room_title;
+        const hSub = document.createElement("p");
+        hSub.className = "mm-modal-meta";
+        hSub.style.margin = "0";
+        hSub.textContent = [
+          `World: ${room.world_name || "—"}`,
+          `Host: ${room.host_username || "—"}`,
+          room.is_private ? "Private" : "Public",
+          `★ ${room.avg_rating.toFixed(1)} (${room.rating_count})`,
+        ].join(" · ");
+        headText.appendChild(hTitle);
+        headText.appendChild(hSub);
+        const backHdr = makeBtn("Back", "mm-btn mm-btn-subtle");
+        backHdr.addEventListener("click", closeModal);
+        header.appendChild(headText);
+        header.appendChild(backHdr);
+
+        const body = document.createElement("div");
+        body.className = "mm-modal-full-body";
+        const motdP = document.createElement("p");
+        motdP.className = "mm-note";
+        motdP.style.whiteSpace = "pre-wrap";
+        motdP.textContent =
+          room.motd.trim() !== "" ? room.motd : "No description.";
+        body.appendChild(motdP);
+
+        const commentsTitle = document.createElement("p");
+        commentsTitle.className = "mm-panel-title";
+        commentsTitle.style.marginTop = "1rem";
+        commentsTitle.textContent = "Comments";
+        body.appendChild(commentsTitle);
+
+        const commentsList = document.createElement("div");
+        commentsList.className = "mm-comments-list";
+        body.appendChild(commentsList);
+
+        const commentField = makeField("Add a comment");
+        const commentInput = document.createElement("textarea");
+        commentInput.className = "mm-textarea";
+        commentInput.style.minHeight = "64px";
+        commentInput.maxLength = 500;
+        commentField.appendChild(commentInput);
+
+        const commentErr = document.createElement("div");
+        commentErr.className = "mm-feedback-error";
+
+        const postCommentBtn = makeBtn("Post comment", "mm-btn mm-btn-subtle");
+
+        const starsTitle = document.createElement("p");
+        starsTitle.className = "mm-panel-title";
+        starsTitle.style.marginTop = "1rem";
+        starsTitle.textContent = "Your rating";
+
+        const starsRow = document.createElement("div");
+        starsRow.className = "mm-stars-row";
+
+        const session = auth.getSession();
+        if (session === null) {
+          const signNote = document.createElement("p");
+          signNote.className = "mm-modal-meta";
+          signNote.textContent = "Sign in via Profile to comment or rate.";
+          body.appendChild(signNote);
+        } else {
+          body.appendChild(commentField);
+          body.appendChild(commentErr);
+          body.appendChild(postCommentBtn);
+          body.appendChild(starsTitle);
+          body.appendChild(starsRow);
+        }
+
+        const pwdField = makeField("Room password");
+        const pwdInput = document.createElement("input");
+        pwdInput.type = "password";
+        pwdInput.autocomplete = "off";
+        pwdField.style.display = room.is_private ? "block" : "none";
+        pwdField.appendChild(pwdInput);
+        body.appendChild(pwdField);
+
+        const footer = document.createElement("div");
+        footer.className = "mm-modal-full-footer";
+        const joinErr = document.createElement("div");
+        joinErr.className = "mm-feedback-error";
+        joinErr.style.flex = "1";
+        joinErr.style.minWidth = "120px";
+        const joinBtn = makeBtn("Join room", "mm-btn");
+        footer.appendChild(joinErr);
+        footer.appendChild(joinBtn);
+        card.appendChild(header);
+        card.appendChild(body);
+        card.appendChild(footer);
+        modal.appendChild(card);
+        modal.addEventListener("click", (ev) => {
+          if (ev.target === modal) closeModal();
+        });
+        root.appendChild(modal);
+
+        const refreshComments = async (): Promise<void> => {
+          const list = await listStratumRoomComments(client, room.room_code);
+          commentsList.replaceChildren();
+          for (const c of list) {
+            const item = document.createElement("div");
+            item.className = "mm-comment-item";
+            const au = document.createElement("div");
+            au.className = "mm-comment-author";
+            au.textContent = c.author_username || "Player";
+            const bd = document.createElement("div");
+            bd.className = "mm-comment-body";
+            bd.textContent = c.body;
+            item.appendChild(au);
+            item.appendChild(bd);
+            commentsList.appendChild(item);
+          }
+          if (list.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "mm-modal-meta";
+            empty.textContent = "No comments yet.";
+            commentsList.appendChild(empty);
+          }
+        };
+
+        void refreshComments();
+
+        const rebuildStars = async (): Promise<void> => {
+          starsRow.replaceChildren();
+          if (session === null) return;
+          const mine = await getMyRoomRating(
+            client,
+            room.room_code,
+            session.userId,
+          );
+          for (let s = 1; s <= 5; s++) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className =
+              "mm-star-btn" + (mine === s ? " mm-star-btn-active" : "");
+            b.textContent = String(s);
+            b.addEventListener("click", () => {
+              void (async () => {
+                const r = await setStratumRoomRating(
+                  client,
+                  room.room_code,
+                  session.userId,
+                  s,
+                );
+                if (!r.ok) {
+                  commentErr.textContent = r.error;
+                  return;
+                }
+                commentErr.textContent = "";
+                void rebuildStars();
+              })();
+            });
+            starsRow.appendChild(b);
+          }
+        };
+        void rebuildStars();
+
+        postCommentBtn.addEventListener("click", () => {
+          if (session === null) return;
+          void (async () => {
+            const r = await postStratumRoomComment(
+              client,
+              room.room_code,
+              session.userId,
+              commentInput.value,
+            );
+            if (!r.ok) {
+              commentErr.textContent = r.error;
+              return;
+            }
+            commentErr.textContent = "";
+            commentInput.value = "";
+            void refreshComments();
+          })();
+        });
+
+        joinBtn.addEventListener("click", () => {
+          const code = room.room_code.trim().toUpperCase();
+          if (!ROOM_CODE_VALID.test(code)) {
+            joinErr.textContent = "Invalid room code.";
+            return;
+          }
+          if (room.is_private) {
+            const pw = pwdInput.value;
+            if (pw.trim().length < 1) {
+              joinErr.textContent = "Enter the room password.";
+              return;
+            }
+            cleanup();
+            resolve({
+              action: "multiplayer-join",
+              roomCode: code,
+              password: pw,
+            });
+            return;
+          }
+          cleanup();
+          resolve({ action: "multiplayer-join", roomCode: code });
+        });
+      }
+
+      function renderOnline(): void {
+        disposeProfile();
+        content.replaceChildren();
+        closeModal();
+        clearOnlinePoll();
+
+        const client = auth.getSupabaseClient();
+        const panel = document.createElement("div");
+        panel.className = "mm-panel mm-online-panel";
+
+        const title = document.createElement("p");
+        title.className = "mm-panel-title";
+        title.textContent = "Rooms";
+        panel.appendChild(title);
+
+        const intro = document.createElement("p");
+        intro.className = "mm-note";
+        intro.textContent =
+          client === null
+            ? "Configure Supabase to browse rooms. You can still join with a code."
+            : "Browse active rooms or host your world for others to join.";
+        panel.appendChild(intro);
+
+        const actionsRow = document.createElement("div");
+        actionsRow.className = "mm-rooms-actions";
+        const hostBtn = makeBtn("Host a world", "mm-btn");
+        hostBtn.addEventListener("click", () => openHostWorldFlow());
+        const codeBtn = makeBtn("Join with code", "mm-btn mm-btn-subtle");
+        codeBtn.addEventListener("click", () => openJoinByCodeModal());
+        actionsRow.appendChild(hostBtn);
+        actionsRow.appendChild(codeBtn);
+        panel.appendChild(actionsRow);
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "mm-rooms-toolbar";
+
+        const searchField = makeField("Search");
+        const searchInput = document.createElement("input");
+        searchInput.type = "text";
+        searchInput.placeholder = "Name, world, description…";
+        searchField.appendChild(searchInput);
+
+        const filterField = makeField("Show");
+        const filterSel = document.createElement("select");
+        filterSel.className = "mm-select";
+        for (const [v, lab] of [
+          ["all", "All rooms"],
+          ["public", "Public only"],
+          ["private", "Private only"],
+        ] as const) {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = lab;
+          filterSel.appendChild(o);
+        }
+        filterField.appendChild(filterSel);
+
+        const sortField = makeField("Sort");
+        const sortSel = document.createElement("select");
+        sortSel.className = "mm-select";
+        for (const [v, lab] of [
+          ["active", "Most active"],
+          ["new", "Newest"],
+          ["rating", "Top rated"],
+        ] as const) {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = lab;
+          sortSel.appendChild(o);
+        }
+        sortField.appendChild(sortSel);
+
+        const refreshBtn = makeBtn("Refresh", "mm-btn mm-btn-subtle");
+        const filterWrap = document.createElement("div");
+        filterWrap.style.minWidth = "min(160px, 100%)";
+        filterWrap.appendChild(filterField);
+        const sortWrap = document.createElement("div");
+        sortWrap.style.minWidth = "min(160px, 100%)";
+        sortWrap.appendChild(sortField);
+        toolbar.appendChild(searchField);
+        toolbar.appendChild(filterWrap);
+        toolbar.appendChild(sortWrap);
+        toolbar.appendChild(refreshBtn);
+        panel.appendChild(toolbar);
+
+        const listEl = document.createElement("div");
+        listEl.className = "mm-rooms-list";
+        panel.appendChild(listEl);
+
+        const loadRooms = async (): Promise<void> => {
+          if (!listEl.isConnected) return;
+          if (client === null) {
+            listEl.replaceChildren();
+            const empty = document.createElement("div");
+            empty.className = "mm-rooms-empty";
+            empty.textContent =
+              "Room list needs Supabase. Use “Join with code” to connect to a friend.";
+            listEl.appendChild(empty);
+            return;
+          }
+          const rows = await listStratumRooms(client, {
+            search: searchInput.value.trim(),
+            filter: filterSel.value as "all" | "public" | "private",
+            sort: sortSel.value as "active" | "new" | "rating",
+            limit: 50,
+            offset: 0,
+          });
+          if (!listEl.isConnected) return;
+          listEl.replaceChildren();
+          if (rows.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "mm-rooms-empty";
+            empty.textContent = "No rooms match. Try another search or sort.";
+            listEl.appendChild(empty);
+            return;
+          }
+          for (const r of rows) {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "mm-rooms-row";
+            const t = document.createElement("div");
+            t.className = "mm-rooms-row-title";
+            t.textContent = r.room_title;
+            const m = document.createElement("div");
+            m.className = "mm-rooms-row-meta";
+            m.appendChild(document.createTextNode(r.world_name || "World"));
+            if (r.is_private) {
+              const b = document.createElement("span");
+              b.className = "mm-rooms-badge";
+              b.textContent = "Private";
+              m.appendChild(b);
+            }
+            const rate = document.createElement("span");
+            rate.className = "mm-rooms-badge";
+            rate.textContent = `★ ${r.avg_rating.toFixed(1)} (${r.rating_count})`;
+            m.appendChild(rate);
+            row.appendChild(t);
+            row.appendChild(m);
+            row.addEventListener("click", () => {
+              openRoomDetailModal(r, client);
+            });
+            listEl.appendChild(row);
+          }
+        };
+
+        void loadRooms();
+        refreshBtn.addEventListener("click", () => {
+          void loadRooms();
+        });
+        let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+        searchInput.addEventListener("input", () => {
+          if (searchDebounce !== null) clearTimeout(searchDebounce);
+          searchDebounce = setTimeout(() => {
+            searchDebounce = null;
+            void loadRooms();
+          }, 320);
+        });
+        filterSel.addEventListener("change", () => {
+          void loadRooms();
+        });
+        sortSel.addEventListener("change", () => {
+          void loadRooms();
+        });
+
+        if (client !== null) {
+          onlinePollTimer = setInterval(() => {
+            void loadRooms();
+          }, 12_000);
+        }
+
+        content.appendChild(panel);
       }
 
       function renderSettings(): void {
@@ -1307,6 +2205,7 @@ export class MainMenu {
 
       // -- Cleanup -----------------------------------------------------------
       function cleanup(): void {
+        clearOnlinePoll();
         disposeProfile();
         root.remove();
         // Destroy background: the destroyed flag stops init() mid-flight if still running.

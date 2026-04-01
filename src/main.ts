@@ -2,9 +2,12 @@
  * Stratum — application entry.
  */
 import { createAuthProvider } from "./auth/createAuthProvider";
-import { Game } from "./core/Game";
+import {
+  Game,
+  type MultiplayerHostFromMenuSpec,
+  type PlayerSavedState,
+} from "./core/Game";
 import { createSupabaseSignalRelay } from "./network/SupabaseSignalAdapter";
-import type { PlayerSavedState } from "./core/Game";
 import { IndexedDBStore } from "./persistence/IndexedDBStore";
 import { MainMenu } from "./ui/screens/MainMenu";
 import { WorldLoadingScreen } from "./ui/screens/WorldLoadingScreen";
@@ -58,6 +61,8 @@ async function main(): Promise<void> {
     let worldName: string;
     let playerSavedState: PlayerSavedState | undefined;
     let multiplayerJoinRoomCode: string | undefined;
+    let multiplayerJoinPassword: string | undefined;
+    let multiplayerHostFromMenu: MultiplayerHostFromMenuSpec | undefined;
     let initialWorldTimeMs: number | undefined;
     let game: Game | null = null;
     try {
@@ -81,11 +86,33 @@ async function main(): Promise<void> {
         };
         initialWorldTimeMs = meta.worldTimeMs ?? 0;
         localStorage.setItem("stratum_worldUuid", worldUuid);
+      } else if (result.action === "multiplayer-host") {
+        worldUuid = result.worldUuid;
+        const meta = await store.loadWorld(result.worldUuid);
+        if (meta === undefined) {
+          throw new Error(`Saved world not found: ${result.worldUuid}`);
+        }
+        seed = meta.seed;
+        worldName = meta.name;
+        playerSavedState = {
+          x: meta.playerX,
+          y: meta.playerY,
+          hotbarSlot: meta.hotbarSlot,
+        };
+        initialWorldTimeMs = meta.worldTimeMs ?? 0;
+        localStorage.setItem("stratum_worldUuid", worldUuid);
+        multiplayerHostFromMenu = {
+          roomTitle: result.roomTitle,
+          motd: result.motd,
+          isPrivate: result.isPrivate,
+          roomPassword: result.roomPassword,
+        };
       } else {
         worldUuid = crypto.randomUUID();
         seed = 0;
         worldName = "Multiplayer World";
         multiplayerJoinRoomCode = result.roomCode;
+        multiplayerJoinPassword = result.password;
       }
 
       const session = auth.getSession();
@@ -96,6 +123,8 @@ async function main(): Promise<void> {
         store,
         worldName,
         multiplayerJoinRoomCode,
+        multiplayerJoinPassword,
+        multiplayerHostFromMenu,
         initialWorldTimeMs,
         signalRelay,
         displayName: auth.getDisplayLabel(),

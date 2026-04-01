@@ -2,6 +2,7 @@
 import {
   BLOCK_SIZE,
   ITEM_COLLECT_SNAP_PX,
+  ITEM_DROP_LANDING_FRICTION,
   ITEM_GRAVITY,
   ITEM_HALF_EXTENT_PX,
   ITEM_MAX_FALL_SPEED,
@@ -31,17 +32,28 @@ export class DroppedItem {
   count: number;
   x: number;
   y: number;
-  /** World downward velocity (px/s). */
+  /** World horizontal velocity (px/s); +right, matches screen +x. */
+  vx: number;
+  /** World downward velocity (px/s); +down (same convention as player gravity). */
   vy: number;
   private _pulling = false;
 
-  constructor(id: string, itemId: ItemId, count: number, x: number, y: number) {
+  constructor(
+    id: string,
+    itemId: ItemId,
+    count: number,
+    x: number,
+    y: number,
+    vx = 0,
+    vy = 0,
+  ) {
     this.id = id;
     this.itemId = itemId;
     this.count = count;
     this.x = x;
     this.y = y;
-    this.vy = 0;
+    this.vx = vx;
+    this.vy = vy;
   }
 
   get pulling(): boolean {
@@ -76,6 +88,7 @@ export class DroppedItem {
       const ny = dyp * inv;
       this.x += nx * ITEM_PULL_SPEED_PX * dt;
       this.y += ny * ITEM_PULL_SPEED_PX * dt;
+      this.vx = 0;
       this.vy = 0;
 
       let mover = itemWorldCenterToScreen(this.x, this.y);
@@ -96,21 +109,28 @@ export class DroppedItem {
       if (this.vy > vmax) {
         this.vy = vmax;
       }
+      const screenDx = this.vx * dt;
       const screenDy = this.vy * dt;
       let mover = itemWorldCenterToScreen(this.x, this.y);
       const query = createAABB(
-        mover.x - pad,
+        Math.min(mover.x, mover.x + screenDx) - pad,
         Math.min(mover.y, mover.y + screenDy) - pad,
-        mover.width + pad * 2,
+        Math.abs(screenDx) + mover.width + pad * 2,
         Math.abs(screenDy) + mover.height + pad * 2,
       );
       world.querySolidAABBs(query, solidScratch);
-      const { hitY } = sweepAABB(mover, 0, screenDy, solidScratch);
+      const { hitX, hitY } = sweepAABB(mover, screenDx, screenDy, solidScratch);
       const c = itemScreenToWorldCenter(mover);
       this.x = c.x;
       this.y = c.y;
+      if (hitX) {
+        this.vx = 0;
+      }
       if (hitY) {
         this.vy = 0;
+        if (screenDy > 0) {
+          this.vx *= ITEM_DROP_LANDING_FRICTION;
+        }
       }
     }
 

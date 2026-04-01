@@ -313,11 +313,11 @@ export class PauseMenu {
     mpSection.className = "pm-section pm-mp-col";
     const mpTitle = document.createElement("div");
     mpTitle.className = "pm-section-title";
-    mpTitle.textContent = "Multiplayer";
+    mpTitle.textContent = "Room";
     const mpBtn = document.createElement("button");
     mpBtn.type = "button";
     mpBtn.className = "pm-btn pm-btn-secondary pm-mp-btn";
-    mpBtn.textContent = "Enable multiplayer";
+    mpBtn.textContent = "Open room to players";
     mpBtn.addEventListener("click", () => {
       bus.emit({ type: "ui:toggle-multiplayer" } satisfies GameEvent);
     });
@@ -457,25 +457,25 @@ export class PauseMenu {
 
     if (this.networkRole === "client") {
       btn.disabled = true;
-      btn.textContent = "Multiplayer";
+      btn.textContent = "Room";
       status.style.color = "#aeaeb2";
-      status.textContent = "Joined another player's world.";
+      status.textContent = "Joined another player's room.";
       return;
     }
 
     if (this.networkRole === "host" && this.roomCode !== null) {
       btn.disabled = false;
-      btn.textContent = "Disable multiplayer";
+      btn.textContent = "Close room";
       status.style.color = "#f2f2f7";
-      status.textContent = `Room code: ${this.roomCode}`;
+      status.textContent = `Code: ${this.roomCode}`;
       return;
     }
 
     btn.disabled = false;
-    btn.textContent = "Enable multiplayer";
+    btn.textContent = "Open room to players";
     status.style.color = "#aeaeb2";
     status.textContent =
-      "Turn on multiplayer to get a room code friends can join.";
+      "Open your room so friends can join with your code.";
   }
 
   destroy(): void {

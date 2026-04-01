@@ -19,6 +19,7 @@ import { GameLoop } from "./GameLoop";
 import type { GameEvent } from "./types";
 import { EntityManager } from "../entities/EntityManager";
 import { InputManager } from "../input/InputManager";
+import { MAX_STACK_DEFAULT } from "./itemDefinition";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
 import lootTablesJson from "../items/lootTables/blocks.loot.json";
@@ -30,8 +31,12 @@ import { ChunkSyncManager } from "../network/ChunkSyncManager";
 import type { HostPeerId } from "../network/hostPeerId";
 import type { PeerId } from "../network/INetworkAdapter";
 import { PeerJSAdapter } from "../network/PeerJSAdapter";
-import type { SupabaseSignalAdapter } from "../network/SupabaseSignalAdapter";
+import type {
+  RoomPublishMeta,
+  SupabaseSignalAdapter,
+} from "../network/SupabaseSignalAdapter";
 import { PlayerStateBroadcaster } from "../network/PlayerStateBroadcaster";
+import type { RoomCode } from "../network/roomCode";
 import { normalizeRoomCode, peerIdToRoomCode, roomCodeToPeerId } from "../network/roomCode";
 import { AtlasLoader } from "../renderer/AtlasLoader";
 import { BreakOverlay } from "../renderer/BreakOverlay";
@@ -63,7 +68,15 @@ const PEERJS_CLOUD = {
 const WORLD_TIME_BROADCAST_INTERVAL_MS = 5_000;
 
 const HOST_DISABLED_MULTIPLAYER_REASON =
-  "The host turned off multiplayer. Return to the main menu to continue.";
+  "The host closed the room. Return to the main menu to continue.";
+
+/** Host flow from main menu: auto-start multiplayer after world load. */
+export type MultiplayerHostFromMenuSpec = {
+  roomTitle: string;
+  motd: string;
+  isPrivate: boolean;
+  roomPassword?: string;
+};
 
 export type GameOptions = {
   mount: HTMLElement;
@@ -72,6 +85,10 @@ export type GameOptions = {
   store: IndexedDBStore;
   worldName: string;
   multiplayerJoinRoomCode?: string;
+  /** When joining a private room from the directory. */
+  multiplayerJoinPassword?: string;
+  /** Signed-in host: start as room host immediately after load. */
+  multiplayerHostFromMenu?: MultiplayerHostFromMenuSpec;
   /** Optional initial world time; defaults to start-of-dawn when omitted. */
   initialWorldTimeMs?: number;
   /** Optional Supabase room relay for authenticated hosts. */
@@ -132,6 +149,8 @@ export class Game {
   private readonly store: IndexedDBStore;
   private readonly worldName: string;
   private readonly multiplayerJoinRoomCode?: string;
+  private readonly multiplayerJoinPassword?: string;
+  private readonly multiplayerHostFromMenu?: MultiplayerHostFromMenuSpec;
   private readonly _signalRelay: SupabaseSignalAdapter | null;
   private readonly adapter: PeerJSAdapter;
   private readonly _chunkSync: ChunkSyncManager;
@@ -187,6 +206,8 @@ export class Game {
   private _playerStateBroadcastPhase = 0;
   private readonly _worldTime: WorldTime;
 
+  private _roomRelayHeartbeat: ReturnType<typeof setInterval> | null = null;
+
   private readonly _heldTorchScratch: HeldTorchLighting = {
     worldBlock: [0, 0],
     radiusBlocks: TORCH_HELD_LIGHT_RADIUS_BLOCKS,
@@ -211,6 +232,8 @@ export class Game {
     this.store = options.store;
     this.worldName = options.worldName;
     this.multiplayerJoinRoomCode = options.multiplayerJoinRoomCode;
+    this.multiplayerJoinPassword = options.multiplayerJoinPassword;
+    this.multiplayerHostFromMenu = options.multiplayerHostFromMenu;
     this._signalRelay = options.signalRelay ?? null;
     const dn = options.displayName?.trim();
     this._displayName = dn !== undefined && dn !== "" ? dn : "Player";
@@ -276,7 +299,7 @@ export class Game {
     progressCallback?.({
       stage: this.multiplayerJoinRoomCode ? "Connecting to host" : "Starting session",
       detail: this.multiplayerJoinRoomCode
-        ? "Joining multiplayer room..."
+        ? "Joining room..."
         : "Preparing local world session...",
     });
     await this._initEntryNetworking();
@@ -316,6 +339,13 @@ export class Game {
       Array.from({ length: registry.size }, (_, i) => registry.getById(i)),
       itemRegistry,
     );
+    itemRegistry.register({
+      key: "stratum:tall_grass",
+      textureName: "tall_grass",
+      displayName: "Tall Grass",
+      maxStack: MAX_STACK_DEFAULT,
+      placesBlockId: registry.getByIdentifier("stratum:tall_grass_bottom").id,
+    });
 
     const lootResolver = new LootResolver(itemRegistry);
     const lootData = parseLootTablesJson(lootTablesJson);
@@ -536,6 +566,69 @@ export class Game {
       total: 1,
     });
     this.bus.emit({ type: "game:worldLoaded", name: this.worldName } satisfies GameEvent);
+    await this._maybeAutoHostFromMenu();
+  }
+
+  private _defaultRoomListingMeta(): RoomPublishMeta {
+    return {
+      roomTitle: "Room",
+      motd: "",
+      worldName: this.worldName,
+      isPrivate: false,
+    };
+  }
+
+  private _stopRoomRelayHeartbeat(): void {
+    if (this._roomRelayHeartbeat !== null) {
+      clearInterval(this._roomRelayHeartbeat);
+      this._roomRelayHeartbeat = null;
+    }
+  }
+
+  private _startRoomRelayHeartbeat(roomCode: RoomCode): void {
+    this._stopRoomRelayHeartbeat();
+    if (this._signalRelay === null) {
+      return;
+    }
+    const relay = this._signalRelay;
+    this._roomRelayHeartbeat = setInterval(() => {
+      void relay.touchRoomSession(roomCode);
+    }, 60_000);
+  }
+
+  private async _maybeAutoHostFromMenu(): Promise<void> {
+    const spec = this.multiplayerHostFromMenu;
+    if (spec === undefined) {
+      return;
+    }
+    if (this._accountId === null || this._signalRelay === null) {
+      return;
+    }
+    const state = this.adapter.state;
+    if (state.status === "connected") {
+      return;
+    }
+    try {
+      const hostPeerId = await this.adapter.host(PEERJS_CLOUD);
+      this._registerHostMultiplayerSetup();
+      this._emitNetworkRoleForUi();
+      const roomCode = peerIdToRoomCode(hostPeerId);
+      if (roomCode !== null) {
+        void this._signalRelay.publishRoom(roomCode, hostPeerId, {
+          roomTitle: spec.roomTitle,
+          motd: spec.motd,
+          worldName: this.worldName,
+          isPrivate: spec.isPrivate,
+          passwordPlain: spec.isPrivate ? spec.roomPassword : undefined,
+        });
+        this._startRoomRelayHeartbeat(roomCode);
+        this.bus.emit({ type: "net:room-code", roomCode } satisfies GameEvent);
+      }
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Failed to start hosting";
+      this.bus.emit({ type: "net:error", message } satisfies GameEvent);
+    }
   }
 
   start(): void {
@@ -560,6 +653,7 @@ export class Game {
 
   async destroy(): Promise<void> {
     this.stop();
+    this._stopRoomRelayHeartbeat();
     const stEnd = this.adapter.state;
     if (stEnd.status === "connected" && stEnd.role === "host") {
       const hid = stEnd.lanHostPeerId;
@@ -636,7 +730,10 @@ export class Game {
     this._awaitingWorldData = true;
     let hostPeerId: HostPeerId = roomCodeToPeerId(normalized);
     if (this._signalRelay !== null) {
-      const fromRelay = await this._signalRelay.lookupHostPeerId(normalized);
+      const fromRelay = await this._signalRelay.lookupHostPeerId(
+        normalized,
+        this.multiplayerJoinPassword,
+      );
       if (fromRelay !== null) {
         hostPeerId = fromRelay;
       }
@@ -854,6 +951,7 @@ export class Game {
               if (hidOff !== null) {
                 const rc = peerIdToRoomCode(hidOff);
                 if (rc !== null && this._signalRelay !== null) {
+                  this._stopRoomRelayHeartbeat();
                   void this._signalRelay.clearRoom(rc);
                 }
               }
@@ -887,14 +985,19 @@ export class Game {
             const roomCode = peerIdToRoomCode(hostPeerId);
             if (roomCode !== null) {
               if (this._signalRelay !== null) {
-                void this._signalRelay.publishRoom(roomCode, hostPeerId);
+                void this._signalRelay.publishRoom(
+                  roomCode,
+                  hostPeerId,
+                  this._defaultRoomListingMeta(),
+                );
+                this._startRoomRelayHeartbeat(roomCode);
               }
               this.bus.emit({ type: "net:room-code", roomCode } satisfies GameEvent);
             }
           })
           .catch((err: unknown) => {
             const message =
-              err instanceof Error ? err.message : "Failed to enable multiplayer";
+              err instanceof Error ? err.message : "Failed to open room";
             this.bus.emit({ type: "net:error", message } satisfies GameEvent);
           });
       }),
@@ -1047,7 +1150,7 @@ export class Game {
         this.bus.emit({
           type: "ui:chat-line",
           kind: "system",
-          text: "Not connected to multiplayer.",
+          text: "Not connected to a room.",
         } satisfies GameEvent);
       }
       return;
@@ -1056,7 +1159,7 @@ export class Game {
       this.bus.emit({
         type: "ui:chat-line",
         kind: "system",
-        text: "Not connected to multiplayer.",
+        text: "Not connected to a room.",
       } satisfies GameEvent);
       return;
     }

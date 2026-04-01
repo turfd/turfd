@@ -19,7 +19,7 @@ const LOADING_TIPS: string[] = [
   "Different biomes mean different blocks—explore to find new resources.",
   "Fall damage hurts—drop carefully from high ledges.",
   "Glass lets light through but breaks easily; plan windows accordingly.",
-  "Room codes in multiplayer are six characters—double-check before joining a friend.",
+  "Room codes are six characters—double-check before joining a friend.",
   "If loading ever feels stuck, check the stage text above for what the game is doing.",
 ];
 

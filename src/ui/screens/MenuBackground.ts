@@ -217,10 +217,11 @@ export class MenuBackground {
     this.skyCanvas = skyCanvas;
     this.skyCtx = skyCanvas.getContext("2d");
 
-    // Start loading bg.png in parallel with PixiJS init
+    // Start loading bg.png in parallel with PixiJS init (.catch so a later throw
+    // in init() does not leave an unhandled rejection if the image errors first)
     const bgPromise = this.loadBgImage(
       `${import.meta.env.BASE_URL}assets/textures/bg.png`,
-    );
+    ).catch(() => null);
 
     // -- PixiJS init --------------------------------------------------------
     const app = new Application();
@@ -323,8 +324,8 @@ export class MenuBackground {
 
     worldContainer.position.set(this.baseX, this.baseY);
 
-    // Await bg image (non-blocking — it may still be null if load fails)
-    this.bgImage = await bgPromise.catch(() => null);
+    // Await bg image (null if load failed)
+    this.bgImage = await bgPromise;
 
     this.startTime = performance.now();
     this.rafId = requestAnimationFrame((t) => this.animate(t));

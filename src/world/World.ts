@@ -291,6 +291,7 @@ export class World {
         if (!this.isSolid(tx, ty)) {
           item.x = (tx + 0.5) * BLOCK_SIZE;
           item.y = (ty + 0.5) * BLOCK_SIZE;
+          item.vx = 0;
           item.vy = 0;
           placed = true;
           break;
@@ -299,15 +300,26 @@ export class World {
       if (!placed && placedWy + 1 <= WORLD_Y_MAX && !this.isSolid(placedWx, placedWy + 1)) {
         item.x = (placedWx + 0.5) * BLOCK_SIZE;
         item.y = (placedWy + 1.5) * BLOCK_SIZE;
+        item.vx = 0;
         item.vy = 0;
       }
     }
   }
 
-  /** Spawns a dropped item stack at world pixel coordinates (Y up); falls straight down. */
-  spawnItem(itemId: ItemId, count: number, x: number, y: number): void {
+  /**
+   * Spawns a dropped item stack at world pixel coordinates (Y up).
+   * Optional `vx`/`vy`: horizontal (px/s, +right) and downward (px/s, +down) throw velocity.
+   */
+  spawnItem(
+    itemId: ItemId,
+    count: number,
+    x: number,
+    y: number,
+    vx = 0,
+    vy = 0,
+  ): void {
     const id = `drop-${++this._dropSeq}`;
-    const drop = new DroppedItem(id, itemId, count, x, y);
+    const drop = new DroppedItem(id, itemId, count, x, y, vx, vy);
     this._droppedItems.set(id, drop);
   }
 
@@ -426,7 +438,6 @@ export class World {
       if (wy + 2 <= WORLD_Y_MAX) {
         const top = this.getBlock(wx, wy + 2);
         if (top.tallGrass === "top") {
-          this.spawnLootForBrokenBlock(top.id, wx, wy + 2);
           this.setBlockWithoutPlantCascade(wx, wy + 2, 0);
           this.bus?.emit({
             type: "game:block-changed",

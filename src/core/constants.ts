@@ -56,8 +56,11 @@ export const SKY_LIGHT_MAX = 15;
 /** Maximum block light level. */
 export const BLOCK_LIGHT_MAX = 15;
 
-/** Held torch: radial light radius in world blocks from player centre (screen-space composite). */
-export const TORCH_HELD_LIGHT_RADIUS_BLOCKS = 12;
+/**
+ * Held torch: radial cutoff in world blocks from player centre (composite pass).
+ * Matches `stratum:torch` light_emission (14): BFS reaches ~14 steps with level > 0.
+ */
+export const TORCH_HELD_LIGHT_RADIUS_BLOCKS = 14;
 
 /** Peak brightness multiplier for held torch (before clamp). */
 export const TORCH_HELD_LIGHT_INTENSITY = 0.55;
@@ -89,6 +92,15 @@ export const ITEM_MAX_FALL_SPEED = 15;
 
 /** Half-width of a dropped item hitbox in world pixels (matches 0.5× block sprite). */
 export const ITEM_HALF_EXTENT_PX = BLOCK_SIZE * 0.25;
+
+/** Initial speed (px/s) when pressing Q to throw the selected hotbar stack. */
+export const ITEM_THROW_SPEED_PX = 380;
+
+/** Spawn offset from player center along aim (px) so the entity clears the body. */
+export const ITEM_THROW_SPAWN_OFFSET_PX = 14;
+
+/** Horizontal velocity multiplier when an item lands (world-down vy, screen-down dy). */
+export const ITEM_DROP_LANDING_FRICTION = 0.78;
 
 /** Number of inventory slots (4 rows × 9 columns = 36). */
 export const INVENTORY_SIZE = 36;

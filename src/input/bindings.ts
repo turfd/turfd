@@ -21,7 +21,8 @@ export type InputAction =
   | "inventory"
   | "pause"
   | "toggleBackgroundMode"
-  | "chat";
+  | "chat"
+  | "dropItem";
 
 export const DEFAULT_KEY_BINDINGS: Readonly<
   Record<Exclude<InputAction, "place" | "break">, readonly string[]>
@@ -44,4 +45,5 @@ export const DEFAULT_KEY_BINDINGS: Readonly<
   pause: ["Escape"],
   toggleBackgroundMode: ["Tab"],
   chat: ["KeyT"],
+  dropItem: ["KeyQ"],
 };

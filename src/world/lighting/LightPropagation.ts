@@ -18,8 +18,11 @@ interface WorldBlockReader {
   getSkyExposureTop(wx: number): number;
 }
 
+/** Padded workspace: chunk plus BLOCK_LIGHT_MAX tiles each side so BFS can enter from distant emitters in neighbour chunks. */
+const BLOCK_LIGHT_PAD = BLOCK_LIGHT_MAX;
+const BLOCK_LIGHT_PADDED = CHUNK_SIZE + 2 * BLOCK_LIGHT_PAD;
 const MAX_BLOCK_LIGHT_QUEUE =
-  (CHUNK_SIZE + 2) * (CHUNK_SIZE + 2) * BLOCK_LIGHT_MAX;
+  BLOCK_LIGHT_PADDED * BLOCK_LIGHT_PADDED * (BLOCK_LIGHT_MAX + 2);
 
 /** Neighbour deltas for block-light BFS (hoisted — avoid per-queue-step array alloc). */
 const BLOCK_LIGHT_NB = [
@@ -146,6 +149,9 @@ export function computeSkyLight(
  * Recompute block light for one chunk.
  * Writes into chunk.blockLight (Uint8Array, length CHUNK_SIZE²).
  * Reads neighbour data via `reader`.
+ *
+ * Uses a padded workspace (chunk ± BLOCK_LIGHT_MAX blocks) so emitters deeper than one tile
+ * inside adjacent chunks are seeded and propagation is not clipped at chunk borders.
  */
 export function computeBlockLight(
   chunkX: number,
@@ -155,6 +161,11 @@ export function computeBlockLight(
 ): void {
   blockLight.fill(0);
 
+  const wxMin = chunkX * CHUNK_SIZE - BLOCK_LIGHT_PAD;
+  const wyMin = chunkY * CHUNK_SIZE - BLOCK_LIGHT_PAD;
+  const pw = BLOCK_LIGHT_PADDED;
+
+  const best = new Uint8Array(pw * pw);
   const qx = new Int32Array(MAX_BLOCK_LIGHT_QUEUE);
   const qy = new Int32Array(MAX_BLOCK_LIGHT_QUEUE);
   const ql = new Uint8Array(MAX_BLOCK_LIGHT_QUEUE);
@@ -171,10 +182,10 @@ export function computeBlockLight(
     tail += 1;
   };
 
-  for (let lx = -1; lx <= CHUNK_SIZE; lx++) {
-    for (let ly = -1; ly <= CHUNK_SIZE; ly++) {
-      const wx = chunkX * CHUNK_SIZE + lx;
-      const wy = chunkY * CHUNK_SIZE + ly;
+  for (let py = 0; py < pw; py++) {
+    const wy = wyMin + py;
+    for (let px = 0; px < pw; px++) {
+      const wx = wxMin + px;
       const emission = reader.getLightEmission(wx, wy);
       if (emission > 0) {
         const seed = Math.min(BLOCK_LIGHT_MAX, emission);
@@ -193,21 +204,16 @@ export function computeBlockLight(
       continue;
     }
 
-    const localX = wx - chunkX * CHUNK_SIZE;
-    const localY = wy - chunkY * CHUNK_SIZE;
-    const inBounds =
-      localX >= 0 &&
-      localX < CHUNK_SIZE &&
-      localY >= 0 &&
-      localY < CHUNK_SIZE;
-
-    if (inBounds) {
-      const idx = localY * CHUNK_SIZE + localX;
-      if (blockLight[idx]! >= level) {
-        continue;
-      }
-      blockLight[idx] = level;
+    const px = wx - wxMin;
+    const py = wy - wyMin;
+    if (px < 0 || px >= pw || py < 0 || py >= pw) {
+      continue;
     }
+    const bi = py * pw + px;
+    if (level <= best[bi]!) {
+      continue;
+    }
+    best[bi] = level;
 
     for (let ni = 0; ni < BLOCK_LIGHT_NB.length; ni++) {
       const d = BLOCK_LIGHT_NB[ni]!;
@@ -219,6 +225,15 @@ export function computeBlockLight(
         const clamped = Math.min(BLOCK_LIGHT_MAX, nextLevel);
         push(nx, ny, clamped);
       }
+    }
+  }
+
+  const b0 = BLOCK_LIGHT_PAD;
+  for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+    const row = ly * CHUNK_SIZE;
+    const brow = (ly + b0) * pw + b0;
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      blockLight[row + lx] = best[brow + lx] ?? 0;
     }
   }
 }

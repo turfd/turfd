@@ -8,6 +8,7 @@ import { GeneratorContext } from "./GeneratorContext";
 import { TerrainNoise } from "./TerrainNoise";
 import { CaveGenerator } from "./CaveGenerator";
 import { OreVeins } from "./OreVeins";
+import { SedimentPockets } from "./SedimentPockets";
 
 /** Single-stem tree; canopy is always symmetric around the trunk column (no horizontal shift). */
 type SingleTreeSpec = {
@@ -46,11 +47,11 @@ export class WorldGenerator {
   private readonly terrain: TerrainNoise;
   private readonly caves: CaveGenerator;
   private readonly ores: OreVeins;
+  private readonly sediment: SedimentPockets;
   private readonly airId: number;
   private readonly grassId: number;
   private readonly dirtId: number;
   private readonly stoneId: number;
-  private readonly gravelId: number;
   private readonly bedrockId: number;
   private readonly treeTrunkBackId: number;
   private readonly treeLeavesBackId: number;
@@ -65,11 +66,11 @@ export class WorldGenerator {
     this.terrain = new TerrainNoise(seed);
     this.caves = new CaveGenerator(root.fork(0xca_57));
     this.ores = new OreVeins(root.fork(0x0e5), registry);
+    this.sediment = new SedimentPockets(root.fork(0x5ed1_000), registry);
     this.airId = registry.getByIdentifier("stratum:air").id;
     this.grassId = registry.getByIdentifier("stratum:grass").id;
     this.dirtId = registry.getByIdentifier("stratum:dirt").id;
     this.stoneId = registry.getByIdentifier("stratum:stone").id;
-    this.gravelId = registry.getByIdentifier("stratum:gravel").id;
     this.bedrockId = registry.getByIdentifier("stratum:bedrock").id;
     this.treeTrunkBackId = registry.getByIdentifier("stratum:wood_log_back").id;
     this.treeLeavesBackId = registry.getByIdentifier("stratum:leaves_back").id;
@@ -120,18 +121,6 @@ export class WorldGenerator {
     }
   }
 
-  /** Stone layer fill: pockets of dirt/gravel; ores handled by caller. */
-  private pickStoneOrPocket(wx: number, wy: number): number {
-    const n = this.random01(this.hash2(wx * 0x1a2b3c4d + 0x70, wy * 0x5d6e7f89 + 0x11));
-    if (n > 0.93) {
-      return this.gravelId;
-    }
-    if (n > 0.82) {
-      return this.dirtId;
-    }
-    return this.stoneId;
-  }
-
   /**
    * Solid geology at (wx, wy) with caves ignored; ore cells resolve to stone for backdrops.
    */
@@ -152,12 +141,12 @@ export class WorldGenerator {
       if (this.ores.getOreAt(wx, wy, surfaceY) !== null) {
         return this.stoneId;
       }
-      return this.pickStoneOrPocket(wx, wy);
+      return this.sediment.getFill(wx, wy);
     }
     if (this.ores.getOreAt(wx, wy, surfaceY) !== null) {
       return this.stoneId;
     }
-    return this.pickStoneOrPocket(wx, wy);
+    return this.sediment.getFill(wx, wy);
   }
 
   /** Grass-topped columns: short/tall grass and flowers in air above (after trees). */
@@ -419,7 +408,7 @@ export class WorldGenerator {
       if (ore !== null) {
         return ore;
       }
-      return this.pickStoneOrPocket(wx, wy);
+      return this.sediment.getFill(wx, wy);
     }
     if (this.caves.isCave(wx, wy, surfaceY)) {
       return this.airId;
@@ -428,6 +417,6 @@ export class WorldGenerator {
     if (ore !== null) {
       return ore;
     }
-    return this.pickStoneOrPocket(wx, wy);
+    return this.sediment.getFill(wx, wy);
   }
 }
