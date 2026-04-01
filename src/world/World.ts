@@ -870,14 +870,16 @@ export class World {
     peerId: string,
     x: number,
     y: number,
+    vx: number,
+    vy: number,
     facingRight: boolean,
   ): void {
     const existing = this.remotePlayers.get(peerId);
     if (existing === undefined) {
-      const created = new RemotePlayer(x, y, facingRight);
+      const created = new RemotePlayer(x, y, facingRight, vx, vy);
       this.remotePlayers.set(peerId, created);
     } else {
-      existing.setTarget(x, y, facingRight);
+      existing.setTarget(x, y, vx, vy, facingRight);
     }
   }
 

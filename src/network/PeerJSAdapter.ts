@@ -21,6 +21,7 @@ import {
   PLAYER_STATE_WIRE_BYTE_LENGTH,
   writePlayerStateWire,
 } from "./protocol/messages";
+import type { HandshakeWirePayload } from "./protocol/BinarySerializer";
 import type { HostPeerId } from "./hostPeerId";
 import { generateClientPeerId, generateHostPeerId } from "./hostPeerId";
 
@@ -61,8 +62,51 @@ export class PeerJSAdapter implements INetworkAdapter {
   /** Reused for `PLAYER_STATE` broadcasts to avoid per-tick `ArrayBuffer` allocation. */
   private _playerStateScratch: ArrayBuffer | null = null;
 
+  private _handshakeDisplayName = "Player";
+  private _handshakeAccountId = "";
+
+  private _clientAdmissionGate:
+    | ((peerId: PeerId, displayName: string, accountId: string) => boolean)
+    | null = null;
+
   constructor(bus: EventBus) {
     this._bus = bus;
+  }
+
+  setHandshakeProfile(displayName: string, accountId: string | null): void {
+    const d = displayName.trim();
+    this._handshakeDisplayName = d !== "" ? d : "Player";
+    this._handshakeAccountId = accountId?.trim() ?? "";
+  }
+
+  setClientAdmissionGate(
+    gate:
+      | ((peerId: PeerId, displayName: string, accountId: string) => boolean)
+      | null,
+  ): void {
+    this._clientAdmissionGate = gate;
+  }
+
+  getLocalPeerId(): string | null {
+    const id = this._peer?.id;
+    return id !== undefined && id !== "" ? id : null;
+  }
+
+  disconnectPeer(peerId: PeerId): void {
+    const conn = this._connections.get(peerId);
+    if (conn !== undefined) {
+      conn.close();
+      this._connections.delete(peerId);
+    }
+  }
+
+  private _serializeLocalHandshake(localId: string): ArrayBuffer {
+    return BinarySerializer.serializeHandshake({
+      version: WIRE_PROTOCOL_VERSION,
+      peerId: localId,
+      displayName: this._handshakeDisplayName,
+      accountId: this._handshakeAccountId,
+    });
   }
 
   host(config: PeerServerConfig): Promise<HostPeerId> {
@@ -284,9 +328,28 @@ export class PeerJSAdapter implements INetworkAdapter {
           conn.close();
           return;
         }
-        const payload = decoded.payload;
+        const payload = decoded.payload as HandshakeWirePayload;
         if (payload.version !== WIRE_PROTOCOL_VERSION) {
           this._bus.emit({ type: "net:error", message: PROTOCOL_MISMATCH_MSG });
+          conn.close();
+          return;
+        }
+
+        const gate = this._clientAdmissionGate;
+        if (
+          gate !== null &&
+          !gate(remotePeerId, payload.displayName, payload.accountId)
+        ) {
+          try {
+            conn.send(
+              encode({
+                type: MessageType.SESSION_ENDED,
+                reason: "You are banned from this world.",
+              }),
+            );
+          } catch {
+            /* ignore */
+          }
           conn.close();
           return;
         }
@@ -294,15 +357,16 @@ export class PeerJSAdapter implements INetworkAdapter {
         const localPeer = this._peer;
         const localId = localPeer?.id;
         if (localId !== undefined && localId !== "") {
-          conn.send(
-            BinarySerializer.serializeHandshake({
-              version: WIRE_PROTOCOL_VERSION,
-              peerId: localId,
-            }),
-          );
+          conn.send(this._serializeLocalHandshake(localId));
         }
 
         this._connections.set(remotePeerId, conn);
+        this._bus.emit({
+          type: "net:session-player",
+          peerId: conn.peer,
+          displayName: payload.displayName,
+          accountId: payload.accountId,
+        });
         this._bus.emit({ type: "net:handshake-success", isHost: true });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });
 
@@ -340,12 +404,7 @@ export class PeerJSAdapter implements INetworkAdapter {
     }
 
     const sendThenWait = (): void => {
-      conn.send(
-        BinarySerializer.serializeHandshake({
-          version: WIRE_PROTOCOL_VERSION,
-          peerId: localId,
-        }),
-      );
+      conn.send(this._serializeLocalHandshake(localId));
 
       conn.once("data", (data: unknown) => {
         const buf = this._toArrayBuffer(data);
@@ -383,6 +442,13 @@ export class PeerJSAdapter implements INetworkAdapter {
           status: "connected",
           role: "client",
           lanHostPeerId: hostPeerId,
+        });
+        const hostPayload = decoded.payload as HandshakeWirePayload;
+        this._bus.emit({
+          type: "net:session-player",
+          peerId: remotePeerId,
+          displayName: hostPayload.displayName,
+          accountId: hostPayload.accountId,
         });
         this._bus.emit({ type: "net:handshake-success", isHost: false });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });

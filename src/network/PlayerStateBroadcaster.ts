@@ -1,9 +1,7 @@
-/** Samples local player state at 20 Hz and broadcasts `PLAYER_STATE` when it changes. */
+/** Broadcasts `PLAYER_STATE` when local state changes; driven from the game fixed timestep (see `tick`). */
 
 import type { INetworkAdapter } from "./INetworkAdapter";
 import { MsgType } from "./protocol/messages";
-
-const TICK_INTERVAL_MS = 50; // 20 Hz
 
 type PlayerStateSnapshot = {
   playerId: number;
@@ -30,30 +28,30 @@ export class PlayerStateBroadcaster {
   private _lastVx = 0;
   private _lastVy = 0;
   private _lastFacing = false;
-  private _intervalId: ReturnType<typeof setInterval> | null = null;
+  private _active = false;
 
   constructor(adapter: INetworkAdapter, getState: StateProvider) {
     this._adapter = adapter;
     this._getState = getState;
   }
 
-  /** Start the 20 Hz broadcast tick. Safe to call multiple times (no-op if running). */
+  /** Enable broadcasting; actual sends happen when {@link tick} is called from the game loop. */
   start(): void {
-    if (this._intervalId !== null) {
-      return;
-    }
-    this._intervalId = setInterval(() => {
-      this._tick();
-    }, TICK_INTERVAL_MS);
+    this._active = true;
   }
 
-  /** Stop the tick. Safe to call when not running. */
   stop(): void {
-    if (this._intervalId === null) {
+    this._active = false;
+  }
+
+  /**
+   * Call from fixed update (e.g. every 2nd tick at 60 Hz ≈ 30 Hz) while connected.
+   */
+  tick(): void {
+    if (!this._active) {
       return;
     }
-    clearInterval(this._intervalId);
-    this._intervalId = null;
+    this._tick();
   }
 
   private _tick(): void {

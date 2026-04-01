@@ -83,4 +83,23 @@ export interface INetworkAdapter {
    * Replaces any previously registered handler.
    */
   onPeerDisconnected(handler: (peerId: PeerId) => void): void;
+
+  /** Display name + Supabase user id sent in wire handshake (host + client). */
+  setHandshakeProfile(displayName: string, accountId: string | null): void;
+
+  /**
+   * Host only: if set, called before a joining client is admitted after their handshake.
+   * Return false to close the connection (e.g. banned).
+   */
+  setClientAdmissionGate(
+    gate:
+      | ((peerId: PeerId, displayName: string, accountId: string) => boolean)
+      | null,
+  ): void;
+
+  /** This peer's PeerJS id when the peer object is open; null if unavailable. */
+  getLocalPeerId(): string | null;
+
+  /** Host: force-close a client's data connection. */
+  disconnectPeer(peerId: PeerId): void;
 }

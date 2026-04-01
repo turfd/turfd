@@ -75,6 +75,12 @@ export type GameEvent =
       layer?: "fg" | "bg";
     }
   | { type: "net:peer-joined"; peerId: string }
+  | {
+      type: "net:session-player";
+      peerId: string;
+      displayName: string;
+      accountId: string;
+    }
   | { type: "net:peer-left"; peerId: string }
   | { type: "net:handshake-success"; isHost: boolean }
   | { type: "net:error"; message: string }
@@ -82,4 +88,13 @@ export type GameEvent =
   | { type: "net:message"; peerId: string; message: NetworkMessage }
   | { type: "network:world-time-received"; worldTimeMs: number }
   | { type: "world:light-updated"; chunkX: number; chunkY: number }
-  | { type: "ui:screenshot" };
+  | { type: "ui:screenshot" }
+  | {
+      type: "ui:chat-line";
+      kind: "player" | "system";
+      text: string;
+      senderLabel?: string;
+    }
+  | { type: "ui:chat-set-open"; open: boolean }
+  | { type: "game:chat-submit"; text: string }
+  | { type: "game:chat-closed" };

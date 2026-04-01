@@ -88,6 +88,7 @@ async function main(): Promise<void> {
         multiplayerJoinRoomCode = result.roomCode;
       }
 
+      const session = auth.getSession();
       game = new Game({
         mount,
         seed,
@@ -97,6 +98,8 @@ async function main(): Promise<void> {
         multiplayerJoinRoomCode,
         initialWorldTimeMs,
         signalRelay,
+        displayName: auth.getDisplayLabel(),
+        accountId: session?.userId ?? null,
       });
       const loadStartedAt = Date.now();
       const minHoldMs = randomLoadingHoldMs();

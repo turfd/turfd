@@ -22,11 +22,21 @@ const CHUNK_CELLS = CHUNK_SIZE * CHUNK_SIZE;
 const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 
 /** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 2;
+export const WIRE_PROTOCOL_VERSION = 3;
+
+/** Max UTF-8 bytes for handshake display name (profile + guest labels). */
+export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;
+
+/** Max UTF-8 bytes for Supabase user id (UUID) on the wire. */
+export const HANDSHAKE_ACCOUNT_ID_MAX_BYTES = 64;
 
 export type HandshakeWirePayload = {
   version: number;
   peerId: string;
+  /** Empty string if legacy peer omitted tail. */
+  displayName: string;
+  /** Empty string = guest / no Supabase session. */
+  accountId: string;
 };
 
 export type WorldSyncWirePayload = {
@@ -58,21 +68,52 @@ export type DecodedWirePayload =
   | { kind: "block-update"; payload: BlockUpdateWirePayload };
 
 export class BinarySerializer {
-  /** Encodes a handshake payload into an ArrayBuffer (type byte + u32 version + u32 len + UTF-8 peerId). */
+  /**
+   * Encodes handshake: [type][u32 ver][u32 peerLen][peer][u16 dnLen][displayName][u16 accLen][accountId].
+   */
   public static serializeHandshake(
     msg: HandshakeWirePayload,
   ): ArrayBuffer {
     const peerIdBytes = textEnc.encode(msg.peerId);
-    const buffer = new ArrayBuffer(1 + 4 + 4 + peerIdBytes.length);
+    let dnBytes = textEnc.encode(msg.displayName);
+    if (dnBytes.length > HANDSHAKE_DISPLAY_NAME_MAX_BYTES) {
+      dnBytes = dnBytes.slice(0, HANDSHAKE_DISPLAY_NAME_MAX_BYTES);
+    }
+    let accBytes = textEnc.encode(msg.accountId);
+    if (accBytes.length > HANDSHAKE_ACCOUNT_ID_MAX_BYTES) {
+      accBytes = accBytes.slice(0, HANDSHAKE_ACCOUNT_ID_MAX_BYTES);
+    }
+    const total =
+      1 +
+      4 +
+      4 +
+      peerIdBytes.length +
+      2 +
+      dnBytes.length +
+      2 +
+      accBytes.length;
+    const buffer = new ArrayBuffer(total);
     const view = new DataView(buffer);
-    view.setUint8(0, HANDSHAKE_TYPE_BYTE);
-    view.setUint32(1, msg.version, LE);
-    view.setUint32(5, peerIdBytes.length, LE);
-    new Uint8Array(buffer, 9).set(peerIdBytes);
+    let o = 0;
+    view.setUint8(o, HANDSHAKE_TYPE_BYTE);
+    o += 1;
+    view.setUint32(o, msg.version, LE);
+    o += 4;
+    view.setUint32(o, peerIdBytes.length, LE);
+    o += 4;
+    new Uint8Array(buffer, o, peerIdBytes.length).set(peerIdBytes);
+    o += peerIdBytes.length;
+    view.setUint16(o, dnBytes.length, LE);
+    o += 2;
+    new Uint8Array(buffer, o, dnBytes.length).set(dnBytes);
+    o += dnBytes.length;
+    view.setUint16(o, accBytes.length, LE);
+    o += 2;
+    new Uint8Array(buffer, o, accBytes.length).set(accBytes);
     return buffer;
   }
 
-  /** Decodes a handshake buffer into version + peerId. Throws if layout is invalid. */
+  /** Decodes handshake; legacy buffers (peerId only) yield empty displayName and accountId. */
   public static deserializeHandshake(buffer: ArrayBuffer): HandshakeWirePayload {
     const view = new DataView(buffer);
     const type = view.getUint8(0);
@@ -86,8 +127,35 @@ export class BinarySerializer {
     if (buffer.byteLength < 9 + peerIdLen) {
       throw new Error("Handshake buffer truncated");
     }
+    let o = 9 + peerIdLen;
     const peerId = textDec.decode(new Uint8Array(buffer, 9, peerIdLen));
-    return { version, peerId };
+    if (o + 2 > buffer.byteLength) {
+      return { version, peerId, displayName: "", accountId: "" };
+    }
+    const dnLen = view.getUint16(o, LE);
+    o += 2;
+    if (o + dnLen > buffer.byteLength) {
+      return { version, peerId, displayName: "", accountId: "" };
+    }
+    const displayName =
+      dnLen > 0 ? textDec.decode(new Uint8Array(buffer, o, dnLen)) : "";
+    o += dnLen;
+    if (o + 2 > buffer.byteLength) {
+      return { version, peerId, displayName: displayName || "Player", accountId: "" };
+    }
+    const accLen = view.getUint16(o, LE);
+    o += 2;
+    if (o + accLen > buffer.byteLength) {
+      return { version, peerId, displayName: displayName || "Player", accountId: "" };
+    }
+    const accountId =
+      accLen > 0 ? textDec.decode(new Uint8Array(buffer, o, accLen)) : "";
+    return {
+      version,
+      peerId,
+      displayName: displayName.trim() !== "" ? displayName : "Player",
+      accountId,
+    };
   }
 
   /** Serialize authoritative world metadata (seed + clock for lighting sync). */

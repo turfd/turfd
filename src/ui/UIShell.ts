@@ -29,35 +29,14 @@ export class UIShell {
     this.pauseMenu.init(mount, bus);
 
     const sess = document.createElement("div");
-    sess.style.cssText = [
-      "position:fixed",
-      "inset:0",
-      "z-index:1200",
-      "display:none",
-      "align-items:center",
-      "justify-content:center",
-      "background:rgba(24,24,26,0.78)",
-      "padding:clamp(1rem,4vw,2rem)",
-      "box-sizing:border-box",
-      "font-family:'BoldPixels','Courier New',monospace",
-      "-webkit-font-smoothing:none",
-      "color:#f2f2f7",
-    ].join(";");
+    sess.className = "turfd-session-overlay";
     sess.setAttribute("aria-hidden", "true");
     sess.setAttribute("role", "alertdialog");
     sess.setAttribute("aria-modal", "true");
     sess.setAttribute("aria-labelledby", "turfd-session-ended-msg");
 
     const card = document.createElement("div");
-    card.style.cssText = [
-      "width:min(26rem,100%)",
-      "border-radius:14px",
-      "border:1px solid rgba(255,255,255,0.1)",
-      "background:rgba(44,44,46,0.96)",
-      "padding:clamp(1.25rem,3vw,1.5rem)",
-      "box-sizing:border-box",
-      "text-align:center",
-    ].join(";");
+    card.className = "turfd-session-card";
     card.addEventListener("click", (e) => e.stopPropagation());
 
     const msg = document.createElement("p");
@@ -101,7 +80,7 @@ export class UIShell {
       }
       this.sessionEndedShown = true;
       msg.textContent = e.message;
-      sess.style.display = "flex";
+      sess.classList.add("turfd-session-overlay--open");
       sess.setAttribute("aria-hidden", "false");
       bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
     });

@@ -4,6 +4,7 @@
 import { openDB, type IDBPDatabase } from "idb";
 import type { Chunk } from "../world/chunk/Chunk";
 import { chunkKey, type ChunkCoord } from "../world/chunk/ChunkCoord";
+import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 
 export const DB_NAME = "turfd";
 export const DB_VERSION = 1;
@@ -22,6 +23,8 @@ export type WorldMetadata = {
   worldTimeMs?: number;
   /** JPEG data URL of the last in-game view, captured on save (optional). */
   previewImageDataUrl?: string;
+  /** Host-only multiplayer moderation; optional until first save with chat. */
+  moderation?: WorldModerationPersisted;
 };
 
 export type ChunkRecord = {
@@ -86,6 +89,19 @@ export class IndexedDBStore {
       name: nextName,
       lastPlayedAt: Date.now(),
     } satisfies WorldMetadata);
+  }
+
+  /**
+   * Read–merge–write world row (metadata only). Used for moderation updates without chunk IO.
+   */
+  async patchWorldMetadata(
+    uuid: string,
+    patch: (prev: WorldMetadata | undefined) => WorldMetadata,
+  ): Promise<void> {
+    const db = this.requireDb();
+    const prev = (await db.get("worlds", uuid)) as WorldMetadata | undefined;
+    const next = patch(prev);
+    await db.put("worlds", next);
   }
 
   async deleteWorld(uuid: string): Promise<void> {

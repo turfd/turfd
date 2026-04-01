@@ -14,20 +14,30 @@
   pointer-events: auto;
 }
 
-/* Standalone hotbar is hidden while the full inventory overlay is open (hotbar row is in the panel). */
-#inventory-ui-root.inv-root--open .inv-hotbar-wrap {
+/* Standalone hotbar stack (name + bar) hidden while inventory panel is open. */
+#inventory-ui-root.inv-root--open .inv-hotbar-stack {
   visibility: hidden;
   pointer-events: none;
 }
 
-#inventory-ui-root .inv-hotbar-wrap {
+/* Column: item name floats above the dark hotbar strip (Minecraft-style). */
+#inventory-ui-root .inv-hotbar-stack {
   position: absolute;
   bottom: 1.1rem;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-hotbar-wrap {
+  display: flex;
   flex-direction: row;
-  gap: 6px;
+  align-items: center;
   padding: 8px 10px;
   background: rgba(44, 44, 46, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -35,6 +45,87 @@
   corner-shape: squircle;
   box-sizing: border-box;
   pointer-events: none;
+}
+
+#inventory-ui-root .inv-hotbar-item-name {
+  min-height: 1.2em;
+  max-width: min(92vw, 32rem);
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-family: "M5x7", monospace;
+  font-size: clamp(22px, 4.5vmin, 28px);
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: #ffffff;
+  text-align: center;
+  text-shadow:
+    0 0 3px #000,
+    1px 1px 0 #3f3f3f,
+    -1px -1px 0 #000,
+    1px -1px 0 #000,
+    -1px 1px 0 #000,
+    0 2px 4px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-item-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 200;
+  max-width: min(20rem, 85vw);
+  padding: 6px 11px;
+  box-sizing: border-box;
+  font-family: "M5x7", monospace;
+  font-size: 18px;
+  line-height: 1.25;
+  letter-spacing: 0.03em;
+  color: #f2f2f7;
+  background: rgba(28, 28, 30, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  corner-shape: squircle;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.1s ease,
+    visibility 0.1s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#inventory-ui-root .inv-item-tooltip.inv-item-tooltip--visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+#inventory-ui-root .inv-hotbar-item-name.inv-hotbar-item-name--visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#inventory-ui-root .inv-hotbar-slots {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Hotbar slots accept hover for native tooltips; gaps remain click-through. */
+#inventory-ui-root .inv-hotbar-slots .inv-slot {
+  pointer-events: auto;
 }
 
 #inventory-ui-root .inv-slot {
@@ -95,15 +186,22 @@
 #inventory-ui-root .inv-overlay {
   position: absolute;
   inset: 0;
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(24, 24, 26, 0.55);
-  pointer-events: auto;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.24s ease,
+    visibility 0.24s ease;
 }
 
 #inventory-ui-root .inv-overlay.inv-overlay--open {
-  display: flex;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 #inventory-ui-root .inv-panel {
@@ -114,6 +212,16 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
   corner-shape: squircle;
+  transform: translateY(16px);
+  opacity: 0;
+  transition:
+    transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.26s ease;
+}
+
+#inventory-ui-root .inv-overlay.inv-overlay--open .inv-panel {
+  transform: translateY(0);
+  opacity: 1;
 }
 
 #inventory-ui-root .inv-panel-title {
@@ -144,4 +252,25 @@
   color: #8e8e93;
   margin-bottom: 5px;
   letter-spacing: 0.04em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #inventory-ui-root .inv-overlay,
+  #inventory-ui-root .inv-panel,
+  #inventory-ui-root .inv-hotbar-item-name,
+  #inventory-ui-root .inv-item-tooltip {
+    transition: none;
+  }
+
+  #inventory-ui-root .inv-overlay.inv-overlay--open .inv-panel {
+    transform: none;
+  }
+
+  #inventory-ui-root .inv-hotbar-item-name {
+    transform: none;
+  }
+
+  #inventory-ui-root .inv-hotbar-item-name.inv-hotbar-item-name--visible {
+    transform: none;
+  }
 }

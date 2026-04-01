@@ -78,6 +78,12 @@ function injectLoadingStyles(base: string): void {
       color: var(--tl-ink);
       padding: clamp(1rem, 4vw, 1.75rem);
       box-sizing: border-box;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .turfd-loading-overlay.turfd-loading-overlay--entered {
+      opacity: 1;
     }
 
     .turfd-loading-main {
@@ -96,6 +102,16 @@ function injectLoadingStyles(base: string): void {
       background: var(--tl-surface);
       padding: clamp(1.35rem, 3.5vw, 1.75rem) clamp(1.5rem, 4vw, 2rem);
       box-sizing: border-box;
+      transform: translateY(14px);
+      opacity: 0;
+      transition:
+        transform 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 0.28s ease;
+    }
+
+    .turfd-loading-overlay.turfd-loading-overlay--entered .turfd-loading-card {
+      transform: translateY(0);
+      opacity: 1;
     }
 
     .turfd-loading-card.turfd-loading-card--error {
@@ -222,6 +238,15 @@ function injectLoadingStyles(base: string): void {
       .turfd-loading-fill {
         transition: none;
       }
+      .turfd-loading-overlay {
+        transition: none;
+        opacity: 1;
+      }
+      .turfd-loading-card {
+        transition: none;
+        transform: none;
+        opacity: 1;
+      }
     }
   `;
   document.head.appendChild(style);
@@ -317,6 +342,12 @@ export class WorldLoadingScreen {
     this.root.appendChild(main);
     this.root.appendChild(tipWrap);
     mount.appendChild(this.root);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        this.root.classList.add("turfd-loading-overlay--entered");
+      });
+    });
 
     this._startBarLoop();
     this.tipIntervalId = setInterval(() => {

@@ -23,7 +23,7 @@ import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
 import lootTablesJson from "../items/lootTables/blocks.loot.json";
 import { parseLootTablesJson } from "../mods/parseLootTablesJson";
-import type { IndexedDBStore } from "../persistence/IndexedDBStore";
+import type { IndexedDBStore, WorldMetadata } from "../persistence/IndexedDBStore";
 import { SaveGame } from "../persistence/SaveGame";
 import { parseBlockJson } from "../mods/parseBlockJson";
 import { ChunkSyncManager } from "../network/ChunkSyncManager";
@@ -37,8 +37,15 @@ import { AtlasLoader } from "../renderer/AtlasLoader";
 import { BreakOverlay } from "../renderer/BreakOverlay";
 import { ChunkRenderer } from "../renderer/chunk/ChunkRenderer";
 import { RenderPipeline } from "../renderer/RenderPipeline";
+import { ChatHostController } from "../network/ChatHostController";
+import {
+  migrateModerationMetadata,
+  WorldModerationState,
+} from "../network/moderation/WorldModerationState";
 import { CursorStackUI } from "../ui/CursorStackUI";
+import { ChatOverlay } from "../ui/ChatOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
+import { NametagOverlay } from "../ui/NametagOverlay";
 import { UIShell } from "../ui/UIShell";
 import { BlockRegistry } from "../world/blocks/BlockRegistry";
 import { WorldTime } from "../world/lighting/WorldTime";
@@ -69,6 +76,10 @@ export type GameOptions = {
   initialWorldTimeMs?: number;
   /** Optional Supabase room relay for authenticated hosts. */
   signalRelay?: SupabaseSignalAdapter | null;
+  /** Shown in chat and nametags; defaults to Player. */
+  displayName?: string;
+  /** Supabase `auth.users` id when signed in; guests omit. */
+  accountId?: string | null;
 };
 
 export type PlayerSavedState = {
@@ -126,6 +137,22 @@ export class Game {
   private readonly _chunkSync: ChunkSyncManager;
   private readonly _playerStateBroadcaster: PlayerStateBroadcaster;
   private readonly networkUnsubs: (() => void)[] = [];
+
+  private readonly _displayName: string;
+  private readonly _accountId: string | null;
+  private readonly _moderation = new WorldModerationState();
+  private readonly _sessionRoster = new Map<
+    string,
+    { displayName: string; accountId: string }
+  >();
+  private readonly _mutedPeerIds = new Set<string>();
+  private readonly _opPeerIds = new Set<string>();
+  private _chatHost: ChatHostController | null = null;
+  private _chatOverlay: ChatOverlay | null = null;
+  private _nametagOverlay: NametagOverlay | null = null;
+  private _chatOpen = false;
+  private _pingPendingAt: number | null = null;
+  private _modPersistTimer: ReturnType<typeof setTimeout> | null = null;
   /** CHUNK_DATA received before `World` exists (multiplayer join); flushed after `world.init`. */
   private readonly _pendingAuthoritativeChunks: Array<{
     cx: number;
@@ -156,6 +183,8 @@ export class Game {
   private quitUnsub: (() => void) | null = null;
   private _awaitingWorldData = false;
   private _worldTimeBroadcastAccum = 0;
+  /** Every 2nd fixed tick (~30 Hz) sample and send `PLAYER_STATE` when changed. */
+  private _playerStateBroadcastPhase = 0;
   private readonly _worldTime: WorldTime;
 
   private readonly _heldTorchScratch: HeldTorchLighting = {
@@ -165,7 +194,7 @@ export class Game {
     color: [1.0, 0.85, 0.55],
   };
 
-  /** Reused by {@link PlayerStateBroadcaster} state callback (avoids object literal per 20 Hz tick). */
+  /** Reused by {@link PlayerStateBroadcaster} state callback (avoids object literal per broadcast tick). */
   private readonly _playerStateSnap = {
     playerId: 0,
     x: 0,
@@ -183,11 +212,15 @@ export class Game {
     this.worldName = options.worldName;
     this.multiplayerJoinRoomCode = options.multiplayerJoinRoomCode;
     this._signalRelay = options.signalRelay ?? null;
+    const dn = options.displayName?.trim();
+    this._displayName = dn !== undefined && dn !== "" ? dn : "Player";
+    this._accountId = options.accountId ?? null;
     this.bus = new EventBus();
     const initialTimeMs =
       options.initialWorldTimeMs ?? DAY_LENGTH_MS * 0.15;
     this._worldTime = new WorldTime(initialTimeMs);
     this.adapter = new PeerJSAdapter(this.bus);
+    this.adapter.setHandshakeProfile(this._displayName, this._accountId);
     this._chunkSync = new ChunkSyncManager(this.adapter, this.bus);
     this._playerStateBroadcaster = new PlayerStateBroadcaster(this.adapter, () => {
       const em = this.entityManager;
@@ -247,6 +280,11 @@ export class Game {
         : "Preparing local world session...",
     });
     await this._initEntryNetworking();
+
+    const metaLoaded = await this.store.loadWorld(this.worldUuid);
+    this._moderation.loadFromPersisted(
+      migrateModerationMetadata(metaLoaded?.moderation),
+    );
 
     this.quitUnsub = this.bus.on("ui:quit", () => {
       this.stop();
@@ -375,6 +413,10 @@ export class Game {
       this.bus,
       () => this._worldTime.ms,
       () => this.pipeline?.captureWorldPreviewDataUrl() ?? null,
+      () =>
+        this._shouldPersistModeration()
+          ? this._moderation.toPersisted()
+          : undefined,
     );
     progressCallback?.({
       stage: "Finalizing",
@@ -385,6 +427,34 @@ export class Game {
     this.saveGame = saveGame;
 
     this.uiShell = new UIShell(this.bus, this.mount, saveGame, audio);
+
+    const chatOverlay = new ChatOverlay();
+    chatOverlay.init(this.mount, this.bus);
+    chatOverlay.setLocalDisplayName(this._displayName);
+    this._chatOverlay = chatOverlay;
+    for (const [peerId, entry] of this._sessionRoster) {
+      this.bus.emit({
+        type: "net:session-player",
+        peerId,
+        displayName: entry.displayName,
+        accountId: entry.accountId,
+      } satisfies GameEvent);
+    }
+
+    const nametagOverlay = new NametagOverlay();
+    nametagOverlay.init(this.mount);
+    this._nametagOverlay = nametagOverlay;
+
+    this.networkUnsubs.push(
+      this.bus.on("game:chat-submit", (e) => {
+        this._onChatSubmit(e.text);
+      }),
+    );
+    this.networkUnsubs.push(
+      this.bus.on("game:chat-closed", () => {
+        this._onChatClosed();
+      }),
+    );
 
     this.bus.on("ui:close-pause", () => {
       if (!this.paused) {
@@ -500,6 +570,11 @@ export class Game {
         }
       }
     }
+    if (this._modPersistTimer !== null) {
+      clearTimeout(this._modPersistTimer);
+      this._modPersistTimer = null;
+    }
+    this.adapter.setClientAdmissionGate(null);
     this.adapter.disconnect();
     this.quitUnsub?.();
     this.quitUnsub = null;
@@ -523,6 +598,11 @@ export class Game {
     this.inventoryUI = null;
     this.isInventoryOpen = false;
     this.paused = false;
+    this._chatOverlay?.destroy();
+    this._chatOverlay = null;
+    this._nametagOverlay?.destroy();
+    this._nametagOverlay = null;
+    this._chatHost = null;
     this.uiShell?.destroy();
     this.uiShell = null;
     this.audio?.destroy();
@@ -581,6 +661,51 @@ export class Game {
     this.networkUnsubs.push(
       this.bus.on("net:message", (e) => {
         const msg = e.message;
+        const stNet = this.adapter.state;
+
+        if (msg.type === MsgType.PING) {
+          if (stNet.status === "connected" && stNet.role === "host") {
+            this.adapter.send(e.peerId as PeerId, msg);
+          } else if (stNet.status === "connected" && stNet.role === "client") {
+            if (this._pingPendingAt !== null) {
+              const rtt = performance.now() - this._pingPendingAt;
+              this._pingPendingAt = null;
+              this.bus.emit({
+                type: "ui:chat-line",
+                kind: "system",
+                text: `Ping: ${rtt.toFixed(0)} ms`,
+              } satisfies GameEvent);
+            }
+          }
+          return;
+        }
+
+        if (msg.type === MsgType.SYSTEM_MESSAGE) {
+          this.bus.emit({
+            type: "ui:chat-line",
+            kind: "system",
+            text: msg.text,
+          } satisfies GameEvent);
+          return;
+        }
+
+        if (msg.type === MsgType.CHAT) {
+          if (stNet.status === "connected" && stNet.role === "host") {
+            this._ensureChatHost();
+            this._chatHost?.handleInboundLine(e.peerId, msg.text);
+          } else if (stNet.status === "connected" && stNet.role === "client") {
+            const r = this._sessionRoster.get(msg.fromPeerId);
+            const label = r?.displayName ?? msg.fromPeerId;
+            this.bus.emit({
+              type: "ui:chat-line",
+              kind: "player",
+              text: msg.text,
+              senderLabel: label,
+            } satisfies GameEvent);
+          }
+          return;
+        }
+
         if (msg.type === MsgType.SESSION_ENDED) {
           const st = this.adapter.state;
           if (st.status === "connected" && st.role === "client") {
@@ -634,14 +759,36 @@ export class Game {
             e.peerId,
             msg.x,
             msg.y,
+            msg.vx,
+            msg.vy,
             msg.facingRight,
           );
         }
       }),
     );
     this.networkUnsubs.push(
+      this.bus.on("net:session-player", (e) => {
+        this._sessionRoster.set(e.peerId, {
+          displayName: e.displayName,
+          accountId: e.accountId,
+        });
+        const st = this.adapter.state;
+        if (st.status === "connected" && st.role === "host") {
+          if (this._moderation.isMuted(e.displayName, e.accountId)) {
+            this._mutedPeerIds.add(e.peerId);
+          }
+          if (this._moderation.isOp(e.displayName, e.accountId)) {
+            this._opPeerIds.add(e.peerId);
+          }
+        }
+      }),
+    );
+    this.networkUnsubs.push(
       this.bus.on("net:peer-left", (e) => {
         this.world?.removeRemotePlayer(e.peerId);
+        this._sessionRoster.delete(e.peerId);
+        this._mutedPeerIds.delete(e.peerId);
+        this._opPeerIds.delete(e.peerId);
       }),
     );
     this.networkUnsubs.push(
@@ -713,6 +860,11 @@ export class Game {
             }
             this.adapter.disconnect();
             this.world?.clearRemotePlayers();
+            this._sessionRoster.clear();
+            this._mutedPeerIds.clear();
+            this._opPeerIds.clear();
+            this._chatHost = null;
+            this.adapter.setClientAdmissionGate(null);
             this._emitNetworkRoleForUi();
             this.bus.emit({
               type: "net:room-code",
@@ -730,6 +882,7 @@ export class Game {
         void this.adapter
           .host(PEERJS_CLOUD)
           .then((hostPeerId) => {
+            this._registerHostMultiplayerSetup();
             this._emitNetworkRoleForUi();
             const roomCode = peerIdToRoomCode(hostPeerId);
             if (roomCode !== null) {
@@ -753,6 +906,180 @@ export class Game {
     const role =
       state.status === "connected" ? state.role : "offline";
     this.bus.emit({ type: "game:network-role", role } satisfies GameEvent);
+  }
+
+  private _registerHostMultiplayerSetup(): void {
+    const localId = this.adapter.getLocalPeerId();
+    if (localId !== null) {
+      this._sessionRoster.set(localId, {
+        displayName: this._displayName,
+        accountId: this._accountId ?? "",
+      });
+    }
+    this.adapter.setClientAdmissionGate((peerId, displayName, accountId) => {
+      void peerId;
+      return !this._moderation.isBanned(displayName, accountId);
+    });
+  }
+
+  private _shouldPersistModeration(): boolean {
+    const st = this.adapter.state;
+    return st.status !== "connected" || st.role !== "client";
+  }
+
+  private _ensureChatHost(): void {
+    if (this._chatHost !== null) {
+      return;
+    }
+    const st = this.adapter.state;
+    if (st.status !== "connected" || st.role !== "host") {
+      return;
+    }
+    this._chatHost = new ChatHostController({
+      adapter: this.adapter,
+      moderation: this._moderation,
+      roster: this._sessionRoster,
+      mutedPeerIds: this._mutedPeerIds,
+      opPeerIds: this._opPeerIds,
+      getLocalPeerId: () => this.adapter.getLocalPeerId(),
+      getLocalDisplayName: () => this._displayName,
+      schedulePersistModeration: () => this._schedulePersistModeration(),
+      emitHostChatLine: (senderLabel, text) => {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "player",
+          text,
+          senderLabel,
+        } satisfies GameEvent);
+      },
+      emitHostSystemLine: (text) => {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text,
+        } satisfies GameEvent);
+      },
+      sendSystemTo: (peerId, text) => {
+        this._sendSystemToPeer(peerId, text);
+      },
+    });
+  }
+
+  private _sendSystemToPeer(peerId: PeerId, text: string): void {
+    const local = this.adapter.getLocalPeerId();
+    if (local !== null && peerId === local) {
+      this.bus.emit({
+        type: "ui:chat-line",
+        kind: "system",
+        text,
+      } satisfies GameEvent);
+      return;
+    }
+    this.adapter.send(peerId, {
+      type: MsgType.SYSTEM_MESSAGE,
+      text,
+    });
+  }
+
+  private _schedulePersistModeration(): void {
+    if (!this._shouldPersistModeration()) {
+      return;
+    }
+    if (this._modPersistTimer !== null) {
+      clearTimeout(this._modPersistTimer);
+    }
+    this._modPersistTimer = setTimeout(() => {
+      this._modPersistTimer = null;
+      void this._persistModerationNow();
+    }, 420);
+  }
+
+  private async _persistModerationNow(): Promise<void> {
+    if (!this._shouldPersistModeration()) {
+      return;
+    }
+    const now = Date.now();
+    const mod = this._moderation.toPersisted();
+    const em = this.entityManager;
+    const w = this.world;
+    try {
+      await this.store.patchWorldMetadata(this.worldUuid, (prev) => {
+        if (prev === undefined) {
+          const row: WorldMetadata = {
+            uuid: this.worldUuid,
+            name: this.worldName,
+            seed: this._worldSeed,
+            createdAt: now,
+            lastPlayedAt: now,
+            playerX: em?.getPlayer().state.position.x ?? 0,
+            playerY: em?.getPlayer().state.position.y ?? 0,
+            hotbarSlot: em?.getPlayer().state.hotbarSlot ?? 0,
+            modList: w?.getRegistry().getModList() ?? [],
+            worldTimeMs: this._worldTime.ms,
+            moderation: mod,
+          };
+          return row;
+        }
+        return { ...prev, moderation: mod, lastPlayedAt: now };
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  private _onChatSubmit(text: string): void {
+    const trimmed = text.trim();
+    const st = this.adapter.state;
+    if (trimmed === "/ping") {
+      if (st.status === "connected" && st.role === "client") {
+        this._pingPendingAt = performance.now();
+        this.adapter.broadcast({
+          type: MsgType.PING,
+          timestamp: this._pingPendingAt,
+        });
+      } else if (st.status === "connected" && st.role === "host") {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "0 ms (you are the host)",
+        } satisfies GameEvent);
+      } else {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Not connected to multiplayer.",
+        } satisfies GameEvent);
+      }
+      return;
+    }
+    if (st.status !== "connected") {
+      this.bus.emit({
+        type: "ui:chat-line",
+        kind: "system",
+        text: "Not connected to multiplayer.",
+      } satisfies GameEvent);
+      return;
+    }
+    const localId = this.adapter.getLocalPeerId();
+    if (localId === null) {
+      return;
+    }
+    if (st.role === "host") {
+      this._ensureChatHost();
+      this._chatHost?.handleInboundLine(localId, trimmed);
+      return;
+    }
+    this.adapter.broadcast({
+      type: MsgType.CHAT,
+      fromPeerId: localId,
+      text: trimmed,
+    });
+  }
+
+  private _onChatClosed(): void {
+    this._chatOpen = false;
+    this.input?.setChatOpen(false);
+    this.input?.setWorldInputBlocked(this.paused || this.isInventoryOpen);
   }
 
   private async loadTurfdCoreBlocks(
@@ -793,7 +1120,9 @@ export class Game {
       input.updateMouseWorldPos(pipeline.getCamera());
 
       if (input.isJustPressed("pause")) {
-        if (this.isInventoryOpen) {
+        if (this._chatOpen) {
+          this.bus.emit({ type: "ui:chat-set-open", open: false } satisfies GameEvent);
+        } else if (this.isInventoryOpen) {
           this.isInventoryOpen = false;
           this.inventoryUI?.setOpen(false);
           input.setWorldInputBlocked(false);
@@ -807,6 +1136,13 @@ export class Game {
       if (this.paused) {
         input.postUpdate();
         return;
+      }
+
+      if (input.isJustPressed("chat") && !this._chatOpen) {
+        this._chatOpen = true;
+        input.setWorldInputBlocked(true);
+        input.setChatOpen(true);
+        this.bus.emit({ type: "ui:chat-set-open", open: true } satisfies GameEvent);
       }
 
       if (input.isJustPressed("inventory")) {
@@ -833,6 +1169,11 @@ export class Game {
       }
 
       entityManager.update(dtSec);
+      this._playerStateBroadcastPhase += 1;
+      if (this._playerStateBroadcastPhase >= 2) {
+        this._playerStateBroadcastPhase = 0;
+        this._playerStateBroadcaster.tick();
+      }
       world.updateRemotePlayers(dtSec);
       const pl = entityManager.getPlayer().state.position;
       world.updateDroppedItems(
@@ -890,6 +1231,32 @@ export class Game {
     }
 
     this.entityManager?.syncPlayerGraphic(alpha, dtSec);
+
+    if (
+      this._nametagOverlay !== null &&
+      this.pipeline !== null &&
+      this.entityManager !== null &&
+      this.world !== null
+    ) {
+      const s = this.entityManager.getPlayer().state;
+      this._nametagOverlay.update(
+        this.mount,
+        this.pipeline.getCanvas(),
+        this.pipeline.getCamera(),
+        alpha,
+        {
+          prevX: s.prevPosition.x,
+          prevY: s.prevPosition.y,
+          x: s.position.x,
+          y: s.position.y,
+          displayName: this._displayName,
+        },
+        this.world.getRemotePlayers(),
+        this._sessionRoster,
+        this.adapter.getLocalPeerId(),
+      );
+    }
+
     if (this.entityManager !== null && this.inventoryUI !== null) {
       const pl = this.entityManager.getPlayer();
       this.inventoryUI.update(pl.inventory, pl.state.hotbarSlot);

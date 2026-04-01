@@ -657,6 +657,20 @@ function injectStyles(base: string): void {
     }
 
     /* ── Modal ────────────────────────────────────── */
+    @keyframes mm-modal-backdrop-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes mm-modal-card-in {
+      from {
+        opacity: 0;
+        transform: translateY(16px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
     .mm-modal {
       position: fixed;
       inset: 0;
@@ -668,6 +682,7 @@ function injectStyles(base: string): void {
       padding: 1.25rem;
       /* .mm-root is pointer-events: none; re-enable hit-testing for the overlay + card. */
       pointer-events: auto;
+      animation: mm-modal-backdrop-in 0.24s ease forwards;
     }
     .mm-modal-card {
       width: min(28rem, 100%);
@@ -676,6 +691,7 @@ function injectStyles(base: string): void {
       border-radius: var(--mm-radius-md);
       corner-shape: squircle;
       padding: 1.35rem 1.5rem;
+      animation: mm-modal-card-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
     }
     .mm-modal-title {
       font-family: 'BoldPixels', monospace;
@@ -708,6 +724,14 @@ function injectStyles(base: string): void {
 
     @media (prefers-reduced-motion: reduce) {
       .mm-nav-btn, .mm-btn, .mm-discord, .mm-world-row { transition: none; }
+      .mm-modal,
+      .mm-modal-card {
+        animation: none;
+        opacity: 1;
+      }
+      .mm-modal-card {
+        transform: none;
+      }
     }
 
     @media (max-width: 900px) {

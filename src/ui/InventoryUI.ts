@@ -12,6 +12,31 @@ export type { AtlasIconLayout } from "./atlasItemIcon";
 
 type GetInventory = () => PlayerInventory;
 
+const INV_FONT_STYLE_ID = "turfd-inventory-fonts";
+
+function ensureInventoryFonts(): void {
+  if (document.getElementById(INV_FONT_STYLE_ID) !== null) {
+    return;
+  }
+  const base = import.meta.env.BASE_URL;
+  const style = document.createElement("style");
+  style.id = INV_FONT_STYLE_ID;
+  style.textContent = `
+    @font-face {
+      font-family: 'M5x7';
+      src: url('${base}assets/fonts/m5x7.ttf') format('truetype');
+      font-weight: normal;
+      font-style: normal;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/** Selected-slot name above hotbar: visible duration before fade-out. */
+const HOTBAR_NAME_HOLD_MS = 2200;
+/** After fade-out class removed, clear text once opacity transition finishes. */
+const HOTBAR_NAME_CLEAR_MS = 280;
+
 export class InventoryUI {
   private readonly root: HTMLDivElement;
   private readonly hotbarSlots: HTMLDivElement[] = [];
@@ -24,7 +49,15 @@ export class InventoryUI {
   private readonly getInventory: GetInventory;
   private layout: AtlasIconLayout | null = null;
   private readonly overlay: HTMLDivElement;
+  private readonly hotbarItemNameEl: HTMLDivElement;
+  private readonly itemTooltipEl: HTMLDivElement;
+  private tooltipActiveSlot: number | null = null;
   private inventoryOpen = false;
+
+  private prevHotbarSlotForLabel = -1;
+  private prevHotbarSelectionKey = "";
+  private hotbarNameHideTimer: ReturnType<typeof setTimeout> | null = null;
+  private hotbarNameClearTimer: ReturnType<typeof setTimeout> | null = null;
 
   private pointerDownSlot: number | null = null;
   private pointerDownButton: number | null = null;
@@ -46,6 +79,104 @@ export class InventoryUI {
   }
 
   /** If a delayed LMB click is pending for another slot, run it now (Minecraft-style slot switching). */
+  private clearHotbarNameTimers(): void {
+    if (this.hotbarNameHideTimer !== null) {
+      clearTimeout(this.hotbarNameHideTimer);
+      this.hotbarNameHideTimer = null;
+    }
+    if (this.hotbarNameClearTimer !== null) {
+      clearTimeout(this.hotbarNameClearTimer);
+      this.hotbarNameClearTimer = null;
+    }
+  }
+
+  /** Fade in selected item name above hotbar; fade out after {@link HOTBAR_NAME_HOLD_MS}. */
+  private showHotbarItemName(displayName: string): void {
+    const el = this.hotbarItemNameEl;
+    this.clearHotbarNameTimers();
+    el.textContent = displayName;
+    el.classList.remove("inv-hotbar-item-name--visible");
+    requestAnimationFrame(() => {
+      el.classList.add("inv-hotbar-item-name--visible");
+    });
+    this.hotbarNameHideTimer = setTimeout(() => {
+      this.hotbarNameHideTimer = null;
+      el.classList.remove("inv-hotbar-item-name--visible");
+      this.hotbarNameClearTimer = setTimeout(() => {
+        this.hotbarNameClearTimer = null;
+        el.textContent = "";
+      }, HOTBAR_NAME_CLEAR_MS);
+    }, HOTBAR_NAME_HOLD_MS);
+  }
+
+  private hideHotbarItemNameImmediate(): void {
+    this.clearHotbarNameTimers();
+    const el = this.hotbarItemNameEl;
+    el.classList.remove("inv-hotbar-item-name--visible");
+    el.textContent = "";
+  }
+
+  private hideItemTooltip(): void {
+    this.tooltipActiveSlot = null;
+    this.itemTooltipEl.classList.remove("inv-item-tooltip--visible");
+    this.itemTooltipEl.textContent = "";
+  }
+
+  private positionItemTooltip(clientX: number, clientY: number): void {
+    const pad = 12;
+    const el = this.itemTooltipEl;
+    const tw = el.offsetWidth;
+    const th = el.offsetHeight;
+    let x = clientX + pad;
+    let y = clientY + pad;
+    if (x + tw > window.innerWidth - 8) {
+      x = clientX - tw - pad;
+    }
+    if (y + th > window.innerHeight - 8) {
+      y = clientY - th - pad;
+    }
+    x = Math.max(8, x);
+    y = Math.max(8, y);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  }
+
+  private bindSlotTooltip(slot: HTMLDivElement, slotIndex: number): void {
+    slot.addEventListener("mouseenter", (e: MouseEvent) => {
+      if (this.layout === null) {
+        return;
+      }
+      const stack = this.getInventory().getStack(slotIndex);
+      if (stack === null || stack.count <= 0) {
+        return;
+      }
+      const def = this.itemRegistry.getById(stack.itemId);
+      if (def === undefined) {
+        return;
+      }
+      this.tooltipActiveSlot = slotIndex;
+      this.itemTooltipEl.textContent = def.displayName;
+      this.itemTooltipEl.classList.add("inv-item-tooltip--visible");
+      requestAnimationFrame(() => {
+        this.positionItemTooltip(e.clientX, e.clientY);
+      });
+    });
+    slot.addEventListener("mousemove", (e: MouseEvent) => {
+      if (this.tooltipActiveSlot !== slotIndex) {
+        return;
+      }
+      if (!this.itemTooltipEl.classList.contains("inv-item-tooltip--visible")) {
+        return;
+      }
+      this.positionItemTooltip(e.clientX, e.clientY);
+    });
+    slot.addEventListener("mouseleave", () => {
+      if (this.tooltipActiveSlot === slotIndex) {
+        this.hideItemTooltip();
+      }
+    });
+  }
+
   private flushDeferredLmbIfSwitching(newSlot: number): void {
     if (this.lmbDeferredSlot === null) {
       return;
@@ -94,6 +225,7 @@ export class InventoryUI {
   };
 
   constructor(mount: HTMLElement, itemRegistry: ItemRegistry, getInventory: GetInventory) {
+    ensureInventoryFonts();
     this.itemRegistry = itemRegistry;
     this.getInventory = getInventory;
 
@@ -102,9 +234,27 @@ export class InventoryUI {
     mount.appendChild(root);
     this.root = root;
 
+    const tooltip = document.createElement("div");
+    tooltip.className = "inv-item-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    root.appendChild(tooltip);
+    this.itemTooltipEl = tooltip;
+
+    const hotbarStack = document.createElement("div");
+    hotbarStack.className = "inv-hotbar-stack";
+    hotbarStack.style.pointerEvents = "none";
+
+    const hotbarName = document.createElement("div");
+    hotbarName.className = "inv-hotbar-item-name";
+    hotbarName.setAttribute("aria-live", "polite");
+    hotbarName.setAttribute("aria-atomic", "true");
+    this.hotbarItemNameEl = hotbarName;
+
     const hotbarWrap = document.createElement("div");
     hotbarWrap.className = "inv-hotbar-wrap";
-    hotbarWrap.style.pointerEvents = "none";
+
+    const hotbarRow = document.createElement("div");
+    hotbarRow.className = "inv-hotbar-slots";
     for (let i = 0; i < HOTBAR_SIZE; i++) {
       const slot = document.createElement("div");
       slot.className = "inv-slot";
@@ -115,13 +265,17 @@ export class InventoryUI {
       count.className = "inv-slot-count";
       slot.appendChild(icon);
       slot.appendChild(count);
-      hotbarWrap.appendChild(slot);
+      hotbarRow.appendChild(slot);
       this.hotbarSlots.push(slot);
       this.hotbarIcons.push(icon);
       this.hotbarCounts.push(count);
       this.bindSlotElement(slot, i);
+      this.bindSlotTooltip(slot, i);
     }
-    root.appendChild(hotbarWrap);
+    hotbarWrap.appendChild(hotbarRow);
+    hotbarStack.appendChild(hotbarName);
+    hotbarStack.appendChild(hotbarWrap);
+    root.appendChild(hotbarStack);
 
     const overlay = document.createElement("div");
     overlay.className = "inv-overlay";
@@ -148,6 +302,7 @@ export class InventoryUI {
       this.overlayIcons.push(icon);
       this.overlayCounts.push(count);
       this.bindSlotElement(slot, slotIndex);
+      this.bindSlotTooltip(slot, slotIndex);
     }
 
     const sep = document.createElement("div");
@@ -166,6 +321,7 @@ export class InventoryUI {
       this.overlayIcons.push(icon);
       this.overlayCounts.push(count);
       this.bindSlotElement(slot, i);
+      this.bindSlotTooltip(slot, i);
     }
 
     panel.appendChild(title);
@@ -297,6 +453,9 @@ export class InventoryUI {
 
   setOpen(open: boolean): void {
     this.inventoryOpen = open;
+    if (!open) {
+      this.hideItemTooltip();
+    }
     if (open) {
       this.overlay.classList.add("inv-overlay--open");
       this.overlay.setAttribute("aria-hidden", "false");
@@ -315,6 +474,29 @@ export class InventoryUI {
     const layout = this.layout;
     const displayPx = 32;
     const sel = Math.min(selectedHotbarSlot, HOTBAR_SIZE - 1);
+
+    const selStack = inventory.getStack(sel);
+    const selKey =
+      selStack !== null && selStack.count > 0
+        ? `${sel}:${selStack.itemId}`
+        : `${sel}:empty`;
+    if (
+      sel !== this.prevHotbarSlotForLabel ||
+      selKey !== this.prevHotbarSelectionKey
+    ) {
+      this.prevHotbarSlotForLabel = sel;
+      this.prevHotbarSelectionKey = selKey;
+      if (selStack !== null && selStack.count > 0) {
+        const def = this.itemRegistry.getById(selStack.itemId);
+        if (def !== undefined) {
+          this.showHotbarItemName(def.displayName);
+        } else {
+          this.hideHotbarItemNameImmediate();
+        }
+      } else {
+        this.hideHotbarItemNameImmediate();
+      }
+    }
 
     for (let i = 0; i < HOTBAR_SIZE; i++) {
       this.fillSlot(
@@ -362,6 +544,8 @@ export class InventoryUI {
     if (stack === null || stack.count <= 0) {
       iconEl.style.cssText = "";
       iconEl.removeAttribute("title");
+      slotEl.removeAttribute("title");
+      slotEl.removeAttribute("aria-label");
       countEl.textContent = "";
       return;
     }
@@ -369,13 +553,18 @@ export class InventoryUI {
     const def = this.itemRegistry.getById(stack.itemId);
     if (def === undefined || layout === null) {
       iconEl.style.cssText = "";
+      iconEl.removeAttribute("title");
+      slotEl.removeAttribute("title");
+      slotEl.removeAttribute("aria-label");
       countEl.textContent = stack.count > 1 ? String(stack.count) : "";
       return;
     }
 
     const style = getItemIconStyle(def.textureName, layout, displayPx);
     iconEl.style.cssText = style;
-    iconEl.title = def.displayName;
+    iconEl.removeAttribute("title");
+    slotEl.removeAttribute("title");
+    slotEl.setAttribute("aria-label", def.displayName);
 
     if (stack.count > 1) {
       countEl.textContent = String(stack.count);
@@ -387,6 +576,8 @@ export class InventoryUI {
   }
 
   destroy(): void {
+    this.hideItemTooltip();
+    this.clearHotbarNameTimers();
     window.removeEventListener("mouseup", this.onWindowMouseUp, true);
     if (this.lmbClickTimer !== null) {
       clearTimeout(this.lmbClickTimer);

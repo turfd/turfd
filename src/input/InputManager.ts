@@ -19,6 +19,9 @@ export class InputManager {
   /** When true (e.g. inventory overlay open), block world break/place input. */
   private worldInputBlocked = false;
 
+  /** When true (chat input focused), block game actions; {@link InputAction.pause} still passes for Escape. */
+  private chatOpen = false;
+
   private readonly canvas: HTMLCanvasElement;
   private readonly downCodes = new Set<string>();
   private readonly justPressed = new Set<InputAction>();
@@ -89,12 +92,18 @@ export class InputManager {
     this.worldInputBlocked = blocked;
   }
 
+  /** Suspend movement, hotbar, inventory, etc. while chat is open; Escape still registers as pause. */
+  setChatOpen(open: boolean): void {
+    this.chatOpen = open;
+  }
+
   isWorldInputBlocked(): boolean {
     return this.worldInputBlocked;
   }
 
   destroy(): void {
     this.worldInputBlocked = false;
+    this.chatOpen = false;
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("mousemove", this.onMouseMove);
@@ -106,10 +115,14 @@ export class InputManager {
   }
 
   isDown(action: InputAction): boolean {
+    if (this.chatOpen && action !== "pause") {
+      return false;
+    }
     if (
       this.worldInputBlocked &&
       action !== "inventory" &&
-      action !== "pause"
+      action !== "pause" &&
+      action !== "chat"
     ) {
       return false;
     }
@@ -132,10 +145,14 @@ export class InputManager {
   }
 
   isJustPressed(action: InputAction): boolean {
+    if (this.chatOpen && action !== "pause") {
+      return false;
+    }
     if (
       this.worldInputBlocked &&
       action !== "inventory" &&
-      action !== "pause"
+      action !== "pause" &&
+      action !== "chat"
     ) {
       return false;
     }

@@ -27,3 +27,62 @@ body {
 #app.turfd-game-loading > *:not(.turfd-loading-overlay) {
   visibility: hidden !important;
 }
+
+/* Multiplayer / session-ended overlay (UIShell) — fade + slide, matches pause/inventory */
+.turfd-session-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1rem, 4vw, 2rem);
+  box-sizing: border-box;
+  font-family: "BoldPixels", "Courier New", monospace;
+  -webkit-font-smoothing: none;
+  color: #f2f2f7;
+  background: rgba(24, 24, 26, 0.78);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.24s ease,
+    visibility 0.24s ease;
+}
+
+.turfd-session-overlay.turfd-session-overlay--open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.turfd-session-card {
+  width: min(26rem, 100%);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(44, 44, 46, 0.96);
+  padding: clamp(1.25rem, 3vw, 1.5rem);
+  box-sizing: border-box;
+  text-align: center;
+  transform: translateY(14px);
+  opacity: 0;
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.26s ease;
+}
+
+.turfd-session-overlay.turfd-session-overlay--open .turfd-session-card {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turfd-session-overlay,
+  .turfd-session-card {
+    transition: none;
+  }
+
+  .turfd-session-overlay.turfd-session-overlay--open .turfd-session-card {
+    transform: none;
+  }
+}

@@ -57,7 +57,7 @@ function injectPauseStyles(base: string): void {
       position: fixed;
       inset: 0;
       z-index: 1150;
-      display: none;
+      display: flex;
       align-items: center;
       justify-content: center;
       padding: clamp(1rem, 4vw, 2rem);
@@ -68,9 +68,17 @@ function injectPauseStyles(base: string): void {
       -moz-osx-font-smoothing: unset;
       text-rendering: optimizeSpeed;
       color: #f2f2f7;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition:
+        opacity 0.24s ease,
+        visibility 0.24s ease;
     }
     .pm-overlay.pm-overlay--open {
-      display: flex;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
     }
 
     .pm-card {
@@ -83,6 +91,15 @@ function injectPauseStyles(base: string): void {
       background: rgba(44, 44, 46, 0.92);
       padding: clamp(1.25rem, 3vw, 1.6rem) clamp(1.35rem, 3.5vw, 1.75rem);
       box-sizing: border-box;
+      transform: translateY(16px);
+      opacity: 0;
+      transition:
+        transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 0.26s ease;
+    }
+    .pm-overlay.pm-overlay--open .pm-card {
+      transform: translateY(0);
+      opacity: 1;
     }
 
     .pm-brand {
@@ -206,6 +223,16 @@ function injectPauseStyles(base: string): void {
       line-height: 1.45;
       color: #8e8e93;
       text-align: center;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .pm-overlay,
+      .pm-card {
+        transition: none;
+      }
+      .pm-overlay.pm-overlay--open .pm-card {
+        transform: none;
+      }
     }
   `;
   document.head.appendChild(style);

@@ -5,6 +5,7 @@ import type { EventBus } from "../core/EventBus";
 import type { GameEvent } from "../core/types";
 import type { Player } from "../entities/Player";
 import type { World } from "../world/World";
+import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 import type { WorldMetadata } from "./IndexedDBStore";
 import { IndexedDBStore } from "./IndexedDBStore";
 
@@ -18,6 +19,10 @@ export class SaveGame {
   private readonly getWorldTimeMs: () => number;
   /** Returns a small JPEG data URL for the world list, or null if capture fails. */
   private readonly capturePreview: (() => string | null) | null;
+  /** When set (host / solo), merged into world metadata on save. */
+  private readonly getModerationForSave:
+    | (() => WorldModerationPersisted | undefined)
+    | null;
   private autoSaveId: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -29,6 +34,7 @@ export class SaveGame {
     bus: EventBus,
     getWorldTimeMs: () => number,
     capturePreview?: () => string | null,
+    getModerationForSave?: () => WorldModerationPersisted | undefined,
   ) {
     this.store = store;
     this.world = world;
@@ -38,6 +44,7 @@ export class SaveGame {
     this.bus = bus;
     this.getWorldTimeMs = getWorldTimeMs;
     this.capturePreview = capturePreview ?? null;
+    this.getModerationForSave = getModerationForSave ?? null;
   }
 
   async init(): Promise<void> {
@@ -55,6 +62,7 @@ export class SaveGame {
     if (shot !== null && shot.length > 0) {
       previewImageDataUrl = shot;
     }
+    const moderationPatch = this.getModerationForSave?.();
     const meta: WorldMetadata = {
       uuid: this.worldUuid,
       name: existing?.name ?? this.worldName,
@@ -67,6 +75,7 @@ export class SaveGame {
       modList: this.world.getRegistry().getModList(),
       worldTimeMs: this.getWorldTimeMs(),
       previewImageDataUrl,
+      moderation: moderationPatch ?? existing?.moderation,
     };
     await this.store.saveWorld(meta);
     this.bus.emit({ type: "game:saved" } satisfies GameEvent);

@@ -21,6 +21,8 @@ export enum MessageType {
   WORLD_TIME = 0x09,
   /** Host ended the session; client should show `reason` and return to menu. */
   SESSION_ENDED = 0x0a,
+  /** Host-only line; gray/system styling on clients. */
+  SYSTEM_MESSAGE = 0x0b,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -30,6 +32,8 @@ export interface HandshakeMessage {
   type: MessageType.HANDSHAKE;
   version: number;
   peerId: string;
+  displayName: string;
+  accountId: string;
 }
 
 export type ChunkDataMsg = {
@@ -92,7 +96,12 @@ export type EntityDespawnMsg = {
 
 export type ChatMsg = {
   type: MessageType.CHAT;
-  playerId: number;
+  fromPeerId: string;
+  text: string;
+};
+
+export type SystemMessageMsg = {
+  type: MessageType.SYSTEM_MESSAGE;
   text: string;
 };
 
@@ -109,6 +118,7 @@ export type NetworkMessage =
   | EntitySpawnMsg
   | EntityDespawnMsg
   | ChatMsg
+  | SystemMessageMsg
   | PingMsg
   | WorldSyncMsg
   | WorldTimeMsg
@@ -117,6 +127,10 @@ export type NetworkMessage =
 const LE = true;
 const textEnc = new TextEncoder();
 const textDec = new TextDecoder();
+
+/** Max UTF-8 bytes for CHAT sender peer id and message body. */
+const CHAT_PEER_ID_MAX = 512;
+const CHAT_TEXT_MAX = 1024;
 
 /** Wire size of a `PLAYER_STATE` packet (type byte + payload). */
 export const PLAYER_STATE_WIRE_BYTE_LENGTH = 36;
@@ -146,6 +160,8 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       return BinarySerializer.serializeHandshake({
         version: msg.version,
         peerId: msg.peerId,
+        displayName: msg.displayName,
+        accountId: msg.accountId,
       });
 
     case MessageType.CHUNK_DATA: {
@@ -198,13 +214,34 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
     }
 
     case MessageType.CHAT: {
-      const encoded = textEnc.encode(msg.text);
-      const buf = new ArrayBuffer(5 + encoded.byteLength);
+      let peerB = textEnc.encode(msg.fromPeerId);
+      if (peerB.length > CHAT_PEER_ID_MAX) {
+        peerB = peerB.slice(0, CHAT_PEER_ID_MAX);
+      }
+      let textB = textEnc.encode(msg.text);
+      if (textB.length > CHAT_TEXT_MAX) {
+        textB = textB.slice(0, CHAT_TEXT_MAX);
+      }
+      const buf = new ArrayBuffer(1 + 2 + peerB.length + 2 + textB.length);
       const v = new DataView(buf);
       v.setUint8(0, MessageType.CHAT);
-      v.setUint16(1, msg.playerId, LE);
-      v.setUint16(3, encoded.byteLength, LE);
-      new Uint8Array(buf).set(encoded, 5);
+      v.setUint16(1, peerB.length, LE);
+      new Uint8Array(buf, 3, peerB.length).set(peerB);
+      v.setUint16(3 + peerB.length, textB.length, LE);
+      new Uint8Array(buf, 5 + peerB.length, textB.length).set(textB);
+      return buf;
+    }
+
+    case MessageType.SYSTEM_MESSAGE: {
+      let enc = textEnc.encode(msg.text);
+      if (enc.byteLength > 65_000) {
+        throw new Error("SYSTEM_MESSAGE: text too long");
+      }
+      const buf = new ArrayBuffer(3 + enc.byteLength);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.SYSTEM_MESSAGE);
+      v.setUint16(1, enc.byteLength, LE);
+      new Uint8Array(buf, 3).set(enc);
       return buf;
     }
 
@@ -254,6 +291,8 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         type: MessageType.HANDSHAKE,
         version: p.version,
         peerId: p.peerId,
+        displayName: p.displayName,
+        accountId: p.accountId,
       };
     }
 
@@ -310,11 +349,39 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       };
 
     case MessageType.CHAT: {
-      const textLen = v.getUint16(3, LE);
+      if (v.byteLength < 5) {
+        throw new Error("CHAT: buffer too short");
+      }
+      const peerLen = v.getUint16(1, LE);
+      if (peerLen > CHAT_PEER_ID_MAX || v.byteLength < 3 + peerLen + 2) {
+        throw new Error("CHAT: invalid peer length");
+      }
+      const fromPeerId = textDec.decode(new Uint8Array(buf, 3, peerLen));
+      const textLen = v.getUint16(3 + peerLen, LE);
+      if (textLen > CHAT_TEXT_MAX || v.byteLength < 5 + peerLen + textLen) {
+        throw new Error("CHAT: invalid text length");
+      }
+      const text = textDec.decode(
+        new Uint8Array(buf, 5 + peerLen, textLen),
+      );
       return {
         type: MessageType.CHAT,
-        playerId: v.getUint16(1, LE),
-        text: textDec.decode(new Uint8Array(buf, 5, textLen)),
+        fromPeerId,
+        text,
+      };
+    }
+
+    case MessageType.SYSTEM_MESSAGE: {
+      if (v.byteLength < 3) {
+        throw new Error("SYSTEM_MESSAGE: buffer too short");
+      }
+      const slen = v.getUint16(1, LE);
+      if (v.byteLength < 3 + slen) {
+        throw new Error("SYSTEM_MESSAGE: truncated");
+      }
+      return {
+        type: MessageType.SYSTEM_MESSAGE,
+        text: textDec.decode(new Uint8Array(buf, 3, slen)),
       };
     }
 
