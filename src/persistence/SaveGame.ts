@@ -76,6 +76,7 @@ export class SaveGame {
       worldTimeMs: this.getWorldTimeMs(),
       previewImageDataUrl,
       moderation: moderationPatch ?? existing?.moderation,
+      playerInventory: this.player.inventory.serialize(),
     };
     await this.store.saveWorld(meta);
     this.bus.emit({ type: "game:saved" } satisfies GameEvent);

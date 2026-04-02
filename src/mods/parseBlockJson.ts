@@ -19,9 +19,14 @@ const stratumBlockComponentsSchema = z
     "stratum:display_name": z.string(),
     "stratum:texture": z.object({ all: z.string() }).strict(),
     "stratum:solid": z.boolean(),
+    /** When set, overrides physics collision; defaults to `stratum:solid`. */
+    "stratum:collision": z.boolean().optional(),
     "stratum:transparent": z.boolean(),
     "stratum:water": z.boolean(),
     "stratum:hardness": z.number(),
+    "stratum:harvest_tool": z.enum(["axe", "pickaxe", "shovel"]).optional(),
+    "stratum:requires_tool_for_drops": z.boolean().optional(),
+    "stratum:min_tool_tier": z.number().int().min(0).optional(),
     "stratum:light_emission": z.number().int().min(0).max(15),
     "stratum:light_absorption": z.number().int().min(0).max(15),
     "stratum:loot_table": z.string().optional(),
@@ -30,6 +35,7 @@ const stratumBlockComponentsSchema = z
     "stratum:replaceable": z.boolean().optional(),
     "stratum:tall_grass": z.enum(["none", "bottom", "top"]).optional(),
     "stratum:plant_foot_offset_px": z.number().int().min(0).max(15).optional(),
+    "stratum:tags": z.array(z.string()).optional(),
   })
   .strict();
 
@@ -60,9 +66,13 @@ export function parseBlockJson(raw: unknown): BlockDefinitionBase {
     textureName: c["stratum:texture"].all,
     randomFlipX: c["stratum:random_flip_x"],
     solid: c["stratum:solid"],
+    collides: c["stratum:collision"] ?? c["stratum:solid"],
     transparent: c["stratum:transparent"],
     water: c["stratum:water"],
     hardness: c["stratum:hardness"],
+    harvestToolType: c["stratum:harvest_tool"],
+    requiresToolForDrops: c["stratum:requires_tool_for_drops"] ?? false,
+    minToolTier: c["stratum:min_tool_tier"] ?? 0,
     lightEmission: c["stratum:light_emission"],
     lightAbsorption: c["stratum:light_absorption"],
     drops: loot !== undefined ? [loot] : [],
@@ -71,5 +81,6 @@ export function parseBlockJson(raw: unknown): BlockDefinitionBase {
     replaceable: c["stratum:replaceable"] ?? false,
     tallGrass: c["stratum:tall_grass"] ?? "none",
     plantFootOffsetPx: c["stratum:plant_foot_offset_px"],
+    tags: c["stratum:tags"],
   };
 }

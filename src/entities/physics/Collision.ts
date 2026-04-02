@@ -1,7 +1,7 @@
 /**
- * Solid block AABBs in screen space for collision queries.
+ * Collidable block AABBs in screen space ({@link BlockDefinitionBase.collides}).
  */
-import { BLOCK_SIZE } from "../../core/constants";
+import { BLOCK_SIZE, WORLDGEN_NO_COLLIDE } from "../../core/constants";
 import type { World } from "../../world/World";
 import { createAABB, type AABB } from "./AABB";
 
@@ -23,7 +23,10 @@ export function getSolidAABBs(
   for (let wx = wx0; wx <= wx1; wx++) {
     for (let wy = wy0; wy <= wy1; wy++) {
       const def = world.getBlock(wx, wy);
-      if (!def.solid) {
+      if (!def.collides) {
+        continue;
+      }
+      if (world.getMetadata(wx, wy) & WORLDGEN_NO_COLLIDE) {
         continue;
       }
       out.push(

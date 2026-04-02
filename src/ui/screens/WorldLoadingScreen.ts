@@ -136,7 +136,7 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-kicker {
       margin: 0.65rem 0 0;
       font-family: 'M5x7', monospace;
-      font-size: 14px;
+      font-size: 17px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--tl-ink-soft);
@@ -145,7 +145,7 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-title {
       margin: 0 0 1rem;
       font-family: 'BoldPixels', monospace;
-      font-size: 19px;
+      font-size: 24px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--tl-ink);
@@ -154,7 +154,7 @@ function injectLoadingStyles(base: string): void {
 
     .stratum-loading-stage {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: 18px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--tl-ink-mid);
@@ -166,7 +166,7 @@ function injectLoadingStyles(base: string): void {
       min-height: 1.35em;
       margin-top: 0.5rem;
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: 19px;
       line-height: 1.45;
       color: var(--tl-ink-soft);
       text-align: center;
@@ -198,7 +198,7 @@ function injectLoadingStyles(base: string): void {
       min-height: 1.35em;
       text-align: right;
       font-family: 'M5x7', monospace;
-      font-size: 14px;
+      font-size: 17px;
       color: var(--tl-ink-soft);
     }
 
@@ -218,7 +218,7 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-tip-label {
       margin: 0 0 0.35rem;
       font-family: 'BoldPixels', monospace;
-      font-size: 11px;
+      font-size: 14px;
       text-transform: uppercase;
       letter-spacing: 0.12em;
       color: var(--tl-ink-soft);
@@ -228,7 +228,7 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-tip {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: 15px;
+      font-size: 18px;
       line-height: 1.5;
       color: var(--tl-ink-mid);
       text-align: center;

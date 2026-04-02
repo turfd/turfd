@@ -49,7 +49,6 @@ const SKY_WHITE = 0xffffff;
 const BG_PARALLAX_X = 0.15;
 const BG_PARALLAX_Y = 0.48;
 const BG_HEIGHT_FRAC = 0.8;
-const BG_VERTICAL_OFFSET_FRAC = 0.03;
 const BG_BASE_DARKNESS = 0.28;
 const BG_NIGHT_DARKNESS_EXTRA = 0.36;
 /**
@@ -351,11 +350,13 @@ export class RenderPipeline implements RenderPipelineLayers {
     const startTile = Math.floor(offsetX / drawW) - 1;
     const endTile = Math.floor((offsetX + cw) / drawW) + 1;
     const prevSmoothing = ctx.imageSmoothingEnabled;
-    // Y follows world renderer transform so backdrop is world-anchored vertically.
-    const yOffset = Math.round(ch * BG_VERTICAL_OFFSET_FRAC + worldRootY * BG_PARALLAX_Y);
-    // Convert renderer transform back to world-space center Y for underground fade.
     const zoomY = this.camera.worldRoot.scale.y;
     const worldCenterY = zoomY !== 0 ? (ch * 0.5 - worldRootY) / zoomY : 0;
+    // Backdrop is centred at world y=0; follows the player underground but locks in place above.
+    const clampedCenterY = Math.max(0, worldCenterY);
+    const yOffset = Math.round(
+      (ch - drawH) * 0.5 - clampedCenterY * zoomY * BG_PARALLAX_Y,
+    );
     const undergroundDepth = Math.max(0, worldCenterY - BG_UNDERGROUND_FADE_START);
     const undergroundFade = clamp01(undergroundDepth / BG_UNDERGROUND_FADE_RANGE);
     const bgAlpha = 1 - undergroundFade;

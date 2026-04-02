@@ -21,6 +21,21 @@ function shouldFlipTextureX(wx: number, wy: number, blockId: number): boolean {
   return (h & 1) !== 0;
 }
 
+/** Deterministic variant index (different primes from flip so the two are independent). */
+function pickTextureVariant(
+  wx: number,
+  wy: number,
+  blockId: number,
+  variantCount: number,
+): number {
+  if (variantCount <= 1) return 0;
+  let h = wx * 2654435761 + wy * 2246822519 + blockId * 3266489917;
+  h ^= h >>> 15;
+  h = Math.imul(h, 2246822519);
+  h ^= h >>> 13;
+  return (h >>> 0) % variantCount;
+}
+
 function buildGeometryFromCells(
   chunk: Chunk,
   cells: Uint16Array,
@@ -61,7 +76,15 @@ function buildGeometryFromCells(
       }
 
       const def = registry.getById(id);
-      const tex = atlas.getTexture(def.textureName);
+      const worldX = chunkOrigin.wx + lx;
+      const worldY = chunkOrigin.wy + ly;
+
+      const variants = atlas.getTextureVariants(def.textureName);
+      const tex =
+        variants.length > 1
+          ? variants[pickTextureVariant(worldX, worldY, id, variants.length)]!
+          : variants[0]!;
+
       const fr = tex.frame;
       const sw = tex.source.width;
       const sh = tex.source.height;
@@ -69,8 +92,6 @@ function buildGeometryFromCells(
       const v0 = fr.y / sh;
       const u1 = (fr.x + fr.width) / sw;
       const v1 = (fr.y + fr.height) / sh;
-      const worldX = chunkOrigin.wx + lx;
-      const worldY = chunkOrigin.wy + ly;
       const flipX =
         def.randomFlipX === true && shouldFlipTextureX(worldX, worldY, id);
       const leftU = flipX ? u1 : u0;

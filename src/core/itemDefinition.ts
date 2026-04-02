@@ -13,11 +13,13 @@ export interface ItemDefinition {
   readonly key: string;
 
   /**
-   * Atlas texture name used to render this item everywhere
-   * (inventory, hotbar, dropped entity).
-   * For block-items this is the block's own atlas tile name.
+   * Texture lookup key: block items use the block `textureName`; mod items set `stratum:texture_key`
+   * or default to the id after `:`. Paths resolve from `item_texture_manifest.json` then `block_texture_manifest.json`.
    */
   readonly textureName: string;
+
+  /** @deprecated All textures use the unified manifest; this field is ignored. */
+  readonly iconSheet?: "items";
 
   /** Display name shown in UI. */
   readonly displayName: string;
@@ -33,6 +35,15 @@ export interface ItemDefinition {
    * Undefined for items that are not placeable blocks.
    */
   readonly placesBlockId?: number;
+
+  /** Tool category (axe, pickaxe, shovel). Undefined for non-tool items. */
+  readonly toolType?: "axe" | "pickaxe" | "shovel";
+  /** Tool tier: 0=wood, 1=stone, 2=iron, 3=diamond. */
+  readonly toolTier?: number;
+  /** Mining speed multiplier when this tool matches the block's harvest tool type. */
+  readonly toolSpeed?: number;
+  /** Crafting tags this item belongs to (e.g. `"stratum:logs"`). */
+  readonly tags?: readonly string[];
 }
 
 /** A counted quantity of one item type. */

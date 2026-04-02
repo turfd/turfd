@@ -44,7 +44,7 @@ export class UIShell {
     msg.style.cssText = [
       "margin:0 0 1.15rem",
       "font-family:'M5x7',monospace",
-      "font-size:17px",
+      "font-size:20px",
       "line-height:1.5",
       "color:#f2f2f7",
     ].join(";");
@@ -55,7 +55,7 @@ export class UIShell {
     backBtn.style.cssText = [
       "padding:11px 18px",
       "font-family:'BoldPixels',monospace",
-      "font-size:14px",
+      "font-size:17px",
       "text-transform:uppercase",
       "letter-spacing:0.06em",
       "cursor:pointer",

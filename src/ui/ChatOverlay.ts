@@ -142,7 +142,7 @@ function injectChatChromeStyles(): void {
       padding: 10px 12px;
       border-radius: 10px;
       font-family: system-ui, "Segoe UI", sans-serif;
-      font-size: 12px;
+      font-size: 16px;
       line-height: 1.45;
       color: #f2f2f7;
       background: rgba(22,22,24,0.94);
@@ -272,7 +272,7 @@ export class ChatOverlay {
       "backdrop-filter:blur(8px)",
       "-webkit-backdrop-filter:blur(8px)",
       "font-family:'M5x7',monospace",
-      "font-size:20px",
+      "font-size:22px",
       "line-height:1.38",
       "color:#f2f2f7",
       "text-shadow:0 1px 3px rgba(0,0,0,0.55)",
@@ -290,7 +290,7 @@ export class ChatOverlay {
       "margin-bottom:6px",
       "padding:0 4px",
       "font-family:'M5x7',monospace",
-      "font-size:15px",
+      "font-size:18px",
       "color:#aeaeb2",
       "text-shadow:0 1px 2px rgba(0,0,0,0.5)",
       "display:none",

@@ -1,0 +1,13 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": { "identifier": "stratum:wooden_axe" },
+    "components": {
+      "stratum:display_name": "Wooden Axe",
+      "stratum:max_stack": 1,
+      "stratum:tool_type": "axe",
+      "stratum:tool_tier": 0,
+      "stratum:tool_speed": 2
+    }
+  }
+}

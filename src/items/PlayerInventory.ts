@@ -24,6 +24,10 @@ export class PlayerInventory {
     if (this._cursorStack === null) {
       return null;
     }
+    if (this._cursorStack.count <= 0) {
+      this.normalizeCursor();
+      return null;
+    }
     return { itemId: this._cursorStack.itemId, count: this._cursorStack.count };
   }
 
@@ -62,12 +66,51 @@ export class PlayerInventory {
    */
   add(itemId: ItemId, count: number): number {
     if (count <= 0) return 0;
+    return PlayerInventory.addOntoSlotArray(
+      this._slots,
+      (id) => this.maxStackFor(id),
+      itemId,
+      count,
+    );
+  }
 
-    const maxStack = this.maxStackFor(itemId);
+  /**
+   * Same merge / empty-slot order as {@link add}, without mutating this inventory.
+   * @returns Count that would not fit (overflow).
+   */
+  simulateAddOverflow(itemId: ItemId, count: number): number {
+    if (count <= 0) return 0;
+    const slots: (ItemStack | null)[] = [];
+    for (let i = 0; i < INVENTORY_SIZE; i++) {
+      const s = this._slots[i];
+      if (s === null || s === undefined) {
+        slots.push(null);
+      } else {
+        slots.push({ itemId: s.itemId, count: s.count });
+      }
+    }
+    return PlayerInventory.addOntoSlotArray(
+      slots,
+      (id) => this.maxStackFor(id),
+      itemId,
+      count,
+    );
+  }
+
+  /**
+   * Mutates `slots` in place (same algorithm as {@link add}).
+   */
+  private static addOntoSlotArray(
+    slots: (ItemStack | null)[],
+    maxStackFor: (itemId: ItemId) => number,
+    itemId: ItemId,
+    count: number,
+  ): number {
+    const maxStack = maxStackFor(itemId);
     let remaining = count;
 
     for (let i = 0; i < INVENTORY_SIZE && remaining > 0; i++) {
-      const slot = this._slots[i];
+      const slot = slots[i];
       if (slot !== null && slot !== undefined && slot.itemId === itemId && slot.count < maxStack) {
         const space = maxStack - slot.count;
         const toAdd = Math.min(remaining, space);
@@ -77,9 +120,9 @@ export class PlayerInventory {
     }
 
     for (let i = 0; i < INVENTORY_SIZE && remaining > 0; i++) {
-      if (this._slots[i] === null || this._slots[i] === undefined) {
+      if (slots[i] === null || slots[i] === undefined) {
         const toAdd = Math.min(remaining, maxStack);
-        this._slots[i] = { itemId, count: toAdd };
+        slots[i] = { itemId, count: toAdd };
         remaining -= toAdd;
       }
     }
@@ -351,6 +394,48 @@ export class PlayerInventory {
       if (from.count <= 0) {
         this._slots[fromSlot] = null;
       }
+    }
+  }
+
+  /**
+   * Snapshot every slot as `{ key, count }` using stable string keys.
+   * Null slots are preserved so slot positions round-trip exactly.
+   */
+  serialize(): ({ key: string; count: number } | null)[] {
+    const out: ({ key: string; count: number } | null)[] = [];
+    for (let i = 0; i < INVENTORY_SIZE; i++) {
+      const s = this._slots[i];
+      if (s === null || s === undefined || s.count <= 0) {
+        out.push(null);
+      } else {
+        const def = this._registry.getById(s.itemId);
+        if (def === undefined) {
+          out.push(null);
+        } else {
+          out.push({ key: def.key, count: s.count });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Restore slots from data produced by {@link serialize}.
+   * Unknown keys (e.g. removed mods) are silently skipped.
+   */
+  restore(data: ({ key: string; count: number } | null)[]): void {
+    for (let i = 0; i < INVENTORY_SIZE; i++) {
+      const entry = i < data.length ? data[i] : null;
+      if (entry === null || entry === undefined) {
+        this._slots[i] = null;
+        continue;
+      }
+      const def = this._registry.getByKey(entry.key);
+      if (def === undefined) {
+        this._slots[i] = null;
+        continue;
+      }
+      this._slots[i] = { itemId: def.id, count: entry.count };
     }
   }
 

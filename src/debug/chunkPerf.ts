@@ -6,14 +6,11 @@ export function chunkPerfLog(
   ms: number,
   detail?: Record<string, unknown>,
 ): void {
-  if (!DEV) {
-    return;
-  }
-  if (detail === undefined) {
-    console.debug(`[chunk-perf] ${label}: ${ms.toFixed(1)}ms`);
-  } else {
-    console.debug(`[chunk-perf] ${label}: ${ms.toFixed(1)}ms`, detail);
-  }
+  // Keep call sites intact while disabling noisy perf console output.
+  void label;
+  void ms;
+  void detail;
+  void DEV;
 }
 
 export function chunkPerfNow(): number {

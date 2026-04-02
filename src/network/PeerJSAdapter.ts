@@ -255,10 +255,25 @@ export class PeerJSAdapter implements INetworkAdapter {
   }
 
   broadcast(msg: NetworkMessage): void {
+    this.broadcastExcept(null, msg);
+  }
+
+  broadcastExcept(excludePeerId: PeerId | null, msg: NetworkMessage): void {
     if (this._state.status !== "connected") {
       return;
     }
-    let buf: ArrayBuffer;
+    const buf = this._encodeWireBuffer(msg);
+    for (const [peerId, conn] of this._connections) {
+      if (excludePeerId !== null && peerId === excludePeerId) {
+        continue;
+      }
+      if (conn.open) {
+        conn.send(buf);
+      }
+    }
+  }
+
+  private _encodeWireBuffer(msg: NetworkMessage): ArrayBuffer {
     if (msg.type === MessageType.PLAYER_STATE) {
       if (this._playerStateScratch === null) {
         this._playerStateScratch = new ArrayBuffer(PLAYER_STATE_WIRE_BYTE_LENGTH);
@@ -272,15 +287,9 @@ export class PeerJSAdapter implements INetworkAdapter {
         msg.vy,
         msg.facingRight,
       );
-      buf = this._playerStateScratch;
-    } else {
-      buf = encode(msg);
+      return this._playerStateScratch;
     }
-    for (const conn of this._connections.values()) {
-      if (conn.open) {
-        conn.send(buf);
-      }
-    }
+    return encode(msg);
   }
 
   onMessage(handler: (from: PeerId, msg: NetworkMessage) => void): void {

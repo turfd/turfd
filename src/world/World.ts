@@ -27,6 +27,7 @@ import {
 } from "./chunk/Chunk";
 import { computeBlockLight, computeSkyLight } from "./lighting/LightPropagation";
 import {
+  localIndex,
   worldToChunk,
   worldToLocalBlock,
   type ChunkCoord,
@@ -202,6 +203,23 @@ export class World {
     return true;
   }
 
+  getMetadata(wx: number, wy: number): number {
+    const coord = worldToChunk(wx, wy);
+    const chunk = this.chunks.getChunk(coord);
+    if (chunk === undefined) return 0;
+    const { lx, ly } = worldToLocalBlock(wx, wy);
+    return chunk.metadata[localIndex(lx, ly)]!;
+  }
+
+  setMetadata(wx: number, wy: number, value: number): void {
+    const coord = worldToChunk(wx, wy);
+    const chunk = this.chunks.getChunk(coord);
+    if (chunk === undefined) return;
+    const { lx, ly } = worldToLocalBlock(wx, wy);
+    chunk.metadata[localIndex(lx, ly)] = value;
+    chunk.dirty = true;
+  }
+
   /** True if orthogonal neighbor has solid foreground or non-empty background (for fg placement support). */
   hasForegroundPlacementSupport(wx: number, wy: number): boolean {
     const dirs: [number, number][] = [
@@ -229,7 +247,7 @@ export class World {
     return this.getBlock(worldBlockX, worldBlockY).solid;
   }
 
-  /** Screen-space (Pixi Y down) solid block AABBs overlapping `region` — same contract as {@link getSolidAABBs}. */
+  /** Screen-space (Pixi Y down) collidable block AABBs overlapping `region` — same contract as {@link getSolidAABBs}. */
   querySolidAABBs(region: ScreenAABB, out: ScreenAABB[]): void {
     out.length = 0;
     const worldYBottom = -(region.y + region.height);
@@ -241,7 +259,7 @@ export class World {
     for (let wx = wx0; wx <= wx1; wx++) {
       for (let wy = wy0; wy <= wy1; wy++) {
         const def = this.getBlock(wx, wy);
-        if (!def.solid) {
+        if (!def.collides) {
           continue;
         }
         out.push(
@@ -364,6 +382,7 @@ export class World {
     const chunk = this.chunks.getOrCreateChunk(coord, gen);
     const { lx, ly } = worldToLocalBlock(wx, wy);
     setBlock(chunk, lx, ly, id);
+    chunk.metadata[localIndex(lx, ly)] = 0;
     this.invalidateSkyTopColumn(wx);
     if (this.registry.getById(id).solid) {
       this.nudgeDroppedItemsFromBlock(wx, wy);
@@ -481,6 +500,7 @@ export class World {
     const chunk = this.chunks.getOrCreateChunk(coord, gen);
     const { lx, ly } = worldToLocalBlock(wx, wy);
     setBlock(chunk, lx, ly, id);
+    chunk.metadata[localIndex(lx, ly)] = 0;
     this.invalidateSkyTopColumn(wx);
     if (this.registry.getById(id).solid) {
       this.nudgeDroppedItemsFromBlock(wx, wy);
@@ -531,11 +551,26 @@ export class World {
     }
   }
 
-  async init(progressCallback?: WorldLoadProgressCallback): Promise<void> {
+  async init(
+    progressCallback?: WorldLoadProgressCallback,
+    initialCentreBlockX?: number,
+    initialCentreBlockY?: number,
+  ): Promise<void> {
     await this.store.openDB();
-    await this.loadChunksAroundCentre(0, 0, progressCallback);
-    this.streamCentreCx = 0;
-    this.streamCentreCy = 0;
+    const { cx, cy } =
+      initialCentreBlockX !== undefined && initialCentreBlockY !== undefined
+        ? worldToChunk(initialCentreBlockX, initialCentreBlockY)
+        : { cx: 0, cy: 0 };
+    await this.loadChunksAroundCentre(cx, cy, progressCallback);
+    this.streamCentreCx = cx;
+    this.streamCentreCy = cy;
+  }
+
+  /** Snap the streaming centre so gameplay streaming starts from the player's actual position. */
+  resetStreamCentre(bx: number, by: number): void {
+    const { cx, cy } = worldToChunk(bx, by);
+    this.streamCentreCx = cx;
+    this.streamCentreCy = cy;
   }
 
   /**

@@ -9,6 +9,8 @@
       "stratum:transparent": false,
       "stratum:water": false,
       "stratum:hardness": 3,
+      "stratum:harvest_tool": "pickaxe",
+      "stratum:requires_tool_for_drops": true,
       "stratum:light_emission": 0,
       "stratum:light_absorption": 15,
       "stratum:material": "stone",

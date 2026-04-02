@@ -19,6 +19,10 @@ grant select, insert, update on public.profiles to authenticated;
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "profiles_select_own" on public.profiles;
+drop policy if exists "profiles_insert_own" on public.profiles;
+drop policy if exists "profiles_update_own" on public.profiles;
+
 create policy "profiles_select_own"
   on public.profiles for select to authenticated
   using (auth.uid() = id);
@@ -110,6 +114,10 @@ create trigger stratum_room_sessions_set_updated_at
 alter table public.stratum_room_sessions enable row level security;
 
 -- No SELECT policy: clients cannot list or read rows via PostgREST.
+
+drop policy if exists "stratum_room_sessions_insert_host" on public.stratum_room_sessions;
+drop policy if exists "stratum_room_sessions_update_host" on public.stratum_room_sessions;
+drop policy if exists "stratum_room_sessions_delete_host" on public.stratum_room_sessions;
 
 create policy "stratum_room_sessions_insert_host"
   on public.stratum_room_sessions for insert to authenticated
@@ -215,6 +223,9 @@ alter table public.stratum_room_comments enable row level security;
 grant select, insert on public.stratum_room_comments to authenticated;
 grant select on public.stratum_room_comments to anon;
 
+drop policy if exists "stratum_room_comments_select_active" on public.stratum_room_comments;
+drop policy if exists "stratum_room_comments_insert_own" on public.stratum_room_comments;
+
 create policy "stratum_room_comments_select_active"
   on public.stratum_room_comments for select
   to anon, authenticated
@@ -257,6 +268,10 @@ alter table public.stratum_room_ratings enable row level security;
 
 grant select, insert, update on public.stratum_room_ratings to authenticated;
 grant select on public.stratum_room_ratings to anon;
+
+drop policy if exists "stratum_room_ratings_select_active" on public.stratum_room_ratings;
+drop policy if exists "stratum_room_ratings_insert_own" on public.stratum_room_ratings;
+drop policy if exists "stratum_room_ratings_update_own" on public.stratum_room_ratings;
 
 create policy "stratum_room_ratings_select_active"
   on public.stratum_room_ratings for select

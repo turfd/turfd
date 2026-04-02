@@ -20,7 +20,8 @@ export class EntityManager {
   private readonly player: Player;
   private readonly airId: number;
   private readonly itemRegistry: ItemRegistry;
-  private readonly atlasLoader: AtlasLoader;
+  /** Packed item atlas (block + item manifest paths); dropped entities use this, not terrain atlas. */
+  private readonly itemTextureAtlas: AtlasLoader;
   private playerGraphic: Graphics | null = null;
   private aimGraphic: Graphics | null = null;
   private aimLineSprite: Sprite | null = null;
@@ -35,14 +36,14 @@ export class EntityManager {
     bus: EventBus,
     audio: AudioEngine,
     itemRegistry: ItemRegistry,
-    atlasLoader: AtlasLoader,
+    itemTextureAtlas: AtlasLoader,
   ) {
     this.world = world;
     this.input = input;
     this.player = new Player(registry, bus, audio, itemRegistry);
     this.airId = registry.getByIdentifier("stratum:air").id;
     this.itemRegistry = itemRegistry;
-    this.atlasLoader = atlasLoader;
+    this.itemTextureAtlas = itemTextureAtlas;
   }
 
   /** Call after {@link RenderPipeline.init} so `layerEntities` is mounted. */
@@ -136,7 +137,7 @@ export class EntityManager {
         }
         let tex: Texture;
         try {
-          tex = this.atlasLoader.getTexture(def.textureName);
+          tex = this.itemTextureAtlas.getTexture(def.textureName);
         } catch {
           continue;
         }

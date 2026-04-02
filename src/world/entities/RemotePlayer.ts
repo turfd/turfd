@@ -33,6 +33,23 @@ export class RemotePlayer {
     this.facingRight = facingRight;
   }
 
+  /** Authoritative sample for host → joiner snapshots and relays. */
+  getNetworkSample(): {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    facingRight: boolean;
+  } {
+    return {
+      x: this.authX,
+      y: this.authY,
+      vx: this.vx,
+      vy: this.vy,
+      facingRight: this.facingRight,
+    };
+  }
+
   setTarget(x: number, y: number, vx: number, vy: number, facingRight: boolean): void {
     const now = performance.now();
     const prevElapsed = Math.min((now - this.recvMs) / 1000, MAX_EXTRAPOLATION_SEC);

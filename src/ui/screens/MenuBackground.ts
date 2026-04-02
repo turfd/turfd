@@ -16,11 +16,13 @@ import {
   SKY_LIGHT_MAX,
 } from "../../core/constants";
 import { parseBlockJson } from "../../mods/parseBlockJson";
+import { STRATUM_CORE_BLOCK_FILES } from "../../mods/stratumCoreManifest";
+import { BLOCK_TEXTURE_MANIFEST_PATH } from "../../core/textureManifest";
 import { AtlasLoader } from "../../renderer/AtlasLoader";
 import { OcclusionTexture } from "../../renderer/lighting/OcclusionTexture";
 import { IndirectLightTexture } from "../../renderer/lighting/IndirectLightTexture";
 import { CompositePass } from "../../renderer/lighting/CompositePass";
-import { buildMesh } from "../../renderer/chunk/TileDrawBatch";
+import { buildMesh, buildBackgroundMesh } from "../../renderer/chunk/TileDrawBatch";
 import { BlockRegistry } from "../../world/blocks/BlockRegistry";
 import { WorldGenerator } from "../../world/gen/WorldGenerator";
 import type { Chunk } from "../../world/chunk/Chunk";
@@ -30,17 +32,6 @@ import type { World } from "../../world/World";
 // Layout / world constants
 // ---------------------------------------------------------------------------
 
-const BLOCK_FILES = [
-  "air.json", "dirt.json", "grass.json", "short_grass.json",
-  "tall_grass_bottom.json", "tall_grass_top.json", "dandelion.json",
-  "poppy.json", "stone.json", "sand.json", "gravel.json", "bedrock.json",
-  "wood-log.json", "leaves.json", "wood-log-back.json", "leaves-back.json",
-  "glass.json", "torch.json", "water.json", "coal_ore.json",
-  "iron_ore.json", "gold_ore.json", "diamond_ore.json",
-  "redstone_ore.json", "lapis_ore.json",
-] as const;
-
-const MENU_SEED   = 31415;
 const CHUNKS_X    = 10;  // 320 blocks wide
 const CY_START    = -3;  // underground
 const CY_END      = 2;   // surface + canopy
@@ -146,27 +137,115 @@ class ChunkMap {
     return chunk.skyLight[ly * CHUNK_SIZE + lx] ?? 0;
   }
 
+  getBlock(wx: number, wy: number): number {
+    const cx = Math.floor(wx / CHUNK_SIZE);
+    const cy = Math.floor(wy / CHUNK_SIZE);
+    const chunk = this.map.get(`${cx},${cy}`);
+    if (!chunk) return this.airId;
+    const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const ly = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    return chunk.blocks[ly * CHUNK_SIZE + lx] ?? this.airId;
+  }
+
+  getLightAbsorption(wx: number, wy: number): number {
+    const id = this.getBlock(wx, wy);
+    return this.registry.getById(id).lightAbsorption;
+  }
+
   getBlockLight(_wx: number, _wy: number): number { return 0; }
 
   asWorld(): World { return this as unknown as World; }
 }
 
 // ---------------------------------------------------------------------------
-// Sky-light propagation
+// Sky-light propagation (BFS matching the real lighting engine)
 // ---------------------------------------------------------------------------
 
-function propagateSkyLight(chunkMap: ChunkMap, registry: BlockRegistry): void {
+function propagateSkyLight(chunkMap: ChunkMap, _registry: BlockRegistry): void {
+  const wxMin = 0;
+  const wyMin = CY_START * CHUNK_SIZE;
+  const wxMax = CHUNKS_X * CHUNK_SIZE;
+  const wyMax = (CY_END + 1) * CHUNK_SIZE;
+  const width  = wxMax - wxMin;
+  const height = wyMax - wyMin;
+
+  const best = new Uint8Array(width * height);
+
+  const maxQueue = width * height * 2;
+  const qx = new Int32Array(maxQueue);
+  const qy = new Int32Array(maxQueue);
+  const ql = new Uint8Array(maxQueue);
+  let head = 0;
+  let tail = 0;
+
+  const tryPush = (wx: number, wy: number, level: number): void => {
+    const px = wx - wxMin;
+    const py = wy - wyMin;
+    if (px < 0 || px >= width || py < 0 || py >= height) return;
+    if (tail >= maxQueue) return;
+    const bi = py * width + px;
+    if (best[bi]! >= level) return;
+    best[bi] = level;
+    qx[tail] = wx;
+    qy[tail] = wy;
+    ql[tail] = level;
+    tail += 1;
+  };
+
+  for (let wx = wxMin; wx < wxMax; wx++) {
+    for (let wy = wyMax - 1; wy >= wyMin; wy--) {
+      if (chunkMap.getLightAbsorption(wx, wy) > 0) break;
+      tryPush(wx, wy, SKY_LIGHT_MAX);
+    }
+  }
+
+  while (head < tail) {
+    const wx    = qx[head]!;
+    const wy    = qy[head]!;
+    const level = ql[head]!;
+    head += 1;
+
+    // Down: no decay (sky light pours straight down)
+    {
+      const ny = wy - 1;
+      const abs = chunkMap.getLightAbsorption(wx, ny);
+      const next = level - abs;
+      if (next > 0) tryPush(wx, ny, Math.min(SKY_LIGHT_MAX, next));
+    }
+    // Up: decay by 1
+    {
+      const ny = wy + 1;
+      const abs = chunkMap.getLightAbsorption(wx, ny);
+      const next = level - 1 - abs;
+      if (next > 0) tryPush(wx, ny, Math.min(SKY_LIGHT_MAX, next));
+    }
+    // Left: decay by 1
+    {
+      const nx = wx - 1;
+      const abs = chunkMap.getLightAbsorption(nx, wy);
+      const next = level - 1 - abs;
+      if (next > 0) tryPush(nx, wy, Math.min(SKY_LIGHT_MAX, next));
+    }
+    // Right: decay by 1
+    {
+      const nx = wx + 1;
+      const abs = chunkMap.getLightAbsorption(nx, wy);
+      const next = level - 1 - abs;
+      if (next > 0) tryPush(nx, wy, Math.min(SKY_LIGHT_MAX, next));
+    }
+  }
+
   for (let cx = 0; cx < CHUNKS_X; cx++) {
-    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-      let inSky = true;
-      for (let cy = CY_END; cy >= CY_START; cy--) {
-        const chunk = chunkMap.getChunk(cx, cy);
-        for (let ly = CHUNK_SIZE - 1; ly >= 0; ly--) {
-          const idx = ly * CHUNK_SIZE + lx;
-          if (!chunk) { inSky = false; continue; }
-          const solid = registry.isSolid(chunk.blocks[idx] ?? 0);
-          chunk.skyLight[idx] = solid ? 0 : (inSky ? SKY_LIGHT_MAX : 0);
-          if (solid) inSky = false;
+    for (let cy = CY_START; cy <= CY_END; cy++) {
+      const chunk = chunkMap.getChunk(cx, cy);
+      if (!chunk) continue;
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+          const wx = cx * CHUNK_SIZE + lx;
+          const wy = cy * CHUNK_SIZE + ly;
+          const px = wx - wxMin;
+          const py = wy - wyMin;
+          chunk.skyLight[ly * CHUNK_SIZE + lx] = best[py * width + px] ?? 0;
         }
       }
     }
@@ -246,14 +325,14 @@ export class MenuBackground {
     this.app = app;
 
     // -- Atlas + registry ---------------------------------------------------
-    const atlas = new AtlasLoader();
+    const atlas = new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
     await atlas.load();
     if (this.destroyed) { app.destroy(); return; }
 
     const registry = new BlockRegistry();
     const base = import.meta.env.BASE_URL;
     const blockDefs = await Promise.all(
-      BLOCK_FILES.map(async (file) => {
+      STRATUM_CORE_BLOCK_FILES.map(async (file) => {
         const res = await fetch(`${base}assets/mods/stratum-core/blocks/${file}`);
         if (!res.ok) throw new Error(`Block load failed: ${file}`);
         return parseBlockJson(await res.json());
@@ -263,7 +342,8 @@ export class MenuBackground {
     if (this.destroyed) { app.destroy(); return; }
 
     // -- World generation ---------------------------------------------------
-    const generator  = new WorldGenerator(MENU_SEED, registry);
+    const seed       = Math.floor(Math.random() * 2_147_483_647);
+    const generator  = new WorldGenerator(seed, registry);
     const chunkMap   = new ChunkMap(
       registry,
       registry.getByIdentifier("stratum:air").id,
@@ -284,11 +364,15 @@ export class MenuBackground {
       for (let cx = 0; cx < CHUNKS_X; cx++) {
         const chunk = generator.generateChunk({ cx, cy });
         chunkMap.add(chunk);
+        const pos = {
+          x: cx  * CHUNK_SIZE * BLOCK_SIZE,
+          y: -cy * CHUNK_SIZE * BLOCK_SIZE,
+        };
+        const bgMesh = buildBackgroundMesh(chunk, registry, atlas);
+        bgMesh.position.set(pos.x, pos.y);
+        worldContainer.addChild(bgMesh);
         const mesh = buildMesh(chunk, registry, atlas);
-        mesh.position.set(
-          cx  * CHUNK_SIZE * BLOCK_SIZE,
-          -cy * CHUNK_SIZE * BLOCK_SIZE,
-        );
+        mesh.position.set(pos.x, pos.y);
         worldContainer.addChild(mesh);
       }
     }

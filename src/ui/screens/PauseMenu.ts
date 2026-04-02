@@ -116,7 +116,7 @@ function injectPauseStyles(base: string): void {
     }
     .pm-title {
       margin: 0 0 1rem;
-      font-size: 20px;
+      font-size: 24px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       text-align: center;
@@ -131,7 +131,7 @@ function injectPauseStyles(base: string): void {
     .pm-btn {
       padding: 11px 18px;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: 17px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -162,7 +162,7 @@ function injectPauseStyles(base: string): void {
       border-top: 1px solid rgba(255, 255, 255, 0.1);
     }
     .pm-section-title {
-      font-size: 12px;
+      font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: #8e8e93;
@@ -186,7 +186,7 @@ function injectPauseStyles(base: string): void {
     }
     .pm-mp-status {
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: 20px;
       line-height: 1.45;
       color: #aeaeb2;
       margin-top: 0.15rem;
@@ -198,7 +198,7 @@ function injectPauseStyles(base: string): void {
 
     .pm-label {
       display: block;
-      font-size: 12px;
+      font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: #8e8e93;
@@ -210,7 +210,7 @@ function injectPauseStyles(base: string): void {
     }
     .pm-hint {
       font-family: 'M5x7', monospace;
-      font-size: 13px;
+      font-size: 16px;
       color: #8e8e93;
       margin-top: 0.35rem;
       min-height: 1.2em;
@@ -219,7 +219,7 @@ function injectPauseStyles(base: string): void {
     .pm-hint-note {
       margin: 0.75rem 0 0;
       font-family: 'M5x7', monospace;
-      font-size: 13px;
+      font-size: 16px;
       line-height: 1.45;
       color: #8e8e93;
       text-align: center;

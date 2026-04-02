@@ -1,16 +1,19 @@
 /** Deterministic chunk fill: terrain columns, caves, ores, bedrock. */
-import { CHUNK_SIZE, WORLD_Y_MIN } from "../../core/constants";
+import { CHUNK_SIZE, WORLD_Y_MIN, WORLDGEN_NO_COLLIDE } from "../../core/constants";
 import type { BlockRegistry } from "../blocks/BlockRegistry";
 import { chunkToWorldOrigin, localIndex } from "../chunk/ChunkCoord";
 import type { ChunkCoord } from "../chunk/ChunkCoord";
 import { createChunk, type Chunk } from "../chunk/Chunk";
 import { GeneratorContext } from "./GeneratorContext";
-import { TerrainNoise } from "./TerrainNoise";
+import { TerrainNoise, type ForestType } from "./TerrainNoise";
 import { CaveGenerator } from "./CaveGenerator";
 import { OreVeins } from "./OreVeins";
 import { SedimentPockets } from "./SedimentPockets";
 
-/** Single-stem tree; canopy is always symmetric around the trunk column (no horizontal shift). */
+// ---------------------------------------------------------------------------
+// Oak tree shapes (round-ish canopy)
+// ---------------------------------------------------------------------------
+
 type SingleTreeSpec = {
   trunkHeight: number;
   canopyCenterDy: number;
@@ -18,7 +21,6 @@ type SingleTreeSpec = {
   radiusY: number;
 };
 
-/** Double trunk + short Y branch + one merged canopy (modestly larger than a single tree). */
 type TwinForkSpec = {
   baseTrunkH: number;
   canopyCenterDy: number;
@@ -26,20 +28,56 @@ type TwinForkSpec = {
   radiusY: number;
 };
 
-type TreeShape = { kind: "single"; spec: SingleTreeSpec } | { kind: "twinFork"; spec: TwinForkSpec };
+type OakTreeShape =
+  | { kind: "single"; spec: SingleTreeSpec }
+  | { kind: "twinFork"; spec: TwinForkSpec };
 
-const SINGLE_TREE_VARIANTS: readonly SingleTreeSpec[] = [
+const OAK_SINGLE_VARIANTS: readonly SingleTreeSpec[] = [
   { trunkHeight: 3, canopyCenterDy: 4, radiusX: 2, radiusY: 2 },
   { trunkHeight: 4, canopyCenterDy: 5, radiusX: 2, radiusY: 3 },
   { trunkHeight: 4, canopyCenterDy: 5, radiusX: 3, radiusY: 2 },
 ] as const;
 
-const TWIN_FORK_SPEC: TwinForkSpec = {
+const OAK_TWIN_FORK_SPEC: TwinForkSpec = {
   baseTrunkH: 3,
   canopyCenterDy: 6,
   radiusX: 3,
   radiusY: 3,
 } as const;
+
+// ---------------------------------------------------------------------------
+// Spruce tree shapes (tall conical canopy)
+// ---------------------------------------------------------------------------
+
+type SpruceTreeSpec = {
+  trunkHeight: number;
+  /** Canopy layers from top (narrow) to bottom (wide). Each value = half-width at that row. */
+  canopyLayers: readonly number[];
+  /** How far above surface the bottom of the canopy starts. */
+  canopyStartDy: number;
+};
+
+const SPRUCE_VARIANTS: readonly SpruceTreeSpec[] = [
+  {
+    trunkHeight: 6,
+    canopyLayers: [0, 1, 1, 2, 2, 3],
+    canopyStartDy: 2,
+  },
+  {
+    trunkHeight: 7,
+    canopyLayers: [0, 1, 1, 2, 2, 3, 3],
+    canopyStartDy: 2,
+  },
+  {
+    trunkHeight: 8,
+    canopyLayers: [0, 0, 1, 1, 2, 2, 3, 3],
+    canopyStartDy: 2,
+  },
+] as const;
+
+type TreeShape =
+  | { type: "oak"; shape: OakTreeShape }
+  | { type: "spruce"; spec: SpruceTreeSpec };
 
 const TREE_PADDING_BLOCKS = 10;
 
@@ -53,8 +91,9 @@ export class WorldGenerator {
   private readonly dirtId: number;
   private readonly stoneId: number;
   private readonly bedrockId: number;
-  private readonly treeTrunkBackId: number;
-  private readonly treeLeavesBackId: number;
+  private readonly oakLogId: number;
+  private readonly spruceLogId: number;
+  private readonly leavesId: number;
   private readonly shortGrassId: number;
   private readonly tallGrassBottomId: number;
   private readonly tallGrassTopId: number;
@@ -72,8 +111,9 @@ export class WorldGenerator {
     this.dirtId = registry.getByIdentifier("stratum:dirt").id;
     this.stoneId = registry.getByIdentifier("stratum:stone").id;
     this.bedrockId = registry.getByIdentifier("stratum:bedrock").id;
-    this.treeTrunkBackId = registry.getByIdentifier("stratum:wood_log_back").id;
-    this.treeLeavesBackId = registry.getByIdentifier("stratum:leaves_back").id;
+    this.oakLogId = registry.getByIdentifier("stratum:oak_log").id;
+    this.spruceLogId = registry.getByIdentifier("stratum:spruce_log").id;
+    this.leavesId = registry.getByIdentifier("stratum:leaves").id;
     this.shortGrassId = registry.getByIdentifier("stratum:short_grass").id;
     this.tallGrassBottomId = registry.getByIdentifier("stratum:tall_grass_bottom").id;
     this.tallGrassTopId = registry.getByIdentifier("stratum:tall_grass_top").id;
@@ -121,9 +161,6 @@ export class WorldGenerator {
     }
   }
 
-  /**
-   * Solid geology at (wx, wy) with caves ignored; ore cells resolve to stone for backdrops.
-   */
   private naturalBackdropId(wx: number, wy: number, surfaceY: number): number {
     if (wy > surfaceY) {
       return 0;
@@ -168,22 +205,26 @@ export class WorldGenerator {
         const wy = originWy + ly;
         const h = this.hash2(wx * 131 + 17, wy * 91 + 9);
         const r = h % 1000;
-        if (r < 120) {
+        if (r < 180) {
           chunk.blocks[aboveIdx] = this.shortGrassId;
-        } else if (r < 170 && ly + 2 < CHUNK_SIZE) {
+        } else if (r < 250 && ly + 2 < CHUNK_SIZE) {
           const above2Idx = localIndex(lx, ly + 2);
           if (chunk.blocks[above2Idx] === this.airId) {
             chunk.blocks[aboveIdx] = this.tallGrassBottomId;
             chunk.blocks[above2Idx] = this.tallGrassTopId;
           }
-        } else if (r < 220) {
+        } else if (r < 300) {
           chunk.blocks[aboveIdx] = this.dandelionId;
-        } else if (r < 260) {
+        } else if (r < 340) {
           chunk.blocks[aboveIdx] = this.poppyId;
         }
       }
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Tree placement
+  // -------------------------------------------------------------------------
 
   private placeBackgroundTrees(chunk: Chunk, originWx: number, originWy: number): void {
     const startWx = originWx - TREE_PADDING_BLOCKS;
@@ -194,7 +235,8 @@ export class WorldGenerator {
       if (!this.shouldSpawnTreeAt(anchorWx, surfaceY, density)) {
         continue;
       }
-      const shape = this.pickTreeShape(anchorWx, surfaceY, density);
+      const forestType = this.terrain.getForestType(anchorWx);
+      const shape = this.pickTreeShape(anchorWx, surfaceY, density, forestType);
       this.placeTreeShapeIntoChunk(chunk, originWx, originWy, anchorWx, surfaceY, shape);
     }
   }
@@ -207,37 +249,84 @@ export class WorldGenerator {
     surfaceY: number,
     shape: TreeShape,
   ): void {
-    if (shape.kind === "single") {
+    if (shape.type === "spruce") {
+      this.placeSpruceTree(chunk, originWx, originWy, anchorWx, surfaceY, shape.spec);
+      return;
+    }
+
+    const oakShape = shape.shape;
+    const trunkId = this.oakLogId;
+
+    if (oakShape.kind === "single") {
       this.placeSymmetricCanopy(
         chunk,
         originWx,
         originWy,
         anchorWx,
-        surfaceY + shape.spec.canopyCenterDy,
-        shape.spec.radiusX,
-        shape.spec.radiusY,
+        surfaceY + oakShape.spec.canopyCenterDy,
+        oakShape.spec.radiusX,
+        oakShape.spec.radiusY,
       );
-      for (let dy = 1; dy <= shape.spec.trunkHeight; dy++) {
-        this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy);
+      for (let dy = 1; dy <= oakShape.spec.trunkHeight; dy++) {
+        this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy, trunkId);
       }
       return;
     }
 
-    const s = shape.spec;
+    const s = oakShape.spec;
     const canopyCx = anchorWx + 1;
     const canopyCy = surfaceY + s.canopyCenterDy;
     this.placeSymmetricCanopy(chunk, originWx, originWy, canopyCx, canopyCy, s.radiusX, s.radiusY);
 
     for (let dy = 1; dy <= s.baseTrunkH; dy++) {
-      this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy);
-      this.placeTrunkCell(chunk, originWx, originWy, anchorWx + 1, surfaceY + dy);
+      this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy, trunkId);
+      this.placeTrunkCell(chunk, originWx, originWy, anchorWx + 1, surfaceY + dy, trunkId);
     }
     const forkY = surfaceY + s.baseTrunkH + 1;
-    this.placeTrunkCell(chunk, originWx, originWy, anchorWx - 1, forkY);
-    this.placeTrunkCell(chunk, originWx, originWy, anchorWx + 2, forkY);
+    this.placeTrunkCell(chunk, originWx, originWy, anchorWx - 1, forkY, trunkId);
+    this.placeTrunkCell(chunk, originWx, originWy, anchorWx + 2, forkY, trunkId);
   }
 
-  /** Ellipse canopy symmetric in ±dx (no per-cell jitter — avoids lopsided crowns). */
+  // -------------------------------------------------------------------------
+  // Spruce tree placement (conical canopy)
+  // -------------------------------------------------------------------------
+
+  private placeSpruceTree(
+    chunk: Chunk,
+    originWx: number,
+    originWy: number,
+    anchorWx: number,
+    surfaceY: number,
+    spec: SpruceTreeSpec,
+  ): void {
+    const trunkId = this.spruceLogId;
+    const layers = spec.canopyLayers;
+    const canopyBottom = surfaceY + spec.canopyStartDy;
+
+    // Place canopy layers from bottom to top
+    for (let i = 0; i < layers.length; i++) {
+      const wy = canopyBottom + i;
+      const halfW = layers[layers.length - 1 - i]!;
+      for (let dx = -halfW; dx <= halfW; dx++) {
+        this.placeBackgroundCell(
+          chunk, originWx, originWy,
+          anchorWx + dx, wy,
+          this.leavesId,
+        );
+      }
+    }
+
+    // Place trunk (overwrites leaves in the trunk column)
+    for (let dy = 1; dy <= spec.trunkHeight; dy++) {
+      this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy, trunkId);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Canopy / trunk primitives
+  // -------------------------------------------------------------------------
+
+  /** Ellipse canopy symmetric in ±dx. */
   private placeSymmetricCanopy(
     chunk: Chunk,
     originWx: number,
@@ -264,7 +353,7 @@ export class WorldGenerator {
           originWy,
           canopyCx + dx,
           canopyCy + dy,
-          this.treeLeavesBackId,
+          this.leavesId,
         );
       }
     }
@@ -288,6 +377,7 @@ export class WorldGenerator {
       return;
     }
     chunk.blocks[idx] = blockId;
+    chunk.metadata[idx] = chunk.metadata[idx]! | WORLDGEN_NO_COLLIDE;
   }
 
   private placeTrunkCell(
@@ -296,6 +386,7 @@ export class WorldGenerator {
     originWy: number,
     wx: number,
     wy: number,
+    trunkId: number,
   ): void {
     const lxLocal = wx - originWx;
     const lyLocal = wy - originWy;
@@ -304,11 +395,16 @@ export class WorldGenerator {
     }
     const idx = localIndex(lxLocal, lyLocal);
     const existing = chunk.blocks[idx]!;
-    if (existing !== this.airId && existing !== this.treeLeavesBackId) {
+    if (existing !== this.airId && existing !== this.leavesId) {
       return;
     }
-    chunk.blocks[idx] = this.treeTrunkBackId;
+    chunk.blocks[idx] = trunkId;
+    chunk.metadata[idx] = chunk.metadata[idx]! | WORLDGEN_NO_COLLIDE;
   }
+
+  // -------------------------------------------------------------------------
+  // Tree spawn logic
+  // -------------------------------------------------------------------------
 
   private shouldSpawnTreeAt(wx: number, surfaceY: number, density: number): boolean {
     if (density <= 0.01) {
@@ -321,7 +417,6 @@ export class WorldGenerator {
       return false;
     }
 
-    // Ownership rule: only the strongest candidate in a local window spawns.
     const spacing = this.localSpacingForDensity(density);
     const myScore = this.anchorScore(wx, surfaceY);
     for (let ox = wx - spacing; ox <= wx + spacing; ox++) {
@@ -367,14 +462,24 @@ export class WorldGenerator {
     return this.random01(this.hash2(wx * 41 + 7, surfaceY * 23 + 3));
   }
 
-  private pickTreeShape(wx: number, surfaceY: number, density: number): TreeShape {
+  private pickTreeShape(wx: number, surfaceY: number, density: number, forestType: ForestType): TreeShape {
     const h = this.hash2(wx * 13 + 5, surfaceY * 19 + 7);
-    if (density >= 0.35 && h % 7 === 0) {
-      return { kind: "twinFork", spec: TWIN_FORK_SPEC };
+
+    if (forestType === "spruce") {
+      const idx = h % SPRUCE_VARIANTS.length;
+      return { type: "spruce", spec: SPRUCE_VARIANTS[idx]! };
     }
-    const idx = h % SINGLE_TREE_VARIANTS.length;
-    return { kind: "single", spec: SINGLE_TREE_VARIANTS[idx]! };
+
+    if (density >= 0.35 && h % 7 === 0) {
+      return { type: "oak", shape: { kind: "twinFork", spec: OAK_TWIN_FORK_SPEC } };
+    }
+    const idx = h % OAK_SINGLE_VARIANTS.length;
+    return { type: "oak", shape: { kind: "single", spec: OAK_SINGLE_VARIANTS[idx]! } };
   }
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
 
   private random01(h: number): number {
     return h / 0xffff_ffff;

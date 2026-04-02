@@ -159,17 +159,18 @@ function sampleOpenSkySorted(
   };
 }
 
-/** Night / twilight sky (zenith → horizon → ground haze). */
+/** Night sky (zenith → horizon → ground haze). */
 const SKY_NIGHT = {
-  top: 0x050a18,
-  horizon: 0x121a32,
-  bottom: 0x020408,
+  top: 0x0b1026,
+  horizon: 0x141e38,
+  bottom: 0x060a14,
 } as const;
 
+/** Dawn reference — horizon leads with warm golden glow. */
 const SKY_DAWN = {
-  top: 0x4a5a8a,
-  horizon: 0xffc888,
-  bottom: 0x6a5848,
+  top: 0x4868a8,
+  horizon: 0xffb860,
+  bottom: 0x604838,
 } as const;
 
 /** Peak daytime zenith (noon ± several in-game hours). */
@@ -181,10 +182,11 @@ const SKY_DAY = {
   bottom: 0x6a8a9a,
 } as const;
 
+/** Dusk reference — horizon peaks orange while zenith is still blue-purple. */
 const SKY_DUSK = {
-  top: 0x4a3058,
-  horizon: 0xff6428,
-  bottom: 0x281820,
+  top: 0x1e1e50,
+  horizon: 0xff7830,
+  bottom: 0x1a0c10,
 } as const;
 
 const SKY_LIGHT_NIGHT: [number, number, number] = [0.78, 0.82, 1.0];
@@ -298,125 +300,65 @@ const LIGHTING_SKY_LIGHT_KEYS = [
   { u: 0.94, c: SKY_LIGHT_NIGHT },
 ] as const;
 
+/**
+ * Sky zenith (top). Stays blue well into dusk; warms to indigo only after
+ * the horizon is already orange (Minecraft-style sunset).
+ */
 const LIGHTING_SKY_TOP_KEYS = [
-  { u: 0, v: lerpColor(SKY_NIGHT.top, SKY_DAWN.top, 0.35) },
-  { u: U_DAWN_MID, v: lerpColor(SKY_NIGHT.top, SKY_DAWN.top, 0.78) },
+  { u: 0, v: 0x1a2248 },
+  { u: U_DAWN_MID, v: 0x384a80 },
   { u: U_DAWN_END, v: SKY_DAWN.top },
-  {
-    u: U_DAWN_LATE,
-    v: lerpColor(SKY_DAWN.top, SKY_DAY_PEAK_TOP, 0.45),
-  },
-  {
-    u: U_DAY_SKY_BLUE_START,
-    v: lerpColor(SKY_DAWN.top, SKY_DAY_PEAK_TOP, 0.85),
-  },
+  { u: U_DAWN_LATE, v: 0x6898d8 },
+  { u: U_DAY_SKY_BLUE_START, v: 0x70aef8 },
   { u: U_NOON, v: SKY_DAY_PEAK_TOP },
   { u: U_DAY_SKY_BLUE_END, v: SKY_DAY_PEAK_TOP },
-  {
-    u: U_DAY_END,
-    v: lerpColor(SKY_DAY_PEAK_TOP, SKY_DUSK.top, 0.08),
-  },
-  {
-    u: U_SUNSET_EARLY,
-    v: lerpColor(SKY_DAY_PEAK_TOP, SKY_DUSK.top, 0.42),
-  },
-  {
-    u: U_SUNSET_MID,
-    v: lerpColor(SKY_DAY_PEAK_TOP, SKY_DUSK.top, 0.78),
-  },
-  {
-    u: U_SUNSET_LATE,
-    v: lerpColor(SKY_DAY_PEAK_TOP, SKY_DUSK.top, 0.95),
-  },
+  { u: U_DAY_END, v: 0x6ca0e8 },
+  { u: U_SUNSET_EARLY, v: 0x6888c8 },
+  { u: U_SUNSET_MID, v: 0x5868a8 },
+  { u: U_SUNSET_LATE, v: 0x3a3878 },
   { u: U_DUSK_END, v: SKY_DUSK.top },
-  {
-    u: U_NIGHT_EARLY,
-    v: lerpColor(SKY_DUSK.top, SKY_NIGHT.top, 0.55),
-  },
+  { u: U_NIGHT_EARLY, v: 0x121838 },
   { u: U_MIDNIGHT, v: SKY_NIGHT.top },
   { u: 0.94, v: SKY_NIGHT.top },
 ] as const;
 
+/**
+ * Sky horizon — LEADS the transition. Turns warm golden/orange well before
+ * the zenith darkens, creating the classic blue-sky-above-orange-horizon look.
+ */
 const LIGHTING_SKY_HORIZON_KEYS = [
-  { u: 0, v: lerpColor(SKY_NIGHT.horizon, SKY_DAWN.horizon, 0.4) },
-  {
-    u: U_DAWN_MID,
-    v: lerpColor(SKY_NIGHT.horizon, SKY_DAWN.horizon, 0.82),
-  },
-  { u: U_DAWN_END, v: SKY_DAWN.horizon },
-  {
-    u: U_DAWN_LATE,
-    v: lerpColor(SKY_DAWN.horizon, SKY_DAY.horizon, 0.38),
-  },
-  {
-    u: U_DAY_SKY_BLUE_START,
-    v: lerpColor(SKY_DAWN.horizon, SKY_DAY.horizon, 0.75),
-  },
+  { u: 0, v: 0xa07048 },
+  { u: U_DAWN_MID, v: SKY_DAWN.horizon },
+  { u: U_DAWN_END, v: 0xd8c8a0 },
+  { u: U_DAWN_LATE, v: 0xb8d0e0 },
+  { u: U_DAY_SKY_BLUE_START, v: SKY_DAY.horizon },
   { u: U_NOON, v: SKY_DAY.horizon },
   { u: U_DAY_SKY_BLUE_END, v: SKY_DAY.horizon },
-  {
-    u: U_DAY_END,
-    v: lerpColor(SKY_DAY.horizon, SKY_DUSK.horizon, 0.12),
-  },
-  {
-    u: U_SUNSET_EARLY,
-    v: lerpColor(SKY_DAY.horizon, SKY_DUSK.horizon, 0.45),
-  },
-  {
-    u: U_SUNSET_MID,
-    v: lerpColor(SKY_DAY.horizon, SKY_DUSK.horizon, 0.78),
-  },
-  {
-    u: U_SUNSET_LATE,
-    v: lerpColor(SKY_DAY.horizon, SKY_DUSK.horizon, 0.94),
-  },
-  { u: U_DUSK_END, v: SKY_DUSK.horizon },
-  {
-    u: U_NIGHT_EARLY,
-    v: lerpColor(SKY_DUSK.horizon, SKY_NIGHT.horizon, 0.5),
-  },
+  { u: U_DAY_END, v: 0xc8b890 },
+  { u: U_SUNSET_EARLY, v: 0xffa850 },
+  { u: U_SUNSET_MID, v: SKY_DUSK.horizon },
+  { u: U_SUNSET_LATE, v: 0xd85028 },
+  { u: U_DUSK_END, v: 0x702820 },
+  { u: U_NIGHT_EARLY, v: 0x302018 },
   { u: U_MIDNIGHT, v: SKY_NIGHT.horizon },
   { u: 0.94, v: SKY_NIGHT.horizon },
 ] as const;
 
+/** Sky ground haze (bottom). Follows horizon but darker throughout. */
 const LIGHTING_SKY_BOTTOM_KEYS = [
-  { u: 0, v: lerpColor(SKY_NIGHT.bottom, SKY_DAWN.bottom, 0.4) },
-  {
-    u: U_DAWN_MID,
-    v: lerpColor(SKY_NIGHT.bottom, SKY_DAWN.bottom, 0.8),
-  },
+  { u: 0, v: 0x2a1818 },
+  { u: U_DAWN_MID, v: 0x4a3828 },
   { u: U_DAWN_END, v: SKY_DAWN.bottom },
-  {
-    u: U_DAWN_LATE,
-    v: lerpColor(SKY_DAWN.bottom, SKY_DAY.bottom, 0.4),
-  },
-  {
-    u: U_DAY_SKY_BLUE_START,
-    v: lerpColor(SKY_DAWN.bottom, SKY_DAY.bottom, 0.7),
-  },
+  { u: U_DAWN_LATE, v: 0x607868 },
+  { u: U_DAY_SKY_BLUE_START, v: 0x688a98 },
   { u: U_NOON, v: SKY_DAY_BOTTOM_SCALED },
   { u: U_DAY_SKY_BLUE_END, v: SKY_DAY_BOTTOM_SCALED },
-  {
-    u: U_DAY_END,
-    v: lerpColor(SKY_DAY_BOTTOM_SCALED, SKY_DUSK.bottom, 0.12),
-  },
-  {
-    u: U_SUNSET_EARLY,
-    v: lerpColor(SKY_DAY_BOTTOM_SCALED, SKY_DUSK.bottom, 0.42),
-  },
-  {
-    u: U_SUNSET_MID,
-    v: lerpColor(SKY_DAY_BOTTOM_SCALED, SKY_DUSK.bottom, 0.72),
-  },
-  {
-    u: U_SUNSET_LATE,
-    v: lerpColor(SKY_DAY_BOTTOM_SCALED, SKY_DUSK.bottom, 0.92),
-  },
+  { u: U_DAY_END, v: 0x5a6870 },
+  { u: U_SUNSET_EARLY, v: 0x604838 },
+  { u: U_SUNSET_MID, v: 0x4a2828 },
+  { u: U_SUNSET_LATE, v: 0x301820 },
   { u: U_DUSK_END, v: SKY_DUSK.bottom },
-  {
-    u: U_NIGHT_EARLY,
-    v: lerpColor(SKY_DUSK.bottom, SKY_NIGHT.bottom, 0.5),
-  },
+  { u: U_NIGHT_EARLY, v: 0x0e0a10 },
   { u: U_MIDNIGHT, v: SKY_NIGHT.bottom },
   { u: 0.94, v: SKY_NIGHT.bottom },
 ] as const;

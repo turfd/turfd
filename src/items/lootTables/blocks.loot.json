@@ -29,24 +29,46 @@
     "stratum:glass": {
       "entries": []
     },
-    "stratum:wood_log": {
+    "stratum:oak_log": {
       "entries": [
-        { "itemKey": "stratum:wood_log", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:oak_log", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
-    "stratum:wood_log_back": {
+    "stratum:oak_planks": {
       "entries": [
-        { "itemKey": "stratum:wood_log_back", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:oak_planks", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:spruce_log": {
+      "entries": [
+        { "itemKey": "stratum:spruce_log", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:spruce_planks": {
+      "entries": [
+        { "itemKey": "stratum:spruce_planks", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:crafting_table": {
+      "entries": [
+        { "itemKey": "stratum:crafting_table", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
     "stratum:leaves": {
       "entries": [
-        { "itemKey": "stratum:leaves", "countMin": 0, "countMax": 1, "chance": 0.2 }
+        { "itemKey": "stratum:stick", "countMin": 0, "countMax": 2, "chance": 0.4 },
+        { "itemKey": "stratum:oak_sapling", "countMin": 1, "countMax": 1, "chance": 0.05 },
+        { "itemKey": "stratum:spruce_sapling", "countMin": 1, "countMax": 1, "chance": 0.03 }
       ]
     },
-    "stratum:leaves_back": {
+    "stratum:oak_sapling": {
       "entries": [
-        { "itemKey": "stratum:leaves_back", "countMin": 0, "countMax": 1, "chance": 0.2 }
+        { "itemKey": "stratum:oak_sapling", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:spruce_sapling": {
+      "entries": [
+        { "itemKey": "stratum:spruce_sapling", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
     "stratum:coal_ore": {

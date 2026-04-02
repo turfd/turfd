@@ -14,6 +14,15 @@ export const CAMERA_PLAYER_VERTICAL_OFFSET_PX = 12;
 /** Chebyshev reach from player centre block for break/place (blocks). */
 export const REACH_BLOCKS = 5;
 
+/**
+ * Recipe JSON `station` value: extra recipes require the player this close (Chebyshev blocks,
+ * same cell metric as {@link REACH_BLOCKS}) to a `stratum:crafting_table` foreground block.
+ */
+export const RECIPE_STATION_CRAFTING_TABLE = "stratum:crafting_table";
+
+/** Chebyshev radius from player feet block cell to a crafting table for station recipes. */
+export const CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS = 4;
+
 /** Base seconds per hardness unit for breaking. */
 export const BREAK_TIME_BASE = 0.5;
 
@@ -108,6 +117,16 @@ export const INVENTORY_SIZE = 36;
 /** Number of hotbar slots. */
 export const HOTBAR_SIZE = 9;
 
+/** Shared duration (ms) for inventory panel + crafting sidebar open/close CSS transitions. */
+export const INVENTORY_ANIM_MS = 300;
+
+/** Item icon scale inside each slot (px); matches `--inv-slot-icon-px` in inventory.css. */
+export const INVENTORY_ITEM_ICON_DISPLAY_PX = 48;
+
+/** Metadata bit: world-generated tree block — no player collision. */
+export const WORLDGEN_NO_COLLIDE = 0x01;
+
 /** Account username length (profiles table CHECK aligns). */
 export const USERNAME_MIN_LENGTH = 3;
 export const USERNAME_MAX_LENGTH = 20;
+

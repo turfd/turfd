@@ -13,6 +13,11 @@ import { mulberry32 } from "./GeneratorContext";
 /** Horizontal scale for forest/plains bands (macro noise). ~1 cycle per this many blocks. */
 const BIOME_MAX_BLOCKS = 250;
 
+/** Horizontal scale for forest-type selection (oak vs spruce). */
+const FOREST_TYPE_SCALE = 400;
+
+export type ForestType = "oak" | "spruce";
+
 export class TerrainNoise {
   private readonly noise2D: ReturnType<typeof createNoise2D>;
   private readonly seed: number;
@@ -60,6 +65,16 @@ export class TerrainNoise {
     const woodsBand = smoothstep(0.32, 0.72, macro01);
     const patch = 0.55 + patch01 * 0.45;
     return Math.max(0, Math.min(1, woodsBand * patch));
+  }
+
+  /**
+   * Which type of forest grows at this column.
+   * Uses a large-scale noise channel (separate Y offset) so you get extended
+   * regions of oak forest vs spruce forest.
+   */
+  getForestType(wx: number): ForestType {
+    const raw = this.noise2D(wx / FOREST_TYPE_SCALE, 555);
+    return raw > 0 ? "spruce" : "oak";
   }
 }
 

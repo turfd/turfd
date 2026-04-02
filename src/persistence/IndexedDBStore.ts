@@ -25,6 +25,8 @@ export type WorldMetadata = {
   previewImageDataUrl?: string;
   /** Host-only multiplayer moderation; optional until first save with chat. */
   moderation?: WorldModerationPersisted;
+  /** Serialized inventory slots; absent in worlds saved before inventory persistence. */
+  playerInventory?: ({ key: string; count: number } | null)[];
 };
 
 export type ChunkRecord = {

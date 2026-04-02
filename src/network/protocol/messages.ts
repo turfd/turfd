@@ -23,6 +23,10 @@ export enum MessageType {
   SESSION_ENDED = 0x0a,
   /** Host-only line; gray/system styling on clients. */
   SYSTEM_MESSAGE = 0x0b,
+  /**
+   * Host → clients: another peer’s pose (star topology). Subject is the moving player’s PeerJS id.
+   */
+  PLAYER_STATE_RELAY = 0x0c,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -81,6 +85,17 @@ export type PlayerStateMsg = {
   facingRight: boolean;
 };
 
+/** Host-forwarded client pose so joiners and other clients attribute it to `subjectPeerId`. */
+export type PlayerStateRelayMsg = {
+  type: MessageType.PLAYER_STATE_RELAY;
+  subjectPeerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facingRight: boolean;
+};
+
 export type EntitySpawnMsg = {
   type: MessageType.ENTITY_SPAWN;
   entityId: number;
@@ -115,6 +130,7 @@ export type NetworkMessage =
   | ChunkDataMsg
   | BlockUpdateMsg
   | PlayerStateMsg
+  | PlayerStateRelayMsg
   | EntitySpawnMsg
   | EntityDespawnMsg
   | ChatMsg
@@ -277,6 +293,31 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       new Uint8Array(buf).set(encoded, 3);
       return buf;
     }
+
+    case MessageType.PLAYER_STATE_RELAY: {
+      const sid = textEnc.encode(msg.subjectPeerId);
+      if (sid.byteLength > CHAT_PEER_ID_MAX) {
+        throw new Error("PLAYER_STATE_RELAY: subjectPeerId too long");
+      }
+      const buf = new ArrayBuffer(1 + 2 + sid.byteLength + 32 + 1);
+      const view = new DataView(buf);
+      let o = 0;
+      view.setUint8(o++, MessageType.PLAYER_STATE_RELAY);
+      view.setUint16(o, sid.byteLength, LE);
+      o += 2;
+      new Uint8Array(buf, o, sid.byteLength).set(sid);
+      o += sid.byteLength;
+      view.setFloat64(o, msg.x, LE);
+      o += 8;
+      view.setFloat64(o, msg.y, LE);
+      o += 8;
+      view.setFloat64(o, msg.vx, LE);
+      o += 8;
+      view.setFloat64(o, msg.vy, LE);
+      o += 8;
+      view.setUint8(o, msg.facingRight ? 1 : 0);
+      return buf;
+    }
   }
 }
 
@@ -423,6 +464,36 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       return {
         type: MessageType.SESSION_ENDED,
         reason: textDec.decode(new Uint8Array(buf, 3, reasonLen)),
+      };
+    }
+
+    case MessageType.PLAYER_STATE_RELAY: {
+      if (v.byteLength < 3) {
+        throw new Error("PLAYER_STATE_RELAY: buffer too short");
+      }
+      const slen = v.getUint16(1, LE);
+      if (slen > CHAT_PEER_ID_MAX || v.byteLength < 3 + slen + 32 + 1) {
+        throw new Error("PLAYER_STATE_RELAY: invalid layout");
+      }
+      const subjectPeerId = textDec.decode(new Uint8Array(buf, 3, slen));
+      let o = 3 + slen;
+      const x = v.getFloat64(o, LE);
+      o += 8;
+      const y = v.getFloat64(o, LE);
+      o += 8;
+      const vx = v.getFloat64(o, LE);
+      o += 8;
+      const vy = v.getFloat64(o, LE);
+      o += 8;
+      const facingRight = v.getUint8(o) !== 0;
+      return {
+        type: MessageType.PLAYER_STATE_RELAY,
+        subjectPeerId,
+        x,
+        y,
+        vx,
+        vy,
+        facingRight,
       };
     }
 

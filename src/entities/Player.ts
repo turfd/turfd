@@ -7,7 +7,6 @@ import type { EventBus } from "../core/EventBus";
 import type { GameEvent } from "../core/types";
 import {
   BLOCK_SIZE,
-  BREAK_TIME_BASE,
   HOTBAR_SIZE,
   ITEM_THROW_SPAWN_OFFSET_PX,
   ITEM_THROW_SPEED_PX,
@@ -18,6 +17,7 @@ import {
   WORLD_Y_MAX,
   WORLD_Y_MIN,
 } from "../core/constants";
+import { getBreakTimeSeconds, canHarvestDrops } from "../core/mining";
 import type { InputAction } from "../input/bindings";
 import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
@@ -196,21 +196,6 @@ export class Player {
     this.airId = registry.getByIdentifier("stratum:air").id;
   }
 
-  /** Seeds the first hotbar slots for a new world (no saved inventory). */
-  seedStarterInventory(): void {
-    const set = (key: string, slot: number, count: number) => {
-      const item = this.itemRegistry.getByKey(key);
-      if (item !== undefined) {
-        this.inventory.setStack(slot, { itemId: item.id, count });
-      }
-    };
-    set("stratum:dirt", 0, 64);
-    set("stratum:stone", 1, 64);
-    set("stratum:wood_log", 2, 64);
-    set("stratum:glass", 3, 64);
-    set("stratum:torch", 4, 64);
-  }
-
   getAABB(): AABB {
     return feetToScreenAABB(this.state.position);
   }
@@ -237,12 +222,20 @@ export class Player {
     this.state.jumpBufferRemaining = 0;
   }
 
-  /** Restore position + hotbar from persistence (no duplicate hotbar emit vs spawn). */
-  applySavedState(feetWorldX: number, feetWorldY: number, hotbarSlot: number): void {
+  /** Restore position, hotbar, and inventory from persistence. */
+  applySavedState(
+    feetWorldX: number,
+    feetWorldY: number,
+    hotbarSlot: number,
+    inventory?: ({ key: string; count: number } | null)[],
+  ): void {
     this.spawnAt(feetWorldX, feetWorldY);
     const slot = ((hotbarSlot % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
     this.state.hotbarSlot = slot;
     this.prevHotbarSlot = slot;
+    if (inventory !== undefined) {
+      this.inventory.restore(inventory);
+    }
     this.bus.emit({
       type: "player:hotbarChanged",
       slot,
@@ -251,6 +244,20 @@ export class Player {
 
   update(dt: number, input: InputManager, world: World): void {
     const { state } = this;
+
+    const feetBx = Math.floor(state.position.x / BLOCK_SIZE);
+    const feetBy = Math.floor(state.position.y / BLOCK_SIZE);
+    if (
+      world.getChunkAt(feetBx, feetBy) === undefined ||
+      world.getChunkAt(feetBx, feetBy - 1) === undefined
+    ) {
+      state.prevPosition.x = state.position.x;
+      state.prevPosition.y = state.position.y;
+      state.velocity.x = 0;
+      state.velocity.y = 0;
+      return;
+    }
+
     const wasOnGround = state.onGround;
 
     state.prevPosition.x = state.position.x;
@@ -391,6 +398,11 @@ export class Player {
         def !== null && def.id !== this.airId && def.hardness !== 999;
 
       if (canBreak && def !== null) {
+        const heldSlot = state.hotbarSlot % HOTBAR_SIZE;
+        const heldStack = this.inventory.getStack(heldSlot);
+        const heldItemDef = heldStack !== null ? this.itemRegistry.getById(heldStack.itemId) : undefined;
+        const breakTime = getBreakTimeSeconds(def, heldItemDef);
+
         if (
           state.breakTarget !== null &&
           state.breakTarget.wx === wx &&
@@ -400,13 +412,14 @@ export class Player {
           state.breakAccum += dt;
           state.breakProgress = Math.min(
             1,
-            state.breakAccum / (def.hardness * BREAK_TIME_BASE),
+            state.breakAccum / breakTime,
           );
           if (state.breakProgress >= 1) {
             const mat = def.material;
+            const dropsLoot = canHarvestDrops(def, heldItemDef);
             this.audio.playSfx(getBreakSound(mat), { pitchVariance: 50 });
             if (layer === "bg") {
-              world.spawnLootForBrokenBlock(def.id, wx, wy);
+              if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
               world.setBackgroundBlock(wx, wy, 0);
               this.bus.emit({
                 type: "game:block-changed",
@@ -431,7 +444,7 @@ export class Player {
                 topCell.tallGrass === "top";
 
               if (fullPlant && bottomCell !== null) {
-                world.spawnLootForBrokenBlock(bottomCell.id, wx, bottomWy);
+                if (dropsLoot) world.spawnLootForBrokenBlock(bottomCell.id, wx, bottomWy);
                 world.setBlock(wx, topWy, 0);
                 world.setBlock(wx, bottomWy, 0);
                 this.bus.emit({
@@ -449,7 +462,7 @@ export class Player {
                   layer: "fg",
                 } satisfies GameEvent);
               } else {
-                world.spawnLootForBrokenBlock(def.id, wx, wy);
+                if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
                 world.setBlock(wx, wy, 0);
                 this.bus.emit({
                   type: "game:block-changed",
@@ -460,7 +473,7 @@ export class Player {
                 } satisfies GameEvent);
               }
             } else {
-              world.spawnLootForBrokenBlock(def.id, wx, wy);
+              if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
               world.setBlock(wx, wy, 0);
               this.bus.emit({
                 type: "game:block-changed",

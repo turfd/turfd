@@ -1,14 +1,19 @@
 /** DOM inventory overlay (27 main + 9 hotbar), slot interactions, and cursor stack wiring. */
 
-import { HOTBAR_SIZE } from "../core/constants";
+import {
+  HOTBAR_SIZE,
+  INVENTORY_ANIM_MS,
+  INVENTORY_ITEM_ICON_DISPLAY_PX,
+} from "../core/constants";
 import type { ItemId } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { PlayerInventory } from "../items/PlayerInventory";
-import type { AtlasIconLayout, AtlasJson } from "./atlasItemIcon";
-import { getItemIconStyle } from "./atlasItemIcon";
+import { fetchItemIconUrlMapForRegistry } from "../core/textureManifest";
+import type { ItemIconUrlLookup } from "./atlasItemIcon";
+import { getItemIconStyleForDefinition } from "./atlasItemIcon";
 import "./inventory.css";
 
-export type { AtlasIconLayout } from "./atlasItemIcon";
+export type { ItemIconUrlLookup } from "./atlasItemIcon";
 
 type GetInventory = () => PlayerInventory;
 
@@ -48,8 +53,9 @@ export class InventoryUI {
   private readonly overlayCounts: HTMLSpanElement[] = [];
   private readonly itemRegistry: ItemRegistry;
   private readonly getInventory: GetInventory;
-  private layout: AtlasIconLayout | null = null;
+  private iconUrlLookup: Map<string, string> | null = null;
   private readonly overlay: HTMLDivElement;
+  private readonly craftingMount: HTMLDivElement;
   private readonly hotbarItemNameEl: HTMLDivElement;
   private readonly itemTooltipEl: HTMLDivElement;
   private tooltipActiveSlot: number | null = null;
@@ -144,7 +150,7 @@ export class InventoryUI {
 
   private bindSlotTooltip(slot: HTMLDivElement, slotIndex: number): void {
     slot.addEventListener("mouseenter", (e: MouseEvent) => {
-      if (this.layout === null) {
+      if (this.iconUrlLookup === null) {
         return;
       }
       const stack = this.getInventory().getStack(slotIndex);
@@ -284,6 +290,9 @@ export class InventoryUI {
     overlay.className = "inv-overlay";
     overlay.setAttribute("aria-hidden", "true");
 
+    const overlayRow = document.createElement("div");
+    overlayRow.className = "inv-overlay-row";
+
     const panel = document.createElement("div");
     panel.className = "inv-panel";
 
@@ -333,7 +342,14 @@ export class InventoryUI {
     panel.appendChild(sep);
     panel.appendChild(labelHot);
     panel.appendChild(gridHot);
-    overlay.appendChild(panel);
+
+    const craftingMount = document.createElement("div");
+    craftingMount.className = "inv-crafting-mount";
+    this.craftingMount = craftingMount;
+
+    overlayRow.appendChild(panel);
+    overlayRow.appendChild(craftingMount);
+    overlay.appendChild(overlayRow);
     root.appendChild(overlay);
     this.overlay = overlay;
 
@@ -430,28 +446,20 @@ export class InventoryUI {
     return { slot, icon, count };
   }
 
-  /** Atlas layout for cursor overlay (same as slot icons). */
-  getAtlasLayout(): AtlasIconLayout | null {
-    return this.layout;
+  /** Resolved PNG URLs for DOM item icons (block + item manifests). */
+  getItemIconUrlLookup(): ItemIconUrlLookup | null {
+    return this.iconUrlLookup;
   }
 
-  /** Load atlas metadata for CSS sprites (call after mount; same URLs as AtlasLoader). */
-  async loadAtlasLayout(): Promise<void> {
-    const base = import.meta.env.BASE_URL;
-    const jsonUrl = `${base}assets/textures/atlas.json`;
-    const res = await fetch(jsonUrl);
-    if (!res.ok) {
-      throw new Error(`InventoryUI: failed to load ${jsonUrl}`);
-    }
-    const raw: unknown = await res.json();
-    const data = raw as AtlasJson;
-    const imageUrl = new URL(data.meta.image, new URL(jsonUrl, window.location.href)).href;
-    this.layout = {
-      atlasImageUrl: imageUrl,
-      atlasW: data.meta.size.w,
-      atlasH: data.meta.size.h,
-      frames: data.frames,
-    };
+  /** Mount point for {@link CraftingPanel} (sibling of the inventory panel). */
+  getCraftingMount(): HTMLElement {
+    return this.craftingMount;
+  }
+
+  /** Resolve icon URLs from block + item texture manifests (Bedrock-style split). */
+  async loadTextureIcons(): Promise<void> {
+    const rec = await fetchItemIconUrlMapForRegistry(this.itemRegistry);
+    this.iconUrlLookup = new Map(Object.entries(rec));
   }
 
   setOpen(open: boolean): void {
@@ -459,6 +467,7 @@ export class InventoryUI {
     if (!open) {
       this.hideItemTooltip();
     }
+    this.root.style.setProperty("--inv-anim-ms", `${INVENTORY_ANIM_MS}ms`);
     if (open) {
       this.overlay.classList.add("inv-overlay--open");
       this.overlay.setAttribute("aria-hidden", "false");
@@ -474,8 +483,8 @@ export class InventoryUI {
    * Refreshes all slots from the live inventory (no cached stacks).
    */
   update(inventory: PlayerInventory, selectedHotbarSlot: number): void {
-    const layout = this.layout;
-    const displayPx = 32;
+    const urlLookup = this.iconUrlLookup;
+    const displayPx = INVENTORY_ITEM_ICON_DISPLAY_PX;
     const sel = Math.min(selectedHotbarSlot, HOTBAR_SIZE - 1);
 
     const selStack = inventory.getStack(sel);
@@ -507,7 +516,7 @@ export class InventoryUI {
         this.hotbarIcons[i]!,
         this.hotbarCounts[i]!,
         this.hotbarSlots[i]!,
-        layout,
+        urlLookup,
         displayPx,
         i === sel,
       );
@@ -522,7 +531,7 @@ export class InventoryUI {
         this.overlayIcons[i]!,
         this.overlayCounts[i]!,
         this.overlaySlots[i]!,
-        layout,
+        urlLookup,
         displayPx,
         isOverlayHotbarRow && slotIndex === sel,
       );
@@ -534,7 +543,7 @@ export class InventoryUI {
     iconEl: HTMLDivElement,
     countEl: HTMLSpanElement,
     slotEl: HTMLDivElement,
-    layout: AtlasIconLayout | null,
+    urlLookup: ItemIconUrlLookup | null,
     displayPx: number,
     selected: boolean,
   ): void {
@@ -554,7 +563,7 @@ export class InventoryUI {
     }
 
     const def = this.itemRegistry.getById(stack.itemId);
-    if (def === undefined || layout === null) {
+    if (def === undefined || urlLookup === null) {
       iconEl.style.cssText = "";
       iconEl.removeAttribute("title");
       slotEl.removeAttribute("title");
@@ -563,7 +572,7 @@ export class InventoryUI {
       return;
     }
 
-    const style = getItemIconStyle(def.textureName, layout, displayPx);
+    const style = getItemIconStyleForDefinition(def, urlLookup, displayPx);
     iconEl.style.cssText = style;
     iconEl.removeAttribute("title");
     slotEl.removeAttribute("title");

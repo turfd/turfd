@@ -8,6 +8,10 @@
   font-family: "BoldPixels", "Courier New", monospace;
   -webkit-font-smoothing: none;
   user-select: none;
+  --inv-anim-ms: 300ms;
+  --inv-slot-px: 68px;
+  --inv-slot-icon-px: 48px;
+  --inv-grid-gap: 10px;
 }
 
 #inventory-ui-root.inv-root--open {
@@ -53,7 +57,7 @@
   padding: 0 8px;
   box-sizing: border-box;
   font-family: "M5x7", monospace;
-  font-size: clamp(22px, 4.5vmin, 28px);
+  font-size: clamp(32px, 5.5vmin, 42px);
   line-height: 1.2;
   letter-spacing: 0.04em;
   text-transform: none;
@@ -86,7 +90,7 @@
   padding: 6px 11px;
   box-sizing: border-box;
   font-family: "M5x7", monospace;
-  font-size: 18px;
+  font-size: 26px;
   line-height: 1.25;
   letter-spacing: 0.03em;
   color: #f2f2f7;
@@ -119,7 +123,7 @@
 #inventory-ui-root .inv-hotbar-slots {
   display: flex;
   flex-direction: row;
-  gap: 6px;
+  gap: var(--inv-grid-gap, 8px);
   align-items: center;
 }
 
@@ -130,8 +134,8 @@
 
 #inventory-ui-root .inv-slot {
   position: relative;
-  width: 50px;
-  height: 50px;
+  width: var(--inv-slot-px, 58px);
+  height: var(--inv-slot-px, 58px);
   box-sizing: border-box;
   background: rgba(36, 36, 38, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -151,18 +155,18 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 32px;
-  height: 32px;
+  width: var(--inv-slot-icon-px, 38px);
+  height: var(--inv-slot-icon-px, 38px);
   background-repeat: no-repeat;
   pointer-events: none;
 }
 
 #inventory-ui-root .inv-slot-count {
   position: absolute;
-  right: 3px;
-  bottom: 1px;
+  right: 4px;
+  bottom: 2px;
   font-family: "M5x7", monospace;
-  font-size: 13px;
+  font-size: 24px;
   font-weight: 700;
   color: #f2f2f7;
   text-shadow:
@@ -193,9 +197,33 @@
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+  overflow-x: auto;
+  overflow-y: auto;
   transition:
-    opacity 0.24s ease,
-    visibility 0.24s ease;
+    opacity var(--inv-anim-ms, 300ms) ease,
+    visibility var(--inv-anim-ms, 300ms) ease;
+}
+
+#inventory-ui-root .inv-overlay-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: center;
+  gap: 14px;
+  width: max-content;
+  max-width: none;
+  box-sizing: border-box;
+  padding: 0 0.75rem;
+}
+
+#inventory-ui-root .inv-crafting-mount {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: clamp(280px, 38vw, 440px);
+  min-height: 0;
 }
 
 #inventory-ui-root .inv-overlay.inv-overlay--open {
@@ -205,37 +233,264 @@
 }
 
 #inventory-ui-root .inv-panel {
-  padding: 1.1rem 1.25rem 1.25rem;
-  max-width: calc(100vw - 2rem);
+  flex: 0 1 auto;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  padding: 1.25rem 1.35rem 1.4rem;
+  max-width: min(740px, calc(100vw - 2rem));
   box-sizing: border-box;
   background: rgba(44, 44, 46, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
   corner-shape: squircle;
-  transform: translateY(16px);
+  transform: translateY(16px) translateX(0);
   opacity: 0;
   transition:
-    transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.26s ease;
+    transform var(--inv-anim-ms, 300ms) cubic-bezier(0.22, 1, 0.36, 1),
+    opacity var(--inv-anim-ms, 300ms) ease;
 }
 
 #inventory-ui-root .inv-overlay.inv-overlay--open .inv-panel {
-  transform: translateY(0);
+  transform: translateY(0) translateX(-12px);
   opacity: 1;
 }
 
+/* Crafting sidebar: same row height as inventory; slides in from the right. */
+#inventory-ui-root .inv-crafting-sidebar {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: rgba(40, 40, 42, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  corner-shape: squircle;
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--inv-anim-ms, 300ms) cubic-bezier(0.22, 1, 0.36, 1),
+    opacity var(--inv-anim-ms, 300ms) ease;
+}
+
+#inventory-ui-root .inv-crafting-sidebar.inv-crafting-sidebar--open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#inventory-ui-root .inv-crafting-sidebar-inner {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Category tabs on the outer (right) edge of the crafting panel */
+#inventory-ui-root .inv-craft-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 10px 12px 6px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  order: 2;
+}
+
+#inventory-ui-root .inv-craft-tab {
+  font-family: "M5x7", monospace;
+  font-size: 19px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8e8e93;
+  background: rgba(56, 56, 58, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 7px;
+  margin: 0;
+  cursor: pointer;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  min-height: 5rem;
+  text-align: center;
+  line-height: 1.2;
+}
+
+#inventory-ui-root .inv-craft-tab:hover {
+  color: #d1d1d6;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+#inventory-ui-root .inv-craft-tab.inv-craft-tab--active {
+  color: #f2f2f7;
+  background: rgba(72, 72, 74, 0.95);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+#inventory-ui-root .inv-craft-body {
+  order: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px 10px 14px;
+}
+
+#inventory-ui-root .inv-craft-title {
+  font-size: 24px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #aeaeb2;
+  margin-bottom: 10px;
+}
+
+#inventory-ui-root .inv-craft-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+#inventory-ui-root .inv-craft-row {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(52, 52, 54, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+}
+
+#inventory-ui-root .inv-craft-row:hover:not(.inv-craft-row--dimmed) {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(58, 58, 60, 0.9);
+}
+
+#inventory-ui-root .inv-craft-row.inv-craft-row--dimmed {
+  opacity: 0.38;
+  cursor: default;
+}
+
+#inventory-ui-root .inv-craft-out {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+#inventory-ui-root .inv-craft-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+#inventory-ui-root .inv-craft-name {
+  font-family: "M5x7", monospace;
+  font-size: 26px;
+  color: #f2f2f7;
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#inventory-ui-root .inv-craft-ingredients {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+#inventory-ui-root .inv-craft-ing {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+#inventory-ui-root .inv-craft-ing-count {
+  font-family: "M5x7", monospace;
+  font-size: 22px;
+  color: #c7c7cc;
+}
+
+#inventory-ui-root .inv-craft-mult {
+  font-family: "M5x7", monospace;
+  font-size: 24px;
+  color: #8e8e93;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* Match inv-slot + inv-slot-icon: fixed box + absolutely centered sprite (reliable in flex). */
+#inventory-ui-root .inv-craft-out-slot {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+#inventory-ui-root .inv-craft-out-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+#inventory-ui-root .inv-craft-ing-slot {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+#inventory-ui-root .inv-craft-ing-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 32px;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+#inventory-ui-root .inv-craft-hint {
+  min-height: 1.25em;
+  margin-top: 8px;
+  font-family: "M5x7", monospace;
+  font-size: 20px;
+  color: #ff9f0a;
+  line-height: 1.3;
+}
+
 #inventory-ui-root .inv-panel-title {
-  font-size: 17px;
+  font-size: 28px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #f2f2f7;
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.75rem;
 }
 
 #inventory-ui-root .inv-grid {
   display: grid;
-  grid-template-columns: repeat(9, 50px);
-  gap: 6px;
+  grid-template-columns: repeat(9, var(--inv-slot-px, 58px));
+  gap: var(--inv-grid-gap, 8px);
 }
 
 #inventory-ui-root .inv-grid--main {
@@ -248,21 +503,26 @@
 
 #inventory-ui-root .inv-label-row {
   font-family: "M5x7", monospace;
-  font-size: 13px;
+  font-size: 22px;
   color: #8e8e93;
-  margin-bottom: 5px;
+  margin-bottom: 6px;
   letter-spacing: 0.04em;
 }
 
 @media (prefers-reduced-motion: reduce) {
   #inventory-ui-root .inv-overlay,
   #inventory-ui-root .inv-panel,
+  #inventory-ui-root .inv-crafting-sidebar,
   #inventory-ui-root .inv-hotbar-item-name,
   #inventory-ui-root .inv-item-tooltip {
     transition: none;
   }
 
   #inventory-ui-root .inv-overlay.inv-overlay--open .inv-panel {
+    transform: none;
+  }
+
+  #inventory-ui-root .inv-crafting-sidebar.inv-crafting-sidebar--open {
     transform: none;
   }
 

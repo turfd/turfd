@@ -19,11 +19,23 @@ export interface BlockDefinitionBase {
   /** If true, texture can be horizontally mirrored based on world position. */
   randomFlipX?: boolean;
   solid: boolean;
+  /**
+   * When false, entities do not collide with this block’s cell (player, dropped items).
+   * Defaults to {@link solid} when omitted from JSON (`stratum:collision`).
+   * Use with `solid: true` for furniture that still occludes light and supports placement.
+   */
+  collides: boolean;
   transparent: boolean;
   /** Render-only; no fluid simulation in Phase 1. */
   water: boolean;
-  /** Break time multiplier. */
+  /** Minecraft-style hardness. Break time derived via {@link getBreakTimeSeconds}. */
   hardness: number;
+  /** Tool type that speeds up mining (axe for wood, pickaxe for stone, shovel for soil). */
+  harvestToolType?: "axe" | "pickaxe" | "shovel";
+  /** When true, mining without the correct tool+tier drops nothing. */
+  requiresToolForDrops: boolean;
+  /** Minimum tool tier needed for drops (0=wood, 1=stone, 2=iron, 3=diamond). */
+  minToolTier: number;
   /** 0–15 */
   lightEmission: number;
   /** 0–15 */
@@ -48,4 +60,6 @@ export interface BlockDefinitionBase {
    * on the block’s lower edge so short plants don’t visually float above the ground.
    */
   plantFootOffsetPx?: number;
+  /** Crafting tags (e.g. `"stratum:logs"`, `"stratum:planks"`). */
+  tags?: readonly string[];
 }

@@ -6,10 +6,12 @@ import { readVolumeStored, VOL_KEYS } from "../audio/volumeSettings";
 import {
   BLOCK_SIZE,
   CAMERA_PLAYER_VERTICAL_OFFSET_PX,
+  CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS,
   DAY_LENGTH_MS,
   FIXED_TIMESTEP_MS,
   PLAYER_HEIGHT,
   PLAYER_WIDTH,
+  RECIPE_STATION_CRAFTING_TABLE,
   TORCH_HELD_LIGHT_INTENSITY,
   TORCH_HELD_LIGHT_RADIUS_BLOCKS,
   WORLD_Y_MAX,
@@ -17,9 +19,9 @@ import {
 import { EventBus } from "./EventBus";
 import { GameLoop } from "./GameLoop";
 import type { GameEvent } from "./types";
+import { CraftingSystem, type CraftingStationContext } from "../entities/CraftingSystem";
 import { EntityManager } from "../entities/EntityManager";
 import { InputManager } from "../input/InputManager";
-import { MAX_STACK_DEFAULT } from "./itemDefinition";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
 import lootTablesJson from "../items/lootTables/blocks.loot.json";
@@ -27,6 +29,12 @@ import { parseLootTablesJson } from "../mods/parseLootTablesJson";
 import type { IndexedDBStore, WorldMetadata } from "../persistence/IndexedDBStore";
 import { SaveGame } from "../persistence/SaveGame";
 import { parseBlockJson } from "../mods/parseBlockJson";
+import { parseItemJson } from "../mods/parseItemJson";
+import { parseRecipeJson } from "../mods/parseRecipeJson";
+import {
+  STRATUM_CORE_BLOCK_FILES,
+  STRATUM_CORE_ITEM_FILES,
+} from "../mods/stratumCoreManifest";
 import { ChunkSyncManager } from "../network/ChunkSyncManager";
 import type { HostPeerId } from "../network/hostPeerId";
 import type { PeerId } from "../network/INetworkAdapter";
@@ -38,6 +46,12 @@ import type {
 import { PlayerStateBroadcaster } from "../network/PlayerStateBroadcaster";
 import type { RoomCode } from "../network/roomCode";
 import { normalizeRoomCode, peerIdToRoomCode, roomCodeToPeerId } from "../network/roomCode";
+import {
+  BLOCK_TEXTURE_MANIFEST_PATH,
+  ITEM_TEXTURE_MANIFEST_PATH,
+  fetchTextureManifestJson,
+  resolveItemTextureRecord,
+} from "./textureManifest";
 import { AtlasLoader } from "../renderer/AtlasLoader";
 import { BreakOverlay } from "../renderer/BreakOverlay";
 import { ChunkRenderer } from "../renderer/chunk/ChunkRenderer";
@@ -47,16 +61,21 @@ import {
   migrateModerationMetadata,
   WorldModerationState,
 } from "../network/moderation/WorldModerationState";
+import { CraftingPanel } from "../ui/CraftingPanel";
 import { CursorStackUI } from "../ui/CursorStackUI";
 import { ChatOverlay } from "../ui/ChatOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
 import { NametagOverlay } from "../ui/NametagOverlay";
 import { UIShell } from "../ui/UIShell";
 import { BlockRegistry } from "../world/blocks/BlockRegistry";
+import { RecipeRegistry } from "../world/RecipeRegistry";
 import { WorldTime } from "../world/lighting/WorldTime";
+import { BlockInteractions } from "../world/BlockInteractions";
 import { World } from "../world/World";
 import { MsgType } from "../network/protocol/messages";
 import type { HeldTorchLighting } from "../renderer/lighting/LightingComposer";
+import type { RecipeDefinition } from "./recipe";
+import { isNearCraftingTableBlock } from "../world/craftingProximity";
 
 const PEERJS_CLOUD = {
   host: "0.peerjs.com",
@@ -103,6 +122,7 @@ export type PlayerSavedState = {
   x: number;
   y: number;
   hotbarSlot: number;
+  inventory?: ({ key: string; count: number } | null)[];
 };
 
 export type GameLoadProgress = {
@@ -111,34 +131,6 @@ export type GameLoadProgress = {
   current?: number;
   total?: number;
 };
-
-const STRATUM_CORE_BLOCK_FILES = [
-  "air.json",
-  "dirt.json",
-  "grass.json",
-  "short_grass.json",
-  "tall_grass_bottom.json",
-  "tall_grass_top.json",
-  "dandelion.json",
-  "poppy.json",
-  "stone.json",
-  "sand.json",
-  "gravel.json",
-  "bedrock.json",
-  "wood-log.json",
-  "leaves.json",
-  "wood-log-back.json",
-  "leaves-back.json",
-  "glass.json",
-  "torch.json",
-  "water.json",
-  "coal_ore.json",
-  "iron_ore.json",
-  "gold_ore.json",
-  "diamond_ore.json",
-  "redstone_ore.json",
-  "lapis_ore.json",
-] as const;
 
 export class Game {
   readonly bus: EventBus;
@@ -183,7 +175,8 @@ export class Game {
   }> = [];
 
   private pipeline: RenderPipeline | null = null;
-  private atlasLoader: AtlasLoader | null = null;
+  private blockAtlasLoader: AtlasLoader | null = null;
+  private itemAtlasLoader: AtlasLoader | null = null;
   private world: World | null = null;
   private chunkRenderer: ChunkRenderer | null = null;
   private input: InputManager | null = null;
@@ -191,8 +184,10 @@ export class Game {
   private uiShell: UIShell | null = null;
   private breakOverlay: BreakOverlay | null = null;
   private saveGame: SaveGame | null = null;
+  private _blockInteractions: BlockInteractions | null = null;
   private audio: AudioEngine | null = null;
   private inventoryUI: InventoryUI | null = null;
+  private _craftingPanel: CraftingPanel | null = null;
   private cursorStackUI: CursorStackUI | null = null;
   private isInventoryOpen = false;
   private paused = false;
@@ -226,6 +221,9 @@ export class Game {
     vy: 0,
     facingRight: false,
   };
+
+  private readonly _recipeRegistry = new RecipeRegistry();
+  private _craftingSystem: CraftingSystem | null = null;
 
   constructor(options: GameOptions) {
     this.mount = options.mount;
@@ -341,13 +339,31 @@ export class Game {
       Array.from({ length: registry.size }, (_, i) => registry.getById(i)),
       itemRegistry,
     );
-    itemRegistry.register({
-      key: "stratum:tall_grass",
-      textureName: "tall_grass",
-      displayName: "Tall Grass",
-      maxStack: MAX_STACK_DEFAULT,
-      placesBlockId: registry.getByIdentifier("stratum:tall_grass_bottom").id,
+    progressCallback?.({
+      stage: "Loading items",
+      detail: "Reading core item definitions...",
+      current: 0,
+      total: STRATUM_CORE_ITEM_FILES.length,
     });
+    await this.loadStratumCoreItems(
+      registry,
+      itemRegistry,
+      (loaded, total, file) => {
+        progressCallback?.({
+          stage: "Loading items",
+          detail: `Loaded ${file}`,
+          current: loaded,
+          total,
+        });
+      },
+    );
+
+    progressCallback?.({
+      stage: "Loading recipes",
+      detail: "Reading base recipe definitions...",
+    });
+    await this.loadStratumBaseRecipes(itemRegistry);
+    this._craftingSystem = new CraftingSystem(itemRegistry, this._recipeRegistry);
 
     const lootResolver = new LootResolver(itemRegistry);
     const lootData = parseLootTablesJson(lootTablesJson);
@@ -364,13 +380,30 @@ export class Game {
       lootResolver.registerTable(block.id, table);
     }
 
-    const atlas = new AtlasLoader();
     progressCallback?.({
       stage: "Loading textures",
-      detail: "Loading atlas spritesheet...",
+      detail: "Loading block textures...",
     });
-    await atlas.load();
-    this.atlasLoader = atlas;
+    const blockAtlas = new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
+    await blockAtlas.load();
+    this.blockAtlasLoader = blockAtlas;
+
+    progressCallback?.({
+      stage: "Loading textures",
+      detail: "Loading item textures...",
+    });
+    const [blockTexDoc, itemTexDoc] = await Promise.all([
+      fetchTextureManifestJson(BLOCK_TEXTURE_MANIFEST_PATH),
+      fetchTextureManifestJson(ITEM_TEXTURE_MANIFEST_PATH),
+    ]);
+    const itemResolved = resolveItemTextureRecord(
+      itemRegistry,
+      blockTexDoc.textures,
+      itemTexDoc.textures,
+    );
+    const itemAtlas = new AtlasLoader(ITEM_TEXTURE_MANIFEST_PATH);
+    await itemAtlas.loadFromTextureRecord(itemResolved);
+    this.itemAtlasLoader = itemAtlas;
 
     const world = new World(
       registry,
@@ -391,29 +424,41 @@ export class Game {
     pipeline.initLighting(world, this.bus);
     this.pipeline = pipeline;
 
+    const initCentreBx = playerSavedState !== undefined
+      ? Math.floor(playerSavedState.x / BLOCK_SIZE)
+      : undefined;
+    const initCentreBy = playerSavedState !== undefined
+      ? Math.floor(playerSavedState.y / BLOCK_SIZE)
+      : undefined;
     progressCallback?.({
       stage: "Preparing world",
       detail: "Loading nearby chunks...",
       current: 0,
       total: 1,
     });
-    await world.init((chunkProgress) => {
-      progressCallback?.({
-        stage: "Preparing world",
-        detail:
-          chunkProgress.source === "db"
-            ? "Loading saved terrain chunks..."
-            : "Generating terrain chunks...",
-        current: chunkProgress.loaded,
-        total: chunkProgress.total,
-      });
-    });
+    await world.init(
+      (chunkProgress) => {
+        progressCallback?.({
+          stage: "Preparing world",
+          detail:
+            chunkProgress.source === "db"
+              ? "Loading saved terrain chunks..."
+              : "Generating terrain chunks...",
+          current: chunkProgress.loaded,
+          total: chunkProgress.total,
+        });
+      },
+      initCentreBx,
+      initCentreBy,
+    );
     for (const [cx, cy] of world.loadedChunkCoords()) {
       world.recomputeChunkLight(cx, cy);
     }
     this._flushPendingAuthoritativeChunks();
 
-    this.chunkRenderer = new ChunkRenderer(pipeline, registry, atlas, world);
+    this._blockInteractions = new BlockInteractions(world, registry, this.bus);
+
+    this.chunkRenderer = new ChunkRenderer(pipeline, registry, blockAtlas, world);
 
     const input = new InputManager(pipeline.getCanvas());
     this.input = input;
@@ -431,7 +476,7 @@ export class Game {
       this.bus,
       audio,
       itemRegistry,
-      atlas,
+      itemAtlas,
     );
     entityManager.initVisual(pipeline);
     this.entityManager = entityManager;
@@ -504,8 +549,32 @@ export class Game {
     const inventoryUI = new InventoryUI(this.mount, itemRegistry, () =>
       this.entityManager!.getPlayer().inventory,
     );
-    await inventoryUI.loadAtlasLayout();
+    await inventoryUI.loadTextureIcons();
     this.inventoryUI = inventoryUI;
+
+    this._craftingPanel = new CraftingPanel(
+      inventoryUI.getCraftingMount(),
+      this.bus,
+      itemRegistry,
+      {
+        getItemIconUrlLookup: () =>
+          this.inventoryUI?.getItemIconUrlLookup() ?? null,
+        getRecipes: () => this._visibleRecipesForCrafting(),
+        getCategories: () => this._visibleCraftingCategories(),
+        getNearCraftingTable: () => this._getCraftingStationContext().nearCraftingTable,
+        canCraftOneBatch: (recipe, inv) =>
+          this._craftingSystem?.canCraft(recipe, inv, 1, this._getCraftingStationContext()) ??
+          false,
+        maxCraftableBatches: (recipe, inv) =>
+          this._craftingSystem?.maxCraftableBatches(
+            recipe,
+            inv,
+            this._getCraftingStationContext(),
+          ) ?? 0,
+        getInventory: () => this.entityManager!.getPlayer().inventory,
+      },
+    );
+
     this.networkUnsubs.push(
       this.bus.on("ui:chat-compose", (e) => {
         this.inventoryUI?.setHotbarStackVisible(!e.open);
@@ -516,7 +585,13 @@ export class Game {
       this.mount,
       itemRegistry,
       () => this.entityManager!.getPlayer().inventory.getCursorStack(),
-      () => this.inventoryUI!.getAtlasLayout(),
+      () => this.inventoryUI!.getItemIconUrlLookup(),
+    );
+
+    this.networkUnsubs.push(
+      this.bus.on("craft:request", (e) => {
+        this._handleCraftRequest(e.recipeId, e.batches);
+      }),
     );
 
     this._wirePauseNetworkHandlers();
@@ -543,6 +618,7 @@ export class Game {
         playerSavedState.x,
         playerSavedState.y,
         playerSavedState.hotbarSlot,
+        playerSavedState.inventory,
       );
     } else {
       const airId = world.getRegistry().getByIdentifier("stratum:air").id;
@@ -558,9 +634,9 @@ export class Game {
       player.spawnAt(0, ((surfaceY ?? 1) + 1) * BLOCK_SIZE);
     }
 
-    if (!player.inventory.hasAnyItems()) {
-      player.seedStarterInventory();
-    }
+    const spawnBx = Math.floor(player.state.position.x / BLOCK_SIZE);
+    const spawnBy = Math.floor(player.state.position.y / BLOCK_SIZE);
+    world.resetStreamCentre(spawnBx, spawnBy);
 
     pipeline.getCamera().setPositionImmediate(
       player.state.position.x,
@@ -703,8 +779,11 @@ export class Game {
 
     this.cursorStackUI?.destroy();
     this.cursorStackUI = null;
+    this._craftingPanel?.destroy();
+    this._craftingPanel = null;
     this.inventoryUI?.destroy();
     this.inventoryUI = null;
+    this._craftingSystem = null;
     this.isInventoryOpen = false;
     this.paused = false;
     this._chatOverlay?.destroy();
@@ -727,8 +806,11 @@ export class Game {
     this.lastRenderWallMs = 0;
     this.pipeline?.destroy();
     this.pipeline = null;
-    this.atlasLoader?.destroy();
-    this.atlasLoader = null;
+    this.blockAtlasLoader?.destroy();
+    this.blockAtlasLoader = null;
+    this.itemAtlasLoader?.destroy();
+    this.itemAtlasLoader = null;
+    this._blockInteractions = null;
     this.world = null;
     this.bus.clear();
   }
@@ -866,6 +948,19 @@ export class Game {
           }
           return;
         }
+        if (msg.type === MsgType.PLAYER_STATE_RELAY && this.world !== null) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this.world.updateRemotePlayer(
+              msg.subjectPeerId,
+              msg.x,
+              msg.y,
+              msg.vx,
+              msg.vy,
+              msg.facingRight,
+            );
+          }
+          return;
+        }
         if (msg.type === MsgType.PLAYER_STATE && this.world !== null) {
           this.world.updateRemotePlayer(
             e.peerId,
@@ -875,6 +970,21 @@ export class Game {
             msg.vy,
             msg.facingRight,
           );
+          if (stNet.status === "connected" && stNet.role === "host") {
+            const localId = this.adapter.getLocalPeerId();
+            if (localId !== null && e.peerId !== localId) {
+              this.adapter.broadcastExcept(e.peerId as PeerId, {
+                type: MsgType.PLAYER_STATE_RELAY,
+                subjectPeerId: e.peerId,
+                x: msg.x,
+                y: msg.y,
+                vx: msg.vx,
+                vy: msg.vy,
+                facingRight: msg.facingRight,
+              });
+            }
+          }
+          return;
         }
       }),
     );
@@ -953,9 +1063,9 @@ export class Game {
             worldTimeMs: this._worldTime.ms,
           });
           const world = this.world;
+          const newPeer = e.peerId as PeerId;
           if (world !== null) {
-            const peerId = e.peerId as PeerId;
-            this._chunkSync.sendAllChunksTo(peerId, (fn) => {
+            this._chunkSync.sendAllChunksTo(newPeer, (fn) => {
               for (const chunk of world.getChunkManager().getLoadedChunks()) {
                 fn({
                   chunkX: chunk.coord.cx,
@@ -965,6 +1075,32 @@ export class Game {
                 });
               }
             });
+          }
+          this._playerStateBroadcaster.invalidateSnapshot();
+          const localId = this.adapter.getLocalPeerId();
+          const em = this.entityManager;
+          if (world !== null && em !== null && localId !== null) {
+            const st = em.getPlayer().state;
+            this.adapter.send(newPeer, {
+              type: MsgType.PLAYER_STATE,
+              playerId: 0,
+              x: st.position.x,
+              y: st.position.y,
+              vx: st.velocity.x,
+              vy: st.velocity.y,
+              facingRight: st.facingRight,
+            });
+            for (const [pid, rp] of world.getRemotePlayers()) {
+              if (pid === newPeer) {
+                continue;
+              }
+              const snap = rp.getNetworkSample();
+              this.adapter.send(newPeer, {
+                type: MsgType.PLAYER_STATE_RELAY,
+                subjectPeerId: pid,
+                ...snap,
+              });
+            }
           }
           const roomCode = state.lanHostPeerId
             ? peerIdToRoomCode(state.lanHostPeerId)
@@ -1243,6 +1379,141 @@ export class Game {
     this.input?.setWorldInputBlocked(this.paused || this.isInventoryOpen);
   }
 
+  /** Crafting recipes loaded after {@link ItemRegistry} is populated (item keys validated). */
+  get recipeRegistry(): RecipeRegistry {
+    return this._recipeRegistry;
+  }
+
+  /** Non-null after base recipes load in {@link Game.initWorld}. */
+  get craftingSystem(): CraftingSystem | null {
+    return this._craftingSystem;
+  }
+
+  private _applyInventoryPanelsOpen(open: boolean): void {
+    this.inventoryUI?.setOpen(open);
+    this._craftingPanel?.setOpen(open);
+  }
+
+  private _getCraftingStationContext(): CraftingStationContext {
+    const w = this.world;
+    const em = this.entityManager;
+    if (w === null || em === null) {
+      return { nearCraftingTable: false };
+    }
+    const reg = w.getRegistry();
+    if (!reg.isRegistered("stratum:crafting_table")) {
+      return { nearCraftingTable: false };
+    }
+    const tableId = reg.getByIdentifier("stratum:crafting_table").id;
+    const feet = em.getPlayer().state.position;
+    return {
+      nearCraftingTable: isNearCraftingTableBlock(
+        w,
+        tableId,
+        feet,
+        CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS,
+      ),
+    };
+  }
+
+  /** Recipes shown in the crafting UI (station-gated by proximity to a crafting table). */
+  private _visibleRecipesForCrafting(): readonly RecipeDefinition[] {
+    const near = this._getCraftingStationContext().nearCraftingTable;
+    return this._recipeRegistry.all().filter(
+      (r) =>
+        r.station === null ||
+        (r.station === RECIPE_STATION_CRAFTING_TABLE && near),
+    );
+  }
+
+  private _visibleCraftingCategories(): readonly string[] {
+    const set = new Set<string>();
+    for (const r of this._visibleRecipesForCrafting()) {
+      set.add(r.category);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }
+
+  private _handleCraftRequest(recipeId: string, batches: number): void {
+    const net = this.adapter.state;
+    if (net.status === "connected" && net.role === "client") {
+      this.bus.emit({
+        type: "craft:result",
+        ok: false,
+        reason: "Crafting as a client will be enabled with host confirmation.",
+      } satisfies GameEvent);
+      return;
+    }
+
+    const crafting = this._craftingSystem;
+    const em = this.entityManager;
+    if (crafting === null || em === null) {
+      this.bus.emit({
+        type: "craft:result",
+        ok: false,
+        reason: "Game is not ready.",
+      } satisfies GameEvent);
+      return;
+    }
+
+    const recipe = crafting.getRecipeById(recipeId);
+    if (recipe === undefined) {
+      this.bus.emit({
+        type: "craft:result",
+        ok: false,
+        reason: "Unknown recipe.",
+      } satisfies GameEvent);
+      return;
+    }
+
+    const inv = em.getPlayer().inventory;
+    const result = crafting.craft(recipe, inv, batches, this._getCraftingStationContext());
+    if (result.ok) {
+      this.bus.emit({
+        type: "craft:result",
+        ok: true,
+        crafted: result.crafted,
+      } satisfies GameEvent);
+    } else {
+      this.bus.emit({
+        type: "craft:result",
+        ok: false,
+        reason: result.reason,
+      } satisfies GameEvent);
+    }
+  }
+
+  private async loadStratumBaseRecipes(itemRegistry: ItemRegistry): Promise<void> {
+    const base = import.meta.env.BASE_URL;
+    const url = `${base}assets/mods/base/recipes.json`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
+    }
+    const raw: unknown = await res.json();
+    const recipes = parseRecipeJson(raw);
+    for (const recipe of recipes) {
+      if (recipe.output.itemId !== undefined && itemRegistry.getByKey(recipe.output.itemId) === undefined) {
+        throw new Error(
+          `Recipe '${recipe.id}' references unknown output item '${recipe.output.itemId}' (load recipes after items are registered).`,
+        );
+      }
+      for (const ing of recipe.ingredients) {
+        if (ing.itemId !== undefined && itemRegistry.getByKey(ing.itemId) === undefined) {
+          throw new Error(
+            `Recipe '${recipe.id}' references unknown item key '${ing.itemId}' (load recipes after items are registered).`,
+          );
+        }
+        if (ing.tag !== undefined && itemRegistry.getByTag(ing.tag).length === 0) {
+          throw new Error(
+            `Recipe '${recipe.id}' references tag '${ing.tag}' with no matching items.`,
+          );
+        }
+      }
+    }
+    this._recipeRegistry.registerAll(recipes);
+  }
+
   private async loadStratumCoreBlocks(
     registry: BlockRegistry,
     progressCallback?: (loaded: number, total: number, file: string) => void,
@@ -1259,6 +1530,48 @@ export class Game {
       const raw: unknown = await res.json();
       const def = parseBlockJson(raw);
       registry.register(def);
+      loaded++;
+      progressCallback?.(loaded, total, file);
+    }
+  }
+
+  /** Loads `assets/mods/stratum-core/items/*.json` and registers items. */
+  private async loadStratumCoreItems(
+    registry: BlockRegistry,
+    itemRegistry: ItemRegistry,
+    progressCallback?: (loaded: number, total: number, file: string) => void,
+  ): Promise<void> {
+    const base = import.meta.env.BASE_URL;
+    const total = STRATUM_CORE_ITEM_FILES.length;
+    let loaded = 0;
+    for (const file of STRATUM_CORE_ITEM_FILES) {
+      const url = `${base}assets/mods/stratum-core/items/${file}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
+      }
+      const raw: unknown = await res.json();
+      const def = parseItemJson(raw);
+      let placesBlockId: number | undefined;
+      if (def.placesBlockIdentifier !== undefined) {
+        const b = registry.getByIdentifier(def.placesBlockIdentifier);
+        if (b === undefined) {
+          throw new Error(
+            `Item ${def.identifier}: unknown places_block "${def.placesBlockIdentifier}"`,
+          );
+        }
+        placesBlockId = b.id;
+      }
+      itemRegistry.register({
+        key: def.identifier,
+        textureName: def.textureKey,
+        displayName: def.displayName,
+        maxStack: def.maxStack,
+        placesBlockId,
+        toolType: def.toolType,
+        toolTier: def.toolTier,
+        toolSpeed: def.toolSpeed,
+      });
       loaded++;
       progressCallback?.(loaded, total, file);
     }
@@ -1285,7 +1598,7 @@ export class Game {
           this.bus.emit({ type: "ui:chat-set-open", open: false } satisfies GameEvent);
         } else if (this.isInventoryOpen) {
           this.isInventoryOpen = false;
-          this.inventoryUI?.setOpen(false);
+          this._applyInventoryPanelsOpen(false);
           input.setWorldInputBlocked(false);
         } else {
           this.paused = !this.paused;
@@ -1309,7 +1622,7 @@ export class Game {
       if (input.isJustPressed("inventory")) {
         this.isInventoryOpen = !this.isInventoryOpen;
         input.setWorldInputBlocked(this.isInventoryOpen);
-        this.inventoryUI?.setOpen(this.isInventoryOpen);
+        this._applyInventoryPanelsOpen(this.isInventoryOpen);
       }
 
       this._worldTime.tick(FIXED_TIMESTEP_MS);
@@ -1345,6 +1658,12 @@ export class Game {
         },
         entityManager.getPlayer().inventory,
       );
+
+      if (this._blockInteractions !== null && role !== "client") {
+        const pbx = Math.floor(pl.x / BLOCK_SIZE);
+        const pby = Math.floor(pl.y / BLOCK_SIZE);
+        this._blockInteractions.tick(dtSec, pbx, pby);
+      }
 
       input.postUpdate();
 
@@ -1421,6 +1740,7 @@ export class Game {
     if (this.entityManager !== null && this.inventoryUI !== null) {
       const pl = this.entityManager.getPlayer();
       this.inventoryUI.update(pl.inventory, pl.state.hotbarSlot);
+      this._craftingPanel?.update(pl.inventory);
     }
     this.cursorStackUI?.sync();
     if (this.entityManager !== null && this.breakOverlay !== null) {

@@ -7,6 +7,7 @@ import { MAX_STACK_DEFAULT } from '../core/itemDefinition';
 export class ItemRegistry {
   private readonly _byId = new Map<ItemId, ItemDefinition>();
   private readonly _byKey = new Map<string, ItemDefinition>();
+  private readonly _byTag = new Map<string, ItemDefinition[]>();
   private _nextId: ItemId = 1 as ItemId;
 
   /**
@@ -30,10 +31,26 @@ export class ItemRegistry {
       displayName: def.displayName,
       maxStack: def.maxStack,
       placesBlockId: def.placesBlockId,
+      iconSheet: def.iconSheet,
+      toolType: def.toolType,
+      toolTier: def.toolTier,
+      toolSpeed: def.toolSpeed,
+      tags: def.tags,
     };
 
     this._byId.set(id, full);
     this._byKey.set(full.key, full);
+
+    if (full.tags) {
+      for (const tag of full.tags) {
+        let list = this._byTag.get(tag);
+        if (!list) {
+          list = [];
+          this._byTag.set(tag, list);
+        }
+        list.push(full);
+      }
+    }
 
     if (id >= this._nextId) {
       this._nextId = (id + 1) as ItemId;
@@ -48,6 +65,11 @@ export class ItemRegistry {
 
   getByKey(key: string): ItemDefinition | undefined {
     return this._byKey.get(key);
+  }
+
+  /** All items with a given tag (empty array if none). */
+  getByTag(tag: string): readonly ItemDefinition[] {
+    return this._byTag.get(tag) ?? [];
   }
 
   /** Iterate all registered items. */
@@ -79,6 +101,7 @@ export function registerBlockItems(
       displayName: block.displayName ?? block.identifier,
       maxStack: MAX_STACK_DEFAULT,
       placesBlockId: block.id,
+      tags: (block as BlockDefinitionBase).tags,
     });
   }
 }

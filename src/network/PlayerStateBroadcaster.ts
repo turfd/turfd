@@ -44,6 +44,11 @@ export class PlayerStateBroadcaster {
     this._active = false;
   }
 
+  /** Next tick sends even if nothing changed (e.g. a peer joined and needs a pose resync). */
+  invalidateSnapshot(): void {
+    this._hasLast = false;
+  }
+
   /**
    * Call from fixed update (e.g. every 2nd tick at 60 Hz ≈ 30 Hz) while connected.
    */

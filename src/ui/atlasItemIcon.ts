@@ -1,50 +1,40 @@
-/** Atlas JSON helpers for DOM inventory / cursor item icons. */
+/** DOM inventory / cursor icons: URLs from `block_texture_manifest.json` + `item_texture_manifest.json`. */
 
-/** Raw atlas frame entry from `atlas.json` (TexturePacker-style). */
-export type AtlasFrameEntry = {
-  readonly frame: { readonly x: number; readonly y: number; readonly w: number; readonly h: number };
-};
+import type { ItemDefinition } from "../core/itemDefinition";
+import { resolveTextureMapKey } from "../core/textureKeyResolve";
 
-export type AtlasJson = {
-  readonly frames: Record<string, AtlasFrameEntry>;
-  readonly meta: {
-    readonly image: string;
-    readonly size: { readonly w: number; readonly h: number };
-  };
-};
-
-export type AtlasIconLayout = {
-  atlasImageUrl: string;
-  atlasW: number;
-  atlasH: number;
-  frames: Record<string, AtlasFrameEntry>;
-};
+/** Resolved absolute URLs keyed by manifest texture name. */
+export type ItemIconUrlLookup = ReadonlyMap<string, string>;
 
 /**
- * Returns inline CSS for a div showing one atlas cell scaled to `displayPx` (square).
+ * Inline CSS for a square icon div (slot sets width/height via `--inv-slot-icon-px`).
  */
-export function getItemIconStyle(
-  textureName: string,
-  layout: AtlasIconLayout,
-  displayPx: number,
+export function getItemIconStyleFromUrl(
+  imageUrl: string,
+  _displayPx: number,
 ): string {
-  const f = layout.frames[textureName];
-  if (f === undefined) {
-    return "";
-  }
-  const w = f.frame.w;
-  const scale = displayPx / w;
-  const bgW = layout.atlasW * scale;
-  const bgH = layout.atlasH * scale;
-  const px = -f.frame.x * scale;
-  const py = -f.frame.y * scale;
-  const url = layout.atlasImageUrl.replace(/'/g, "\\'");
+  const url = imageUrl.replace(/'/g, "\\'");
   return [
     `background-image:url('${url}')`,
-    `background-size:${bgW}px ${bgH}px`,
-    `background-position:${px}px ${py}px`,
+    "background-size:contain",
+    "background-position:center",
     "background-repeat:no-repeat",
     "image-rendering:pixelated",
     "image-rendering:crisp-edges",
   ].join(";");
+}
+
+export function getItemIconStyleForDefinition(
+  def: Pick<ItemDefinition, "textureName">,
+  urlLookup: ItemIconUrlLookup | null,
+  displayPx: number,
+): string {
+  if (urlLookup === null) {
+    return "";
+  }
+  const resolved = resolveTextureMapKey(urlLookup, def.textureName);
+  if (resolved === undefined) {
+    return "";
+  }
+  return getItemIconStyleFromUrl(resolved, displayPx);
 }

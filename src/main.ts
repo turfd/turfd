@@ -83,6 +83,7 @@ async function main(): Promise<void> {
           x: meta.playerX,
           y: meta.playerY,
           hotbarSlot: meta.hotbarSlot,
+          inventory: meta.playerInventory,
         };
         initialWorldTimeMs = meta.worldTimeMs ?? 0;
         localStorage.setItem("stratum_worldUuid", worldUuid);
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
           x: meta.playerX,
           y: meta.playerY,
           hotbarSlot: meta.hotbarSlot,
+          inventory: meta.playerInventory,
         };
         initialWorldTimeMs = meta.worldTimeMs ?? 0;
         localStorage.setItem("stratum_worldUuid", worldUuid);

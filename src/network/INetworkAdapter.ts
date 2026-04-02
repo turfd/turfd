@@ -64,6 +64,11 @@ export interface INetworkAdapter {
   broadcast(msg: NetworkMessage): void;
 
   /**
+   * Send to every open connection except `excludePeerId` (null = all peers). Host uses this to relay client poses.
+   */
+  broadcastExcept(excludePeerId: PeerId | null, msg: NetworkMessage): void;
+
+  /**
    * Register a handler for inbound messages.
    * The adapter calls this exactly once per received message.
    * Replaces any previously registered handler.
