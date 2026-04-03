@@ -1,3 +1,5 @@
+import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
+
 export type LoadingProgressUpdate = {
   stage: string;
   detail?: string;
@@ -24,6 +26,9 @@ const LOADING_TIPS: string[] = [
 ];
 
 const STYLE_ID = "stratum-world-loading-styles";
+
+/** Discrete bar steps so the fill reads as chunky / pixel-style, not a smooth gradient strip. */
+const BAR_PIXEL_SEGMENTS = 32;
 
 const TIP_ROTATE_MS = 4500;
 /** Smoothing factor per frame (~60fps → comfortable ramp). */
@@ -178,19 +183,32 @@ function injectLoadingStyles(base: string): void {
 
     .stratum-loading-track {
       width: 100%;
-      height: 10px;
-      border-radius: var(--tl-radius-sm);
-      corner-shape: squircle;
-      border: 1px solid var(--tl-border);
+      height: 12px;
+      border-radius: 0;
+      border: 2px solid var(--tl-border-strong);
       background: var(--tl-surface-deep);
       overflow: hidden;
+      box-sizing: border-box;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
     }
 
     .stratum-loading-fill {
       height: 100%;
       width: 0%;
-      background: var(--tl-ink-mid);
+      border-radius: 0;
       transform-origin: left center;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: repeating-linear-gradient(
+        90deg,
+        #c8c8cc 0px,
+        #c8c8cc 5px,
+        #a8a8ae 5px,
+        #a8a8ae 8px
+      );
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
     }
 
     .stratum-loading-percent {
@@ -288,7 +306,7 @@ export class WorldLoadingScreen {
     brand.className = "stratum-loading-brand";
     const logo = document.createElement("img");
     logo.className = "stratum-loading-logo";
-    logo.src = `${base}assets/textures/logo.png`;
+    logo.src = stratumCoreTextureAssetUrl("logo.png");
     logo.alt = "Stratum";
     const kicker = document.createElement("p");
     kicker.className = "stratum-loading-kicker";
@@ -386,9 +404,10 @@ export class WorldLoadingScreen {
       if (this.finishing && 100 - this.shownPct < 0.25) {
         this.shownPct = 100;
       }
-      const display = Math.round(this.shownPct);
+      const seg = 100 / BAR_PIXEL_SEGMENTS;
+      const display = Math.min(100, Math.round(this.shownPct / seg) * seg);
       this.barFillEl.style.width = `${display}%`;
-      this.percentEl.textContent = `${display}%`;
+      this.percentEl.textContent = `${Math.round(display)}%`;
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);

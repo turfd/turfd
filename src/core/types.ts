@@ -1,4 +1,11 @@
 import type { NetworkMessage } from "../network/protocol/messages";
+import type {
+  ModComment,
+  ModDetailEntry,
+  ModListEntry,
+  ModSortBy,
+  ModTypeFilter,
+} from "../mods/workshopTypes";
 
 /**
  * Application-wide events for EventBus (extend as systems are added).
@@ -102,4 +109,66 @@ export type GameEvent =
   | { type: "game:chat-closed" }
   | { type: "craft:request"; recipeId: string; batches: number }
   | { type: "craft:result"; ok: true; crafted: number }
-  | { type: "craft:result"; ok: false; reason: string };
+  | { type: "craft:result"; ok: false; reason: string }
+  | { type: "mod:install-started"; modId: string }
+  | { type: "mod:install-progress"; modId: string; percent: number }
+  | { type: "mod:install-complete"; modId: string }
+  | { type: "mod:install-error"; modId: string; message: string }
+  | { type: "mod:uninstalled"; modId: string }
+  | {
+      type: "workshop:request-list";
+      offset: number;
+      modType: ModTypeFilter;
+      sortBy: ModSortBy;
+      query?: string;
+    }
+  | {
+      type: "workshop:install-requested";
+      recordId: string;
+      pinToWorldUuid?: string;
+    }
+  | { type: "workshop:library-request-updates" }
+  | {
+      type: "workshop:library-updates-result";
+      updates: readonly {
+        modId: string;
+        latestRecordId: string;
+        latestVersion: string;
+        currentVersion: string;
+      }[];
+    }
+  | { type: "workshop:install-record-requested"; recordId: string }
+  | { type: "workshop:uninstall-requested"; modId: string; version: string }
+  | {
+      type: "workshop:publish-requested";
+      zipBytes: Uint8Array;
+      coverBytes: Uint8Array;
+      displayName: string;
+    }
+  | { type: "workshop:open-detail"; recordId: string }
+  | { type: "workshop:post-comment"; recordId: string; body: string }
+  | { type: "workshop:post-rating"; recordId: string; stars: number }
+  | {
+      type: "workshop:list-result";
+      records: readonly ModListEntry[];
+      offset: number;
+      hasMore: boolean;
+    }
+  | {
+      type: "workshop:detail-result";
+      record: ModDetailEntry;
+      comments: readonly ModComment[];
+    }
+  | { type: "workshop:publish-result"; record: ModListEntry }
+  | { type: "workshop:publish-error"; message: string }
+  | {
+      type: "workshop:comment-result";
+      recordId: string;
+      comments: readonly ModComment[];
+    }
+  | { type: "workshop:request-owned" }
+  | { type: "workshop:owned-result"; records: readonly ModListEntry[] }
+  | { type: "workshop:delete-requested"; recordId: string }
+  | { type: "workshop:deleted"; recordId: string }
+  | { type: "workshop:set-published-requested"; recordId: string; isPublished: boolean }
+  | { type: "workshop:error"; message: string };

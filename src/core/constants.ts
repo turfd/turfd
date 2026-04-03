@@ -23,14 +23,32 @@ export const RECIPE_STATION_CRAFTING_TABLE = "stratum:crafting_table";
 /** Chebyshev radius from player feet block cell to a crafting table for station recipes. */
 export const CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS = 4;
 
+/**
+ * Upper bound for Pixi resolution and CSS sky canvas backing store. Cuts GPU/CPU cost on
+ * high-DPR phones and 4K displays without changing layout (CSS still fills the viewport).
+ */
+export const MAX_RENDER_DEVICE_PIXEL_RATIO = 2;
+
 /** Base seconds per hardness unit for breaking. */
 export const BREAK_TIME_BASE = 0.5;
 
 /** Blocks per chunk edge (square chunks). */
 export const CHUNK_SIZE = 32;
 
-/** Keep loaded chunks within this Chebyshev distance (chunks) from the view centre. */
+/** Chunks within this Chebyshev distance of the stream centre get rendered (meshes). */
 export const VIEW_DISTANCE_CHUNKS = 8;
+
+/**
+ * Chunks within this Chebyshev distance of the stream centre stay loaded for simulation
+ * (block ticks, persistence reads). Must be >= {@link VIEW_DISTANCE_CHUNKS}.
+ */
+export const SIMULATION_DISTANCE_CHUNKS = 12;
+
+/**
+ * Chunk columns with |cx| <= this radius (world spawn at block x=0) are never evicted
+ * once loaded, so the origin strip keeps simulating when the player is far away.
+ */
+export const SPAWN_CHUNK_RADIUS = 5;
 
 /**
  * Blocks a player must move into a new chunk (per axis) before streaming shifts that axis.
@@ -117,6 +135,12 @@ export const INVENTORY_SIZE = 36;
 /** Number of hotbar slots. */
 export const HOTBAR_SIZE = 9;
 
+/** Player health (integer HP). Each heart icon represents 2 HP. */
+export const PLAYER_MAX_HEALTH = 10;
+
+/** Hearts shown in the HUD (2 HP per heart, spans {@link PLAYER_MAX_HEALTH}). */
+export const PLAYER_HEART_COUNT = 5;
+
 /** Shared duration (ms) for inventory panel + crafting sidebar open/close CSS transitions. */
 export const INVENTORY_ANIM_MS = 300;
 
@@ -129,4 +153,16 @@ export const WORLDGEN_NO_COLLIDE = 0x01;
 /** Account username length (profiles table CHECK aligns). */
 export const USERNAME_MIN_LENGTH = 3;
 export const USERNAME_MAX_LENGTH = 20;
+
+/** IndexedDB object store for cached workshop ZIP contents (see {@link IndexedDBStore}). */
+export const MOD_CACHE_STORE = "mod-cache" as const;
+
+/** Max workshop .zip upload / install size (bytes). */
+export const MOD_MAX_ZIP_SIZE = 2 * 1024 * 1024;
+
+/** Max workshop cover image size (bytes). */
+export const MOD_MAX_COVER_SIZE = 512 * 1024;
+
+/** Workshop directory page size (list RPC). */
+export const MOD_PAGE_SIZE = 20;
 

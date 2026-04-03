@@ -120,6 +120,72 @@
   transform: translateY(0);
 }
 
+#inventory-ui-root .inv-hearts-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 26px;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-heart-slot {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+#inventory-ui-root .inv-heart-glyph {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: "M5x7", monospace;
+  font-size: 22px;
+  line-height: 1;
+  -webkit-font-smoothing: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+#inventory-ui-root .inv-heart-glyph--empty {
+  color: rgba(60, 60, 64, 0.92);
+  text-shadow:
+    0 0 2px #000,
+    1px 1px 0 #1a1a1c;
+}
+
+#inventory-ui-root .inv-heart-glyph--full {
+  color: #e53935;
+  text-shadow:
+    0 0 2px #000,
+    1px 1px 0 #7a1515;
+}
+
+#inventory-ui-root .inv-heart-clip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-heart-clip--full {
+  width: 100%;
+}
+
+#inventory-ui-root .inv-heart-clip--half {
+  width: 50%;
+}
+
+#inventory-ui-root .inv-heart-clip--empty {
+  width: 0;
+}
+
 #inventory-ui-root .inv-hotbar-slots {
   display: flex;
   flex-direction: row;
@@ -161,30 +227,41 @@
   pointer-events: none;
 }
 
+@keyframes inv-slot-icon-bump {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  45% {
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+#inventory-ui-root .inv-slot-icon.inv-slot-icon--bump {
+  animation: inv-slot-icon-bump 0.2s cubic-bezier(0.34, 1.35, 0.64, 1) forwards;
+}
+
 #inventory-ui-root .inv-slot-count {
   position: absolute;
   right: 4px;
   bottom: 2px;
   font-family: "M5x7", monospace;
   font-size: 24px;
-  font-weight: 700;
+  font-weight: normal;
+  font-synthesis: none;
   color: #f2f2f7;
-  text-shadow:
-    1px 0 0 #1c1c1e,
-    -1px 0 0 #1c1c1e,
-    0 1px 0 #1c1c1e,
-    0 -1px 0 #1c1c1e;
+  /* M5x7 is bitmap-only (normal weight); avoid 4-way shadow + bold — both blur faux-bold glyphs. */
+  -webkit-font-smoothing: none;
+  text-shadow: 1px 1px 0 #0d0d0d;
   line-height: 1;
   pointer-events: none;
 }
 
 #inventory-ui-root .inv-slot-count.inv-slot-count--white {
   color: #ffffff;
-  text-shadow:
-    1px 0 0 #2c2c2e,
-    -1px 0 0 #2c2c2e,
-    0 1px 0 #2c2c2e,
-    0 -1px 0 #2c2c2e;
+  text-shadow: 1px 1px 0 #1a1a1c;
 }
 
 #inventory-ui-root .inv-overlay {
@@ -532,5 +609,51 @@
 
   #inventory-ui-root .inv-hotbar-item-name.inv-hotbar-item-name--visible {
     transform: none;
+  }
+
+  #inventory-ui-root .inv-slot-icon.inv-slot-icon--bump {
+    animation: none;
+  }
+}
+
+/* Cursor stack (mount is outside #inventory-ui-root) */
+#cursor-stack-ui {
+  transition: opacity 0.12s ease;
+}
+
+#cursor-stack-ui.cursor-stack-ui--pickup {
+  animation: cursor-stack-pickup 0.18s cubic-bezier(0.34, 1.35, 0.64, 1) forwards;
+}
+
+#cursor-stack-ui.cursor-stack-ui--place {
+  animation: cursor-stack-place 0.14s ease forwards;
+}
+
+@keyframes cursor-stack-pickup {
+  0% {
+    transform: scale(0.82);
+    opacity: 0.65;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes cursor-stack-place {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.88);
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #cursor-stack-ui.cursor-stack-ui--pickup,
+  #cursor-stack-ui.cursor-stack-ui--place {
+    animation: none;
   }
 }

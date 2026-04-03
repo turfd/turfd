@@ -11,6 +11,7 @@ import type { GameEvent } from "../core/types";
 import { WORLDGEN_NO_COLLIDE } from "../core/constants";
 import type { BlockRegistry } from "./blocks/BlockRegistry";
 import type { World } from "./World";
+import { forEachDeciduousBushCell, forEachSpruceBushCell } from "./gen/treeCanopy";
 
 // ---------------------------------------------------------------------------
 // Tuning knobs
@@ -57,6 +58,9 @@ const OAK_CLEARANCE = 7;
 /** Vertical clearance required above sapling for spruce tree growth. */
 const SPRUCE_CLEARANCE = 10;
 
+/** Vertical clearance required above sapling for birch tree growth (taller than oak). */
+const BIRCH_CLEARANCE = 9;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -89,10 +93,14 @@ export class BlockInteractions {
   private readonly airId: number;
   private readonly oakSaplingId: number;
   private readonly spruceSaplingId: number;
+  private readonly birchSaplingId: number;
   private readonly saplingIds: ReadonlySet<number>;
   private readonly oakLogId: number;
   private readonly spruceLogId: number;
-  private readonly leavesId: number;
+  private readonly birchLogId: number;
+  private readonly oakLeavesId: number;
+  private readonly spruceLeavesId: number;
+  private readonly birchLeavesId: number;
 
   constructor(world: World, registry: BlockRegistry, bus: EventBus) {
     this.world = world;
@@ -104,17 +112,28 @@ export class BlockInteractions {
     this.airId = registry.getByIdentifier("stratum:air").id;
     this.oakSaplingId = registry.getByIdentifier("stratum:oak_sapling").id;
     this.spruceSaplingId = registry.getByIdentifier("stratum:spruce_sapling").id;
-    this.saplingIds = new Set([this.oakSaplingId, this.spruceSaplingId]);
+    this.birchSaplingId = registry.getByIdentifier("stratum:birch_sapling").id;
+    this.saplingIds = new Set([
+      this.oakSaplingId,
+      this.spruceSaplingId,
+      this.birchSaplingId,
+    ]);
     this.oakLogId = registry.getByIdentifier("stratum:oak_log").id;
     this.spruceLogId = registry.getByIdentifier("stratum:spruce_log").id;
-    this.leavesId = registry.getByIdentifier("stratum:leaves").id;
+    this.birchLogId = registry.getByIdentifier("stratum:birch_log").id;
+    this.oakLeavesId = registry.getByIdentifier("stratum:oak_leaves").id;
+    this.spruceLeavesId = registry.getByIdentifier("stratum:spruce_leaves").id;
+    this.birchLeavesId = registry.getByIdentifier("stratum:birch_leaves").id;
 
     this.leafIds = new Set([
-      registry.getByIdentifier("stratum:leaves").id,
+      this.oakLeavesId,
+      this.spruceLeavesId,
+      this.birchLeavesId,
     ]);
     this.logIds = new Set([
       registry.getByIdentifier("stratum:oak_log").id,
       registry.getByIdentifier("stratum:spruce_log").id,
+      registry.getByIdentifier("stratum:birch_log").id,
     ]);
 
     bus.on("game:block-changed", (e) => this.onBlockChanged(e));
@@ -328,21 +347,29 @@ export class BlockInteractions {
     const blockId = this.world.getBlock(wx, wy).id;
     if (!this.saplingIds.has(blockId)) return;
 
-    const isSpruce = blockId === this.spruceSaplingId;
-
-    if (isSpruce) {
+    if (blockId === this.spruceSaplingId) {
       if (!this.canGrowSpruce(wx, wy)) {
         this.retrySapling(wx, wy);
         return;
       }
       this.growSpruceTree(wx, wy);
-    } else {
-      if (!this.canGrowOak(wx, wy)) {
+      return;
+    }
+
+    if (blockId === this.birchSaplingId) {
+      if (!this.canGrowBirch(wx, wy)) {
         this.retrySapling(wx, wy);
         return;
       }
-      this.growOakTree(wx, wy);
+      this.growBirchTree(wx, wy);
+      return;
     }
+
+    if (!this.canGrowOak(wx, wy)) {
+      this.retrySapling(wx, wy);
+      return;
+    }
+    this.growOakTree(wx, wy);
   }
 
   private retrySapling(wx: number, wy: number): void {
@@ -383,6 +410,21 @@ export class BlockInteractions {
     return true;
   }
 
+  private canGrowBirch(wx: number, wy: number): boolean {
+    for (let dy = 1; dy <= BIRCH_CLEARANCE; dy++) {
+      const blk = this.world.getBlock(wx, wy + dy);
+      if (blk.id !== this.airId && !blk.replaceable) return false;
+    }
+    for (let dy = 3; dy <= BIRCH_CLEARANCE; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        if (dx === 0) continue;
+        const blk = this.world.getBlock(wx + dx, wy + dy);
+        if (blk.id !== this.airId && !blk.replaceable) return false;
+      }
+    }
+    return true;
+  }
+
   // -- Tree placement ------------------------------------------------------
 
   private growOakTree(wx: number, wy: number): void {
@@ -393,17 +435,31 @@ export class BlockInteractions {
 
     this.world.setBlock(wx, wy, this.airId);
 
-    for (let dy = -radiusY; dy <= radiusY; dy++) {
-      for (let dx = -radiusX; dx <= radiusX; dx++) {
-        const nx = dx / radiusX;
-        const ny = dy / radiusY;
-        if (nx * nx + ny * ny > 1) continue;
-        this.placeTreeBlock(wx + dx, canopyCy + dy, this.leavesId);
-      }
-    }
+    forEachDeciduousBushCell(wx, canopyCy, radiusX, radiusY, (cx, cy) => {
+      this.placeTreeBlock(cx, cy, this.oakLeavesId);
+    });
 
     for (let dy = 0; dy < trunkHeight; dy++) {
       this.placeTreeBlock(wx, wy + dy + 1, this.oakLogId);
+    }
+
+    this.emitBlockChanged(wx, wy, this.airId);
+  }
+
+  private growBirchTree(wx: number, wy: number): void {
+    const trunkHeight = 5;
+    const canopyCy = wy + 6;
+    const radiusX = 2;
+    const radiusY = 2;
+
+    this.world.setBlock(wx, wy, this.airId);
+
+    forEachDeciduousBushCell(wx, canopyCy, radiusX, radiusY, (cx, cy) => {
+      this.placeTreeBlock(cx, cy, this.birchLeavesId);
+    });
+
+    for (let dy = 0; dy < trunkHeight; dy++) {
+      this.placeTreeBlock(wx, wy + dy + 1, this.birchLogId);
     }
 
     this.emitBlockChanged(wx, wy, this.airId);
@@ -417,13 +473,9 @@ export class BlockInteractions {
     this.world.setBlock(wx, wy, this.airId);
 
     const canopyBottom = wy + canopyStartDy;
-    for (let i = 0; i < canopyLayers.length; i++) {
-      const cy = canopyBottom + i;
-      const halfW = canopyLayers[canopyLayers.length - 1 - i]!;
-      for (let dx = -halfW; dx <= halfW; dx++) {
-        this.placeTreeBlock(wx + dx, cy, this.leavesId);
-      }
-    }
+    forEachSpruceBushCell(wx, canopyBottom, canopyLayers, (cx, cy) => {
+      this.placeTreeBlock(cx, cy, this.spruceLeavesId);
+    });
 
     for (let dy = 1; dy <= trunkHeight; dy++) {
       this.placeTreeBlock(wx, wy + dy, this.spruceLogId);
@@ -434,7 +486,7 @@ export class BlockInteractions {
 
   private placeTreeBlock(wx: number, wy: number, blockId: number): void {
     const existing = this.world.getBlock(wx, wy);
-    if (existing.id !== this.airId && !existing.replaceable && existing.id !== this.leavesId) {
+    if (existing.id !== this.airId && !existing.replaceable && !this.leafIds.has(existing.id)) {
       return;
     }
     this.world.setBlock(wx, wy, blockId);

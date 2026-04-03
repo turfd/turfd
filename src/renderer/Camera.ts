@@ -114,14 +114,22 @@ export class Camera {
     }
     const z = this.getEffectiveZoom();
     this.worldRoot.scale.set(z);
+    // Integer pixel translation + block-aligned zoom avoids 1px seams between tiles
+    // (fractional screen coords + nearest-neighbor sampling shows gaps at certain camera positions).
     this.worldRoot.position.set(
-      this.screenW * 0.5 - this.posX * z,
-      this.screenH * 0.5 - this.posY * z,
+      Math.round(this.screenW * 0.5 - this.posX * z),
+      Math.round(this.screenH * 0.5 - this.posY * z),
     );
   }
 
   private getEffectiveZoom(): number {
     const zoomForWidthLimit = this.screenW / (MAX_VISIBLE_BLOCKS_X * BLOCK_SIZE);
-    return Math.max(this.options.minZoom, this.zoomLevel, zoomForWidthLimit);
+    let z = Math.max(this.options.minZoom, this.zoomLevel, zoomForWidthLimit);
+    z = Math.min(this.options.maxZoom, z);
+    // Snap zoom so each block is an integer number of physical pixels wide; keeps chunk/tile edges on the pixel grid.
+    const pixelsPerBlock = BLOCK_SIZE * z;
+    const snappedPpb = Math.max(1, Math.round(pixelsPerBlock));
+    z = snappedPpb / BLOCK_SIZE;
+    return Math.min(this.options.maxZoom, Math.max(this.options.minZoom, z));
   }
 }

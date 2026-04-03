@@ -4,6 +4,7 @@
 import { Assets, Graphics, Sprite, Texture } from "pixi.js";
 import type { AudioEngine } from "../audio/AudioEngine";
 import { BLOCK_SIZE, REACH_BLOCKS, PLAYER_HEIGHT, PLAYER_WIDTH } from "../core/constants";
+import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 import type { EventBus } from "../core/EventBus";
 import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
@@ -244,7 +245,7 @@ export class EntityManager {
   }
 
   private async loadAimLineSprite(pipeline: RenderPipeline): Promise<void> {
-    const pointerLineUrl = `${import.meta.env.BASE_URL}assets/textures/GUI/pointer_line.png`;
+    const pointerLineUrl = stratumCoreTextureAssetUrl("GUI/pointer_line.png");
     try {
       const pointerLineTexture =
         (await Assets.load<Texture>(pointerLineUrl)) ??

@@ -1,0 +1,20 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": { "identifier": "stratum:birch_planks" },
+    "components": {
+      "stratum:display_name": "Birch Planks",
+      "stratum:texture": { "all": "birch_planks" },
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 2,
+      "stratum:harvest_tool": "axe",
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:material": "wood",
+      "stratum:loot_table": "stratum:birch_planks",
+      "stratum:tags": ["stratum:planks"]
+    }
+  }
+}

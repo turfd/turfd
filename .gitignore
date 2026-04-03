@@ -1,2 +1,5 @@
 /docs
 /node_modules
+
+# Local Vite-style secrets for dev (see public/secrets.local.example.json)
+/public/secrets.local.json

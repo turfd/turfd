@@ -27,7 +27,7 @@ function injectStyles(): void {
     .stratum-profile-switch {
       margin-top: 14px;
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(20px + var(--mm-m5-nudge, 4px));
       line-height: 1.45;
       color: var(--mm-ink-mid, #aeaeb2);
     }
@@ -37,7 +37,7 @@ function injectStyles(): void {
       color: var(--mm-ink, #f2f2f7);
       cursor: pointer;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       text-decoration: underline;
@@ -55,7 +55,7 @@ function injectStyles(): void {
     }
     .mm-profile-feedback--ok {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(19px + var(--mm-m5-nudge, 4px));
       color: #5daf8c;
       min-height: 1.25em;
       margin-top: 10px;

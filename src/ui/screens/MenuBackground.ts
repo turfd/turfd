@@ -15,9 +15,15 @@ import {
   CHUNK_SIZE,
   SKY_LIGHT_MAX,
 } from "../../core/constants";
-import { parseBlockJson } from "../../mods/parseBlockJson";
-import { STRATUM_CORE_BLOCK_FILES } from "../../mods/stratumCoreManifest";
-import { BLOCK_TEXTURE_MANIFEST_PATH } from "../../core/textureManifest";
+import { STRATUM_CORE_BEHAVIOR_PACK_PATH } from "../../mods/internalPackManifest";
+import {
+  fetchBehaviorPackManifest,
+  loadBehaviorPackBlocks,
+} from "../../mods/loadInternalBehaviorPack";
+import {
+  BLOCK_TEXTURE_MANIFEST_PATH,
+  stratumCoreTextureAssetUrl,
+} from "../../core/textureManifest";
 import { AtlasLoader } from "../../renderer/AtlasLoader";
 import { OcclusionTexture } from "../../renderer/lighting/OcclusionTexture";
 import { IndirectLightTexture } from "../../renderer/lighting/IndirectLightTexture";
@@ -280,6 +286,13 @@ export class MenuBackground {
   private panRangeXPx = 0;
   private zoom = MIN_ZOOM;
 
+  /** Surface block Y at menu mid-X; needed to recompute layout on window resize. */
+  private surfaceYForLayout = 0;
+
+  /** Physical backbuffer size; when it changes, albedo RT + zoom must update. */
+  private lastRendererW = 0;
+  private lastRendererH = 0;
+
   private lastCenterCX = -9999;
   private lastCenterCY = -9999;
 
@@ -299,7 +312,7 @@ export class MenuBackground {
     // Start loading bg.png in parallel with PixiJS init (.catch so a later throw
     // in init() does not leave an unhandled rejection if the image errors first)
     const bgPromise = this.loadBgImage(
-      `${import.meta.env.BASE_URL}assets/textures/bg.png`,
+      stratumCoreTextureAssetUrl("bg.png"),
     ).catch(() => null);
 
     // -- PixiJS init --------------------------------------------------------
@@ -331,14 +344,9 @@ export class MenuBackground {
 
     const registry = new BlockRegistry();
     const base = import.meta.env.BASE_URL;
-    const blockDefs = await Promise.all(
-      STRATUM_CORE_BLOCK_FILES.map(async (file) => {
-        const res = await fetch(`${base}assets/mods/stratum-core/blocks/${file}`);
-        if (!res.ok) throw new Error(`Block load failed: ${file}`);
-        return parseBlockJson(await res.json());
-      }),
-    );
-    for (const def of blockDefs) registry.register(def);
+    const behBase = `${base}${STRATUM_CORE_BEHAVIOR_PACK_PATH}`;
+    const behManifest = await fetchBehaviorPackManifest(behBase);
+    await loadBehaviorPackBlocks(registry, behBase, behManifest);
     if (this.destroyed) { app.destroy(); return; }
 
     // -- World generation ---------------------------------------------------

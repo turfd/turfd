@@ -14,6 +14,7 @@ import {
   RECIPE_STATION_CRAFTING_TABLE,
   TORCH_HELD_LIGHT_INTENSITY,
   TORCH_HELD_LIGHT_RADIUS_BLOCKS,
+  VIEW_DISTANCE_CHUNKS,
   WORLD_Y_MAX,
 } from "./constants";
 import { EventBus } from "./EventBus";
@@ -24,17 +25,27 @@ import { EntityManager } from "../entities/EntityManager";
 import { InputManager } from "../input/InputManager";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
-import lootTablesJson from "../items/lootTables/blocks.loot.json";
-import { parseLootTablesJson } from "../mods/parseLootTablesJson";
-import type { IndexedDBStore, WorldMetadata } from "../persistence/IndexedDBStore";
-import { SaveGame } from "../persistence/SaveGame";
-import { parseBlockJson } from "../mods/parseBlockJson";
-import { parseItemJson } from "../mods/parseItemJson";
-import { parseRecipeJson } from "../mods/parseRecipeJson";
+import type { IModRepository } from "../mods/IModRepository";
+import { STRATUM_CORE_BEHAVIOR_PACK_PATH } from "../mods/internalPackManifest";
 import {
-  STRATUM_CORE_BLOCK_FILES,
-  STRATUM_CORE_ITEM_FILES,
-} from "../mods/stratumCoreManifest";
+  fetchBehaviorPackManifest,
+  loadBehaviorPackBlocks,
+  loadBehaviorPackItems,
+  loadBehaviorPackLoot,
+  loadBehaviorPackRecipes,
+} from "../mods/loadInternalBehaviorPack";
+import {
+  applyWorkshopTexturesToBlockAtlas,
+  collectWorkshopCachedMods,
+  loadWorkshopBlocksIntoRegistry,
+  loadWorkshopItemsIntoRegistry,
+  loadWorkshopLootIntoResolver,
+  loadWorkshopRecipesIntoRegistry,
+} from "../mods/loadWorkshopContent";
+import type { CachedMod } from "../mods/workshopTypes";
+import type { IndexedDBStore, WorldMetadata, WorkshopModRef } from "../persistence/IndexedDBStore";
+import { SaveGame } from "../persistence/SaveGame";
+import { resolveWorldWorkshopStacks } from "../persistence/worldWorkshopStacks";
 import { ChunkSyncManager } from "../network/ChunkSyncManager";
 import type { HostPeerId } from "../network/hostPeerId";
 import type { PeerId } from "../network/INetworkAdapter";
@@ -116,6 +127,8 @@ export type GameOptions = {
   displayName?: string;
   /** Supabase `auth.users` id when signed in; guests omit. */
   accountId?: string | null;
+  /** Optional workshop cache + download; omitted when Supabase is not configured. */
+  modRepository?: IModRepository | null;
 };
 
 export type PlayerSavedState = {
@@ -123,6 +136,8 @@ export type PlayerSavedState = {
   y: number;
   hotbarSlot: number;
   inventory?: ({ key: string; count: number } | null)[];
+  /** Omitted in older saves; defaults to full health. */
+  health?: number;
 };
 
 export type GameLoadProgress = {
@@ -198,6 +213,9 @@ export class Game {
   private stopResolve: (() => void) | null = null;
   private quitUnsub: (() => void) | null = null;
   private _awaitingWorldData = false;
+  /** Joining client: host-authored pack stacks (from PACK_STACK), applied during init. */
+  private _joinHostBehaviorRefs: WorkshopModRef[] | null = null;
+  private _joinHostResourceRefs: WorkshopModRef[] | null = null;
   private _worldTimeBroadcastAccum = 0;
   /** Every 2nd fixed tick (~30 Hz) sample and send `PLAYER_STATE` when changed. */
   private _playerStateBroadcastPhase = 0;
@@ -225,6 +243,8 @@ export class Game {
   private readonly _recipeRegistry = new RecipeRegistry();
   private _craftingSystem: CraftingSystem | null = null;
 
+  private readonly _modRepository: IModRepository | null;
+
   constructor(options: GameOptions) {
     this.mount = options.mount;
     this._worldSeed = options.seed;
@@ -238,6 +258,7 @@ export class Game {
     const dn = options.displayName?.trim();
     this._displayName = dn !== undefined && dn !== "" ? dn : "Player";
     this._accountId = options.accountId ?? null;
+    this._modRepository = options.modRepository ?? null;
     this.bus = new EventBus();
     const initialTimeMs =
       options.initialWorldTimeMs ?? DAY_LENGTH_MS * 0.15;
@@ -319,13 +340,16 @@ export class Game {
     });
 
     const registry = new BlockRegistry();
+    const baseUrl = import.meta.env.BASE_URL;
+    const stratumBehBase = `${baseUrl}${STRATUM_CORE_BEHAVIOR_PACK_PATH}`;
+    const stratumBehManifest = await fetchBehaviorPackManifest(stratumBehBase);
     progressCallback?.({
       stage: "Loading block data",
       detail: "Reading core block definitions...",
       current: 0,
-      total: STRATUM_CORE_BLOCK_FILES.length,
+      total: stratumBehManifest.blocks.length,
     });
-    await this.loadStratumCoreBlocks(registry, (loaded, total, file) => {
+    await loadBehaviorPackBlocks(registry, stratumBehBase, stratumBehManifest, (loaded, total, file) => {
       progressCallback?.({
         stage: "Loading block data",
         detail: `Loaded ${file}`,
@@ -333,6 +357,47 @@ export class Game {
         total,
       });
     });
+
+    const playerSettings = await this.store.loadPlayerSettings();
+    const resolvedStacks = resolveWorldWorkshopStacks(metaLoaded, this._modRepository);
+    let behaviorRefs = resolvedStacks.behaviorRefs;
+    let worldResourceRefs = resolvedStacks.resourceRefs;
+    if (
+      this.multiplayerJoinRoomCode !== undefined &&
+      this._joinHostBehaviorRefs !== null
+    ) {
+      behaviorRefs = this._joinHostBehaviorRefs;
+      worldResourceRefs = this._joinHostResourceRefs ?? [];
+    }
+    const globalResourceRefs = playerSettings.globalResourcePackRefs;
+
+    const behaviorCached: CachedMod[] = [];
+    if (this._modRepository !== null && behaviorRefs.length > 0) {
+      progressCallback?.({
+        stage: "Workshop mods",
+        detail: "Verifying behavior packages...",
+      });
+      behaviorCached.push(
+        ...(await collectWorkshopCachedMods(behaviorRefs, this._modRepository)),
+      );
+      await loadWorkshopBlocksIntoRegistry(registry, behaviorCached, (loaded, total, file) => {
+        progressCallback?.({
+          stage: "Workshop mods",
+          detail: file,
+          current: loaded,
+          total,
+        });
+      });
+    }
+
+    const worldResourceCached: CachedMod[] =
+      this._modRepository !== null && worldResourceRefs.length > 0
+        ? await collectWorkshopCachedMods(worldResourceRefs, this._modRepository)
+        : [];
+    const globalResourceCached: CachedMod[] =
+      this._modRepository !== null && globalResourceRefs.length > 0
+        ? await collectWorkshopCachedMods(globalResourceRefs, this._modRepository)
+        : [];
 
     const itemRegistry = new ItemRegistry();
     registerBlockItems(
@@ -343,11 +408,13 @@ export class Game {
       stage: "Loading items",
       detail: "Reading core item definitions...",
       current: 0,
-      total: STRATUM_CORE_ITEM_FILES.length,
+      total: stratumBehManifest.items.length,
     });
-    await this.loadStratumCoreItems(
+    await loadBehaviorPackItems(
       registry,
       itemRegistry,
+      stratumBehBase,
+      stratumBehManifest,
       (loaded, total, file) => {
         progressCallback?.({
           stage: "Loading items",
@@ -358,26 +425,29 @@ export class Game {
       },
     );
 
+    if (behaviorCached.length > 0) {
+      loadWorkshopItemsIntoRegistry(registry, itemRegistry, behaviorCached);
+    }
+
     progressCallback?.({
       stage: "Loading recipes",
-      detail: "Reading base recipe definitions...",
+      detail: "Reading core recipe definitions...",
     });
-    await this.loadStratumBaseRecipes(itemRegistry);
+    await loadBehaviorPackRecipes(
+      itemRegistry,
+      this._recipeRegistry,
+      stratumBehBase,
+      stratumBehManifest,
+    );
+    if (behaviorCached.length > 0) {
+      loadWorkshopRecipesIntoRegistry(itemRegistry, this._recipeRegistry, behaviorCached);
+    }
     this._craftingSystem = new CraftingSystem(itemRegistry, this._recipeRegistry);
 
     const lootResolver = new LootResolver(itemRegistry);
-    const lootData = parseLootTablesJson(lootTablesJson);
-    for (let i = 0; i < registry.size; i++) {
-      const block = registry.getById(i);
-      const key = block.lootTable;
-      if (key === undefined) {
-        continue;
-      }
-      const table = lootData.loot_tables[key];
-      if (table === undefined) {
-        continue;
-      }
-      lootResolver.registerTable(block.id, table);
+    await loadBehaviorPackLoot(registry, lootResolver, stratumBehBase, stratumBehManifest);
+    if (behaviorCached.length > 0) {
+      loadWorkshopLootIntoResolver(registry, lootResolver, behaviorCached);
     }
 
     progressCallback?.({
@@ -387,6 +457,12 @@ export class Game {
     const blockAtlas = new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
     await blockAtlas.load();
     this.blockAtlasLoader = blockAtlas;
+    for (const c of worldResourceCached) {
+      await applyWorkshopTexturesToBlockAtlas(blockAtlas, [c]);
+    }
+    for (const c of globalResourceCached) {
+      await applyWorkshopTexturesToBlockAtlas(blockAtlas, [c]);
+    }
 
     progressCallback?.({
       stage: "Loading textures",
@@ -396,14 +472,30 @@ export class Game {
       fetchTextureManifestJson(BLOCK_TEXTURE_MANIFEST_PATH),
       fetchTextureManifestJson(ITEM_TEXTURE_MANIFEST_PATH),
     ]);
-    const itemResolved = resolveItemTextureRecord(
-      itemRegistry,
-      blockTexDoc.textures,
-      itemTexDoc.textures,
-    );
+    const workshopItemTextureUrls: Record<string, string> = {};
+    for (const c of [...behaviorCached, ...worldResourceCached, ...globalResourceCached]) {
+      for (const [texName, rel] of Object.entries(c.manifest.item_textures)) {
+        const u = c.files[rel];
+        if (u !== undefined && u.length > 0) {
+          workshopItemTextureUrls[texName] = URL.createObjectURL(
+            new Blob([u], { type: "image/png" }),
+          );
+        }
+      }
+    }
+    const itemResolved = resolveItemTextureRecord(itemRegistry, blockTexDoc.textures, {
+      ...itemTexDoc.textures,
+      ...workshopItemTextureUrls,
+    });
     const itemAtlas = new AtlasLoader(ITEM_TEXTURE_MANIFEST_PATH);
     await itemAtlas.loadFromTextureRecord(itemResolved);
     this.itemAtlasLoader = itemAtlas;
+    for (const c of worldResourceCached) {
+      await applyWorkshopTexturesToBlockAtlas(itemAtlas, [c]);
+    }
+    for (const c of globalResourceCached) {
+      await applyWorkshopTexturesToBlockAtlas(itemAtlas, [c]);
+    }
 
     const world = new World(
       registry,
@@ -503,7 +595,10 @@ export class Game {
     saveGame.startAutoSave(60_000);
     this.saveGame = saveGame;
 
-    this.uiShell = new UIShell(this.bus, this.mount, saveGame, audio);
+    this.uiShell = new UIShell(this.bus, this.mount, saveGame, audio, {
+      store: this.store,
+      getInstalled: () => this._modRepository?.getInstalled() ?? [],
+    });
 
     const chatOverlay = new ChatOverlay();
     chatOverlay.init(this.mount, this.bus);
@@ -619,6 +714,7 @@ export class Game {
         playerSavedState.y,
         playerSavedState.hotbarSlot,
         playerSavedState.inventory,
+        playerSavedState.health,
       );
     } else {
       const airId = world.getRegistry().getByIdentifier("stratum:air").id;
@@ -841,11 +937,34 @@ export class Game {
         unsub();
         reject(new Error("Timed out waiting for host world sync"));
       }, 10_000);
+      let gotSync = false;
+      let gotPack = false;
+      const tryDone = (): void => {
+        if (!gotSync || !gotPack) {
+          return;
+        }
+        clearTimeout(timeout);
+        unsub();
+        resolve();
+      };
       const unsub = this.bus.on("net:message", (e) => {
-        if (e.message.type === MsgType.WORLD_SYNC) {
-          clearTimeout(timeout);
-          unsub();
-          resolve();
+        const m = e.message;
+        if (m.type === MsgType.WORLD_SYNC) {
+          gotSync = true;
+          tryDone();
+        } else if (m.type === MsgType.PACK_STACK) {
+          this._joinHostBehaviorRefs = m.behaviorRefs.map((r) => ({
+            recordId: r.recordId,
+            modId: r.modId,
+            version: r.version,
+          }));
+          this._joinHostResourceRefs = m.resourceRefs.map((r) => ({
+            recordId: r.recordId,
+            modId: r.modId,
+            version: r.version,
+          }));
+          gotPack = true;
+          tryDone();
         }
       });
     });
@@ -856,6 +975,10 @@ export class Game {
       this.bus.on("net:message", (e) => {
         const msg = e.message;
         const stNet = this.adapter.state;
+
+        if (msg.type === MsgType.PACK_STACK) {
+          return;
+        }
 
         if (msg.type === MsgType.PING) {
           if (stNet.status === "connected" && stNet.role === "host") {
@@ -1053,6 +1176,7 @@ export class Game {
       this.bus.on("net:peer-joined", (e) => {
         const state = this.adapter.state;
         if (state.status === "connected" && state.role === "host") {
+          const newPeer = e.peerId as PeerId;
           this.adapter.broadcast({
             type: MsgType.WORLD_SYNC,
             seed: this._worldSeed,
@@ -1062,8 +1186,27 @@ export class Game {
             type: MsgType.WORLD_TIME,
             worldTimeMs: this._worldTime.ms,
           });
+          void (async () => {
+            try {
+              const meta = await this.store.loadWorld(this.worldUuid);
+              const r = resolveWorldWorkshopStacks(meta, this._modRepository);
+              this.adapter.send(newPeer, {
+                type: MsgType.PACK_STACK,
+                behaviorRefs: r.behaviorRefs,
+                resourceRefs: r.resourceRefs,
+                requirePacksBeforeJoin: r.requirePacksBeforeJoin,
+              });
+            } catch (err) {
+              console.error(err);
+              this.adapter.send(newPeer, {
+                type: MsgType.PACK_STACK,
+                behaviorRefs: [],
+                resourceRefs: [],
+                requirePacksBeforeJoin: false,
+              });
+            }
+          })();
           const world = this.world;
-          const newPeer = e.peerId as PeerId;
           if (world !== null) {
             this._chunkSync.sendAllChunksTo(newPeer, (fn) => {
               for (const chunk of world.getChunkManager().getLoadedChunks()) {
@@ -1312,6 +1455,9 @@ export class Game {
             playerY: em?.getPlayer().state.position.y ?? 0,
             hotbarSlot: em?.getPlayer().state.hotbarSlot ?? 0,
             modList: w?.getRegistry().getModList() ?? [],
+            workshopBehaviorMods: [],
+            workshopResourceMods: [],
+            requirePacksBeforeJoin: false,
             worldTimeMs: this._worldTime.ms,
             moderation: mod,
           };
@@ -1483,100 +1629,6 @@ export class Game {
     }
   }
 
-  private async loadStratumBaseRecipes(itemRegistry: ItemRegistry): Promise<void> {
-    const base = import.meta.env.BASE_URL;
-    const url = `${base}assets/mods/base/recipes.json`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
-    }
-    const raw: unknown = await res.json();
-    const recipes = parseRecipeJson(raw);
-    for (const recipe of recipes) {
-      if (recipe.output.itemId !== undefined && itemRegistry.getByKey(recipe.output.itemId) === undefined) {
-        throw new Error(
-          `Recipe '${recipe.id}' references unknown output item '${recipe.output.itemId}' (load recipes after items are registered).`,
-        );
-      }
-      for (const ing of recipe.ingredients) {
-        if (ing.itemId !== undefined && itemRegistry.getByKey(ing.itemId) === undefined) {
-          throw new Error(
-            `Recipe '${recipe.id}' references unknown item key '${ing.itemId}' (load recipes after items are registered).`,
-          );
-        }
-        if (ing.tag !== undefined && itemRegistry.getByTag(ing.tag).length === 0) {
-          throw new Error(
-            `Recipe '${recipe.id}' references tag '${ing.tag}' with no matching items.`,
-          );
-        }
-      }
-    }
-    this._recipeRegistry.registerAll(recipes);
-  }
-
-  private async loadStratumCoreBlocks(
-    registry: BlockRegistry,
-    progressCallback?: (loaded: number, total: number, file: string) => void,
-  ): Promise<void> {
-    const base = import.meta.env.BASE_URL;
-    const total = STRATUM_CORE_BLOCK_FILES.length;
-    let loaded = 0;
-    for (const file of STRATUM_CORE_BLOCK_FILES) {
-      const url = `${base}assets/mods/stratum-core/blocks/${file}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
-      }
-      const raw: unknown = await res.json();
-      const def = parseBlockJson(raw);
-      registry.register(def);
-      loaded++;
-      progressCallback?.(loaded, total, file);
-    }
-  }
-
-  /** Loads `assets/mods/stratum-core/items/*.json` and registers items. */
-  private async loadStratumCoreItems(
-    registry: BlockRegistry,
-    itemRegistry: ItemRegistry,
-    progressCallback?: (loaded: number, total: number, file: string) => void,
-  ): Promise<void> {
-    const base = import.meta.env.BASE_URL;
-    const total = STRATUM_CORE_ITEM_FILES.length;
-    let loaded = 0;
-    for (const file of STRATUM_CORE_ITEM_FILES) {
-      const url = `${base}assets/mods/stratum-core/items/${file}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
-      }
-      const raw: unknown = await res.json();
-      const def = parseItemJson(raw);
-      let placesBlockId: number | undefined;
-      if (def.placesBlockIdentifier !== undefined) {
-        const b = registry.getByIdentifier(def.placesBlockIdentifier);
-        if (b === undefined) {
-          throw new Error(
-            `Item ${def.identifier}: unknown places_block "${def.placesBlockIdentifier}"`,
-          );
-        }
-        placesBlockId = b.id;
-      }
-      itemRegistry.register({
-        key: def.identifier,
-        textureName: def.textureKey,
-        displayName: def.displayName,
-        maxStack: def.maxStack,
-        placesBlockId,
-        toolType: def.toolType,
-        toolTier: def.toolTier,
-        toolSpeed: def.toolSpeed,
-      });
-      loaded++;
-      progressCallback?.(loaded, total, file);
-    }
-  }
-
   private fixedUpdate(dtSec: number): void {
     const tickIndex = this.loop.getTickIndex();
 
@@ -1692,7 +1744,13 @@ export class Game {
     this.lastRenderWallMs = now;
 
     if (this.chunkRenderer !== null && this.world !== null) {
-      this.chunkRenderer.syncChunks(this.world.getChunkManager().getLoadedChunks());
+      const cm = this.world.getChunkManager();
+      const centre = this.world.getStreamCentre();
+      const visible =
+        centre === null
+          ? cm.getLoadedChunks()
+          : cm.getChunksWithinDistance(centre, VIEW_DISTANCE_CHUNKS);
+      this.chunkRenderer.syncChunks(visible);
     }
 
     if (this.entityManager !== null && this.pipeline !== null) {
@@ -1739,7 +1797,11 @@ export class Game {
 
     if (this.entityManager !== null && this.inventoryUI !== null) {
       const pl = this.entityManager.getPlayer();
-      this.inventoryUI.update(pl.inventory, pl.state.hotbarSlot);
+      this.inventoryUI.update(
+        pl.inventory,
+        pl.state.hotbarSlot,
+        pl.state.health,
+      );
       this._craftingPanel?.update(pl.inventory);
     }
     this.cursorStackUI?.sync();

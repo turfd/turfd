@@ -2,22 +2,43 @@
  * Chunk + world metadata persistence via IndexedDB (`idb`).
  */
 import { openDB, type IDBPDatabase } from "idb";
+import { MOD_CACHE_STORE } from "../core/constants";
 import type { Chunk } from "../world/chunk/Chunk";
 import { chunkKey, type ChunkCoord } from "../world/chunk/ChunkCoord";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
+import type { CachedMod } from "../mods/workshopTypes";
 
 export const DB_NAME = "stratum";
-export const DB_VERSION = 1;
+/** Bumped when a new object store is required so existing browsers run `upgrade` again. */
+export const DB_VERSION = 5;
+
+const PLAYER_SETTINGS_KEY = "v1";
+
+export type WorkshopModRef = {
+  readonly recordId: string;
+  readonly modId: string;
+  readonly version: string;
+};
+
+export type PlayerSettingsV1 = {
+  readonly key: typeof PLAYER_SETTINGS_KEY;
+  /** Global resource (texture) packs, lowest index loads first; later overrides earlier. */
+  globalResourcePackRefs: WorkshopModRef[];
+};
 
 export type WorldMetadata = {
   uuid: string;
   name: string;
+  /** Optional note shown in the world list and editable in Edit World. */
+  description?: string;
   seed: number;
   createdAt: number;
   lastPlayedAt: number;
   playerX: number;
   playerY: number;
   hotbarSlot: number;
+  /** Saved player HP; absent in older saves (treated as full health on load). */
+  playerHealth?: number;
   modList: string[];
   /** Optional for worlds saved before world time persistence was added. */
   worldTimeMs?: number;
@@ -27,6 +48,16 @@ export type WorldMetadata = {
   moderation?: WorldModerationPersisted;
   /** Serialized inventory slots; absent in worlds saved before inventory persistence. */
   playerInventory?: ({ key: string; count: number } | null)[];
+  /**
+   * Legacy single list; used when `workshopBehaviorMods` / `workshopResourceMods` are absent.
+   */
+  workshopMods?: readonly WorkshopModRef[];
+  /** Ordered behavior packs for this world (blocks, items, recipes, loot). */
+  workshopBehaviorMods?: readonly WorkshopModRef[];
+  /** Ordered world resource packs (textures before global stack). */
+  workshopResourceMods?: readonly WorkshopModRef[];
+  /** When true, joining players should download packs first (enforcement TBD). */
+  requirePacksBeforeJoin?: boolean;
 };
 
 export type ChunkRecord = {
@@ -44,22 +75,40 @@ function chunkStoreKey(worldUuid: string, coord: ChunkCoord): string {
   return `${worldUuid}:${chunkKey(coord)}`;
 }
 
+function upgradeStratumDb(db: IDBPDatabase): void {
+  if (!db.objectStoreNames.contains("worlds")) {
+    db.createObjectStore("worlds", { keyPath: "uuid" });
+  }
+  if (!db.objectStoreNames.contains("chunks")) {
+    const chunkStore = db.createObjectStore("chunks", { keyPath: "key" });
+    chunkStore.createIndex("worldUuid", "worldUuid", { unique: false });
+  }
+  if (!db.objectStoreNames.contains(MOD_CACHE_STORE)) {
+    db.createObjectStore(MOD_CACHE_STORE);
+  }
+  if (!db.objectStoreNames.contains("player_settings")) {
+    db.createObjectStore("player_settings");
+  }
+}
+
 export class IndexedDBStore {
   private db: IDBPDatabase | null = null;
 
   async openDB(): Promise<void> {
-    if (this.db) {
+    if (
+      this.db !== null &&
+      this.db.objectStoreNames.contains(MOD_CACHE_STORE) &&
+      this.db.objectStoreNames.contains("player_settings")
+    ) {
       return;
+    }
+    if (this.db !== null) {
+      this.db.close();
+      this.db = null;
     }
     this.db = await openDB(DB_NAME, DB_VERSION, {
       upgrade(db) {
-        if (!db.objectStoreNames.contains("worlds")) {
-          db.createObjectStore("worlds", { keyPath: "uuid" });
-        }
-        if (!db.objectStoreNames.contains("chunks")) {
-          const chunkStore = db.createObjectStore("chunks", { keyPath: "key" });
-          chunkStore.createIndex("worldUuid", "worldUuid", { unique: false });
-        }
+        upgradeStratumDb(db);
       },
     });
   }
@@ -156,6 +205,78 @@ export class IndexedDBStore {
       metadata: new Uint8Array(chunk.metadata),
       background: new Uint16Array(chunk.background),
     };
+  }
+
+  async getModCache(key: string): Promise<CachedMod | undefined> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(MOD_CACHE_STORE)) {
+      return undefined;
+    }
+    return (await db.get(MOD_CACHE_STORE, key)) as CachedMod | undefined;
+  }
+
+  async putModCache(key: string, value: CachedMod): Promise<void> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(MOD_CACHE_STORE)) {
+      throw new Error(
+        `IndexedDB object store "${MOD_CACHE_STORE}" is missing; reload the page to run the database upgrade.`,
+      );
+    }
+    await db.put(MOD_CACHE_STORE, value, key);
+  }
+
+  async deleteModCache(key: string): Promise<void> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(MOD_CACHE_STORE)) {
+      return;
+    }
+    await db.delete(MOD_CACHE_STORE, key);
+  }
+
+  /** All keys in the mod-cache store (for repository init). */
+  async listModCacheKeys(): Promise<string[]> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(MOD_CACHE_STORE)) {
+      return [];
+    }
+    return db.getAllKeys(MOD_CACHE_STORE) as Promise<string[]>;
+  }
+
+  async loadPlayerSettings(): Promise<PlayerSettingsV1> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains("player_settings")) {
+      return {
+        key: PLAYER_SETTINGS_KEY,
+        globalResourcePackRefs: [],
+      };
+    }
+    const row = (await db.get(
+      "player_settings",
+      PLAYER_SETTINGS_KEY,
+    )) as PlayerSettingsV1 | undefined;
+    if (row === undefined) {
+      return {
+        key: PLAYER_SETTINGS_KEY,
+        globalResourcePackRefs: [],
+      };
+    }
+    return {
+      key: PLAYER_SETTINGS_KEY,
+      globalResourcePackRefs: [...(row.globalResourcePackRefs ?? [])],
+    };
+  }
+
+  async savePlayerSettings(settings: PlayerSettingsV1): Promise<void> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains("player_settings")) {
+      throw new Error(
+        'IndexedDB object store "player_settings" is missing; reload the page.',
+      );
+    }
+    await db.put("player_settings", {
+      key: PLAYER_SETTINGS_KEY,
+      globalResourcePackRefs: [...settings.globalResourcePackRefs],
+    });
   }
 
   private requireDb(): IDBPDatabase {

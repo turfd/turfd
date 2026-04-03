@@ -1,5 +1,5 @@
 /** Foreground + back-wall meshes per chunk on `layerTilesBack` (background drawn first). */
-import { Graphics, type Mesh } from "pixi.js";
+import type { Mesh } from "pixi.js";
 import type { BlockRegistry } from "../../world/blocks/BlockRegistry";
 import type { Chunk } from "../../world/chunk/Chunk";
 import type { ChunkCoord } from "../../world/chunk/ChunkCoord";
@@ -10,15 +10,16 @@ import type { AtlasLoader } from "../AtlasLoader";
 import type { RenderPipeline } from "../RenderPipeline";
 import {
   buildBackgroundMesh,
+  buildFgShadowMesh,
   buildMesh,
   createWorldFgShadowSampler,
-  redrawForegroundCastShadowOnBackground,
   updateBackgroundMesh,
+  updateFgShadowMesh,
   updateMesh,
 } from "./TileDrawBatch";
 import { chunkPerfLog, chunkPerfNow } from "../../debug/chunkPerf";
 
-type ChunkMeshes = { bg: Mesh; fgShadow: Graphics; fg: Mesh };
+type ChunkMeshes = { bg: Mesh; fgShadow: Mesh; fg: Mesh };
 
 export class ChunkRenderer {
   private readonly pipeline: RenderPipeline;
@@ -55,13 +56,8 @@ export class ChunkRenderer {
       let triple = this.meshes.get(key);
       if (triple === undefined) {
         const bg = buildBackgroundMesh(chunk, this.registry, this.atlas);
-        const fgShadow = new Graphics({ roundPixels: true });
+        const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler);
         const fg = buildMesh(chunk, this.registry, this.atlas);
-        redrawForegroundCastShadowOnBackground(
-          fgShadow,
-          chunk,
-          this.fgShadowSampler,
-        );
         this.positionChunkRoot(bg, chunk.coord);
         this.positionChunkRoot(fgShadow, chunk.coord);
         this.positionChunkRoot(fg, chunk.coord);
@@ -73,11 +69,7 @@ export class ChunkRenderer {
         added += 1;
       } else if (chunk.dirty) {
         updateBackgroundMesh(triple.bg, chunk, this.registry, this.atlas);
-        redrawForegroundCastShadowOnBackground(
-          triple.fgShadow,
-          chunk,
-          this.fgShadowSampler,
-        );
+        updateFgShadowMesh(triple.fgShadow, chunk, this.fgShadowSampler);
         updateMesh(triple.fg, chunk, this.registry, this.atlas);
         this.positionChunkRoot(triple.bg, chunk.coord);
         this.positionChunkRoot(triple.fgShadow, chunk.coord);

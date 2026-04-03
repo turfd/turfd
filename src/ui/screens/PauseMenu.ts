@@ -9,6 +9,10 @@ import {
 } from "../../core/constants";
 import type { EventBus } from "../../core/EventBus";
 import type { GameEvent } from "../../core/types";
+import type { CachedMod } from "../../mods/workshopTypes";
+import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
+import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
+import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
 
 const U_DAWN_END = DAWN_LENGTH_MS / DAY_LENGTH_MS;
 const U_DAY_END = (DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS) / DAY_LENGTH_MS;
@@ -248,7 +252,14 @@ export class PauseMenu {
   private mpBtn: HTMLButtonElement | null = null;
   private mpStatusEl: HTMLDivElement | null = null;
 
-  init(mount: HTMLElement, bus: EventBus): void {
+  init(
+    mount: HTMLElement,
+    bus: EventBus,
+    texturePacks?: {
+      store: IndexedDBStore;
+      getInstalled: () => readonly CachedMod[];
+    },
+  ): void {
     const base = import.meta.env.BASE_URL;
     injectPauseStyles(base);
 
@@ -270,7 +281,7 @@ export class PauseMenu {
     brand.className = "pm-brand";
     const logo = document.createElement("img");
     logo.className = "pm-logo";
-    logo.src = `${base}assets/textures/logo.png`;
+    logo.src = stratumCoreTextureAssetUrl("logo.png");
     logo.alt = "";
     brand.appendChild(logo);
 
@@ -421,16 +432,35 @@ export class PauseMenu {
     timeSection.appendChild(timeHint);
     applyTimeDisabled();
 
+    const texBtn = document.createElement("button");
+    texBtn.type = "button";
+    texBtn.className = "pm-btn pm-btn-secondary";
+    texBtn.textContent = "Texture packs";
+    texBtn.addEventListener("click", () => {
+      if (texturePacks === undefined) {
+        return;
+      }
+      void openGlobalTexturePacksModal({
+        store: texturePacks.store,
+        getInstalled: texturePacks.getInstalled,
+      });
+    });
+    if (texturePacks === undefined) {
+      texBtn.disabled = true;
+      texBtn.title = "Unavailable";
+    }
+
     const settingsNote = document.createElement("p");
     settingsNote.className = "pm-hint-note";
     settingsNote.textContent =
-      "Audio and other settings are on the main menu (Settings tab).";
+      "Audio volume and more options are on the main menu (Settings tab).";
 
     card.appendChild(brand);
     card.appendChild(title);
     card.appendChild(actions);
     card.appendChild(mpSection);
     card.appendChild(timeSection);
+    card.appendChild(texBtn);
     card.appendChild(settingsNote);
     overlay.appendChild(card);
     mount.appendChild(overlay);

@@ -1,0 +1,20 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": { "identifier": "stratum:cactus" },
+    "components": {
+      "stratum:display_name": "Cactus",
+      "stratum:texture": { "all": "cactus" },
+      "stratum:solid": true,
+      "stratum:collision": false,
+      "stratum:random_flip_x": true,
+      "stratum:transparent": true,
+      "stratum:water": false,
+      "stratum:hardness": 0.4,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 0,
+      "stratum:material": "generic",
+      "stratum:loot_table": "stratum:cactus"
+    }
+  }
+}

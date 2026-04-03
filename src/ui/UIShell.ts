@@ -4,6 +4,8 @@
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { EventBus } from "../core/EventBus";
 import type { GameEvent } from "../core/types";
+import type { CachedMod } from "../mods/workshopTypes";
+import type { IndexedDBStore } from "../persistence/IndexedDBStore";
 import type { SaveGame } from "../persistence/SaveGame";
 import { HUD } from "./screens/HUD";
 import { PauseMenu } from "./screens/PauseMenu";
@@ -22,11 +24,15 @@ export class UIShell {
     mount: HTMLElement,
     saveGame: SaveGame | null,
     audio: AudioEngine,
+    texturePacks?: {
+      store: IndexedDBStore;
+      getInstalled: () => readonly CachedMod[];
+    },
   ) {
     this.hud = new HUD();
     this.hud.init(mount, bus);
     this.pauseMenu = new PauseMenu();
-    this.pauseMenu.init(mount, bus);
+    this.pauseMenu.init(mount, bus, texturePacks);
 
     const sess = document.createElement("div");
     sess.className = "stratum-session-overlay";

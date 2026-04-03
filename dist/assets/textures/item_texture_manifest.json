@@ -1,8 +1,0 @@
-{
-  "textures": {
-    "wooden_axe": "assets/textures/items/wooden_axe.png",
-    "wooden_pickaxe": "assets/textures/items/wooden_pickaxe.png",
-    "wooden_shovel": "assets/textures/items/wooden_shovel.png",
-    "stick": "assets/textures/items/stick.png"
-  }
-}

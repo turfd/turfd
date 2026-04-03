@@ -4,6 +4,9 @@ import {
   HOTBAR_SIZE,
   INVENTORY_ANIM_MS,
   INVENTORY_ITEM_ICON_DISPLAY_PX,
+  INVENTORY_SIZE,
+  PLAYER_HEART_COUNT,
+  PLAYER_MAX_HEALTH,
 } from "../core/constants";
 import type { ItemId } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
@@ -57,6 +60,9 @@ export class InventoryUI {
   private readonly overlay: HTMLDivElement;
   private readonly craftingMount: HTMLDivElement;
   private readonly hotbarItemNameEl: HTMLDivElement;
+  private readonly heartsRowEl: HTMLDivElement;
+  private readonly heartClipEls: HTMLDivElement[] = [];
+  private prevHealthForAria = -1;
   private readonly itemTooltipEl: HTMLDivElement;
   private tooltipActiveSlot: number | null = null;
   private inventoryOpen = false;
@@ -70,22 +76,19 @@ export class InventoryUI {
   private pointerDownButton: number | null = null;
   private dragOccurred = false;
   private rmbPlacedOnDown = false;
-  private lmbClickTimer: ReturnType<typeof setTimeout> | null = null;
-  private lmbDeferredSlot: number | null = null;
 
-  private flushDeferredLmbClick(): void {
-    if (this.lmbClickTimer !== null) {
-      clearTimeout(this.lmbClickTimer);
-      this.lmbClickTimer = null;
+  /** Previous serialized stack per slot; null until first {@link update} (avoids startup bump spam). */
+  private prevInventoryKeys: string[] | null = null;
+
+  private static slotKey(
+    stack: { itemId: ItemId; count: number } | null,
+  ): string {
+    if (stack === null || stack.count <= 0) {
+      return "empty";
     }
-    if (this.lmbDeferredSlot !== null) {
-      const s = this.lmbDeferredSlot;
-      this.lmbDeferredSlot = null;
-      this.getInventory().handleLmbClick(s);
-    }
+    return `${stack.itemId}:${stack.count}`;
   }
 
-  /** If a delayed LMB click is pending for another slot, run it now (Minecraft-style slot switching). */
   private clearHotbarNameTimers(): void {
     if (this.hotbarNameHideTimer !== null) {
       clearTimeout(this.hotbarNameHideTimer);
@@ -184,16 +187,6 @@ export class InventoryUI {
     });
   }
 
-  private flushDeferredLmbIfSwitching(newSlot: number): void {
-    if (this.lmbDeferredSlot === null) {
-      return;
-    }
-    if (this.lmbDeferredSlot === newSlot) {
-      return;
-    }
-    this.flushDeferredLmbClick();
-  }
-
   private readonly onWindowMouseUp = (e: MouseEvent): void => {
     if (this.pointerDownSlot === null) {
       return;
@@ -203,21 +196,11 @@ export class InventoryUI {
     }
     const slot = this.pointerDownSlot;
     if (e.button === 0) {
-      if (this.lmbClickTimer !== null) {
-        clearTimeout(this.lmbClickTimer);
-        this.lmbClickTimer = null;
-      }
-      this.lmbDeferredSlot = null;
       if (!this.dragOccurred) {
         if (e.shiftKey) {
           this.getInventory().quickMoveFromSlot(slot);
         } else {
-          this.lmbDeferredSlot = slot;
-          this.lmbClickTimer = setTimeout(() => {
-            this.lmbClickTimer = null;
-            this.lmbDeferredSlot = null;
-            this.getInventory().handleLmbClick(slot);
-          }, 220);
+          this.getInventory().handleLmbClick(slot);
         }
       }
     } else if (e.button === 2) {
@@ -259,6 +242,32 @@ export class InventoryUI {
     hotbarName.setAttribute("aria-atomic", "true");
     this.hotbarItemNameEl = hotbarName;
 
+    const heartsRow = document.createElement("div");
+    heartsRow.className = "inv-hearts-row";
+    heartsRow.setAttribute("role", "status");
+    heartsRow.setAttribute("aria-live", "polite");
+    heartsRow.setAttribute("aria-atomic", "true");
+    this.heartsRowEl = heartsRow;
+    for (let i = 0; i < PLAYER_HEART_COUNT; i++) {
+      const slot = document.createElement("div");
+      slot.className = "inv-heart-slot";
+      const empty = document.createElement("span");
+      empty.className = "inv-heart-glyph inv-heart-glyph--empty";
+      empty.textContent = "\u2665";
+      empty.setAttribute("aria-hidden", "true");
+      const clip = document.createElement("div");
+      clip.className = "inv-heart-clip inv-heart-clip--full";
+      const full = document.createElement("span");
+      full.className = "inv-heart-glyph inv-heart-glyph--full";
+      full.textContent = "\u2665";
+      full.setAttribute("aria-hidden", "true");
+      clip.appendChild(full);
+      slot.appendChild(empty);
+      slot.appendChild(clip);
+      heartsRow.appendChild(slot);
+      this.heartClipEls.push(clip);
+    }
+
     const hotbarWrap = document.createElement("div");
     hotbarWrap.className = "inv-hotbar-wrap";
 
@@ -283,6 +292,7 @@ export class InventoryUI {
     }
     hotbarWrap.appendChild(hotbarRow);
     hotbarStack.appendChild(hotbarName);
+    hotbarStack.appendChild(heartsRow);
     hotbarStack.appendChild(hotbarWrap);
     root.appendChild(hotbarStack);
 
@@ -365,9 +375,6 @@ export class InventoryUI {
         return;
       }
       e.preventDefault();
-      if (e.button === 0) {
-        this.flushDeferredLmbIfSwitching(slotIndex);
-      }
       this.pointerDownSlot = slotIndex;
       this.pointerDownButton = e.button;
       this.dragOccurred = false;
@@ -386,11 +393,6 @@ export class InventoryUI {
         return;
       }
       e.preventDefault();
-      if (this.lmbClickTimer !== null) {
-        clearTimeout(this.lmbClickTimer);
-        this.lmbClickTimer = null;
-      }
-      this.lmbDeferredSlot = null;
       this.getInventory().collectSameItemIntoSlot(slotIndex);
     });
 
@@ -479,13 +481,62 @@ export class InventoryUI {
     }
   }
 
+  private syncHearts(health: number): void {
+    const h = Math.max(
+      0,
+      Math.min(PLAYER_MAX_HEALTH, Math.floor(health)),
+    );
+    if (h !== this.prevHealthForAria) {
+      this.prevHealthForAria = h;
+      this.heartsRowEl.setAttribute(
+        "aria-label",
+        `Health: ${h} of ${PLAYER_MAX_HEALTH}`,
+      );
+    }
+    for (let i = 0; i < PLAYER_HEART_COUNT; i++) {
+      const clip = this.heartClipEls[i]!;
+      const hpThis = h - i * 2;
+      let level: "full" | "half" | "empty";
+      if (hpThis >= 2) {
+        level = "full";
+      } else if (hpThis === 1) {
+        level = "half";
+      } else {
+        level = "empty";
+      }
+      clip.className = `inv-heart-clip inv-heart-clip--${level}`;
+    }
+  }
+
   /**
    * Refreshes all slots from the live inventory (no cached stacks).
    */
-  update(inventory: PlayerInventory, selectedHotbarSlot: number): void {
+  update(
+    inventory: PlayerInventory,
+    selectedHotbarSlot: number,
+    health: number,
+  ): void {
     const urlLookup = this.iconUrlLookup;
     const displayPx = INVENTORY_ITEM_ICON_DISPLAY_PX;
     const sel = Math.min(selectedHotbarSlot, HOTBAR_SIZE - 1);
+
+    this.syncHearts(health);
+
+    const bumpSlots = new Set<number>();
+    if (this.prevInventoryKeys === null) {
+      this.prevInventoryKeys = [];
+      for (let s = 0; s < INVENTORY_SIZE; s++) {
+        this.prevInventoryKeys[s] = InventoryUI.slotKey(inventory.getStack(s));
+      }
+    } else {
+      for (let s = 0; s < INVENTORY_SIZE; s++) {
+        const k = InventoryUI.slotKey(inventory.getStack(s));
+        if (this.prevInventoryKeys[s] !== k) {
+          this.prevInventoryKeys[s] = k;
+          bumpSlots.add(s);
+        }
+      }
+    }
 
     const selStack = inventory.getStack(sel);
     const selKey =
@@ -519,6 +570,7 @@ export class InventoryUI {
         urlLookup,
         displayPx,
         i === sel,
+        bumpSlots.has(i),
       );
     }
 
@@ -534,6 +586,7 @@ export class InventoryUI {
         urlLookup,
         displayPx,
         isOverlayHotbarRow && slotIndex === sel,
+        bumpSlots.has(slotIndex),
       );
     }
   }
@@ -546,6 +599,7 @@ export class InventoryUI {
     urlLookup: ItemIconUrlLookup | null,
     displayPx: number,
     selected: boolean,
+    playBump: boolean,
   ): void {
     if (selected) {
       slotEl.classList.add("inv-slot--selected");
@@ -559,6 +613,9 @@ export class InventoryUI {
       slotEl.removeAttribute("title");
       slotEl.removeAttribute("aria-label");
       countEl.textContent = "";
+      if (playBump) {
+        this.triggerSlotIconBump(iconEl);
+      }
       return;
     }
 
@@ -569,6 +626,9 @@ export class InventoryUI {
       slotEl.removeAttribute("title");
       slotEl.removeAttribute("aria-label");
       countEl.textContent = stack.count > 1 ? String(stack.count) : "";
+      if (playBump) {
+        this.triggerSlotIconBump(iconEl);
+      }
       return;
     }
 
@@ -585,6 +645,24 @@ export class InventoryUI {
       countEl.textContent = "";
       countEl.classList.remove("inv-slot-count--white");
     }
+    if (playBump) {
+      this.triggerSlotIconBump(iconEl);
+    }
+  }
+
+  private triggerSlotIconBump(iconEl: HTMLDivElement): void {
+    iconEl.classList.remove("inv-slot-icon--bump");
+    requestAnimationFrame(() => {
+      void iconEl.offsetWidth;
+      iconEl.addEventListener(
+        "animationend",
+        () => {
+          iconEl.classList.remove("inv-slot-icon--bump");
+        },
+        { once: true },
+      );
+      iconEl.classList.add("inv-slot-icon--bump");
+    });
   }
 
   /** Toggle bottom hotbar strip (e.g. hidden while chat typing is expanded). */
@@ -597,11 +675,6 @@ export class InventoryUI {
     this.hideItemTooltip();
     this.clearHotbarNameTimers();
     window.removeEventListener("mouseup", this.onWindowMouseUp, true);
-    if (this.lmbClickTimer !== null) {
-      clearTimeout(this.lmbClickTimer);
-      this.lmbClickTimer = null;
-    }
-    this.lmbDeferredSlot = null;
     this.root.remove();
   }
 }

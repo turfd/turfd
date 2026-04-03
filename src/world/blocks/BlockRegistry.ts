@@ -59,6 +59,11 @@ export class BlockRegistry {
     return this.byId[id]?.solid ?? false;
   }
 
+  /** Fast collision check for physics queries without allocating {@link getById} objects. */
+  collides(id: number): boolean {
+    return this.byId[id]?.collides ?? false;
+  }
+
   getByIdentifier(identifier: string): BlockDefinition {
     const b = this.byIdentifier.get(identifier);
     if (b === undefined) {

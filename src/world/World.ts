@@ -3,9 +3,11 @@ import { yieldToNextFrame } from "../core/asyncYield";
 import {
   BLOCK_SIZE,
   CHUNK_SIZE,
+  SIMULATION_DISTANCE_CHUNKS,
   SKY_LIGHT_MAX,
+  SPAWN_CHUNK_RADIUS,
   STREAM_CHUNK_HYSTERESIS_BLOCKS,
-  VIEW_DISTANCE_CHUNKS,
+  WORLDGEN_NO_COLLIDE,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
 } from "../core/constants";
@@ -81,6 +83,7 @@ export class World {
   private readonly chunks: ChunkManager;
   private readonly worldGen: WorldGenerator;
   private readonly airId: number;
+  private readonly cactusBlockId: number;
   private readonly seed: number;
   private readonly store: IndexedDBStore;
   private readonly worldUuid: string;
@@ -110,6 +113,7 @@ export class World {
     this.chunks = new ChunkManager();
     this.worldGen = new WorldGenerator(seed, registry);
     this.airId = registry.getByIdentifier("stratum:air").id;
+    this.cactusBlockId = registry.getByIdentifier("stratum:cactus").id;
     this.seed = seed;
     this.store = store;
     this.worldUuid = worldUuid;
@@ -242,6 +246,38 @@ export class World {
     return false;
   }
 
+  /** Solid, non-replaceable block beside (wx, wy) on ±X — cactus may not be placed here. */
+  private horizontalNeighborBlocksCactusPlacement(wx: number, wy: number): boolean {
+    for (const dx of [-1, 1] as const) {
+      const b = this.getBlock(wx + dx, wy);
+      if (b.id === this.airId) {
+        continue;
+      }
+      if (b.solid && !b.replaceable) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Cactus needs empty horizontal sides (no solid non-replaceable neighbors);
+   * other blocks cannot be placed directly adjacent to cactus on ±X.
+   */
+  canPlaceForegroundWithCactusRules(wx: number, wy: number, blockId: number): boolean {
+    const placed = this.registry.getById(blockId);
+    if (placed.identifier === "stratum:cactus") {
+      if (this.horizontalNeighborBlocksCactusPlacement(wx, wy)) {
+        return false;
+      }
+    }
+    const cid = this.cactusBlockId;
+    if (this.getBlock(wx - 1, wy).id === cid || this.getBlock(wx + 1, wy).id === cid) {
+      return false;
+    }
+    return true;
+  }
+
   /** True if the block cell at world block coordinates is solid. */
   isSolid(worldBlockX: number, worldBlockY: number): boolean {
     return this.getBlock(worldBlockX, worldBlockY).solid;
@@ -256,10 +292,19 @@ export class World {
     const wx1 = Math.floor((region.x + region.width - 1) / BLOCK_SIZE);
     const wy0 = Math.floor(worldYBottom / BLOCK_SIZE);
     const wy1 = Math.floor(worldYTop / BLOCK_SIZE);
+    const reg = this.registry;
     for (let wx = wx0; wx <= wx1; wx++) {
       for (let wy = wy0; wy <= wy1; wy++) {
-        const def = this.getBlock(wx, wy);
-        if (!def.collides) {
+        const chunk = this.getChunkAt(wx, wy);
+        if (chunk === undefined) {
+          continue;
+        }
+        const { lx, ly } = worldToLocalBlock(wx, wy);
+        const id = getBlock(chunk, lx, ly);
+        if (!reg.collides(id)) {
+          continue;
+        }
+        if ((chunk.metadata[localIndex(lx, ly)]! & WORLDGEN_NO_COLLIDE) !== 0) {
           continue;
         }
         out.push(
@@ -626,21 +671,38 @@ export class World {
   ): Promise<void> {
     const t0 = import.meta.env.DEV ? chunkPerfNow() : 0;
     const centre: ChunkCoord = { cx: centreCx, cy: centreCy };
-    const evicted = this.chunks.updateLoadedChunks(centre);
+    const evicted = this.chunks.updateLoadedChunks(
+      centre,
+      SIMULATION_DISTANCE_CHUNKS,
+      SPAWN_CHUNK_RADIUS,
+    );
     for (const { cx } of evicted) {
       this.invalidateSkyTopStripForChunk(cx);
     }
 
     const gen = this.makeChunkGenerator();
-    const r = VIEW_DISTANCE_CHUNKS;
+    const r = SIMULATION_DISTANCE_CHUNKS;
     const pending: ChunkCoord[] = [];
+    const seenPending = new Set<string>();
+
+    const enqueue = (cx: number, cy: number): void => {
+      const coord: ChunkCoord = { cx, cy };
+      const key = `${cx},${cy}`;
+      if (seenPending.has(key) || this.chunks.getChunk(coord) !== undefined) {
+        return;
+      }
+      seenPending.add(key);
+      pending.push(coord);
+    };
+
     for (let cx = centre.cx - r; cx <= centre.cx + r; cx++) {
       for (let cy = centre.cy - r; cy <= centre.cy + r; cy++) {
-        const coord: ChunkCoord = { cx, cy };
-        if (this.chunks.getChunk(coord) !== undefined) {
-          continue;
-        }
-        pending.push(coord);
+        enqueue(cx, cy);
+      }
+    }
+    for (let cx = -SPAWN_CHUNK_RADIUS; cx <= SPAWN_CHUNK_RADIUS; cx++) {
+      for (let cy = centre.cy - r; cy <= centre.cy + r; cy++) {
+        enqueue(cx, cy);
       }
     }
     const total = pending.length;
@@ -902,6 +964,17 @@ export class World {
   /** @internal Used by Game; prefer high-level API elsewhere. */
   getChunkManager(): ChunkManager {
     return this.chunks;
+  }
+
+  /**
+   * Hysteresis-adjusted stream centre used for chunk loading and render culling.
+   * Null before {@link init} completes.
+   */
+  getStreamCentre(): { cx: number; cy: number } | null {
+    if (this.streamCentreCx === null || this.streamCentreCy === null) {
+      return null;
+    }
+    return { cx: this.streamCentreCx, cy: this.streamCentreCy };
   }
 
   /** @internal Used by Game/EntityManager to animate remote peers. */

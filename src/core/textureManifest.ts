@@ -2,18 +2,22 @@
 
 import type { ItemRegistry } from "../items/ItemRegistry";
 
-export const BLOCK_TEXTURE_MANIFEST_PATH =
-  "assets/textures/block_texture_manifest.json";
-export const ITEM_TEXTURE_MANIFEST_PATH =
-  "assets/textures/item_texture_manifest.json";
+/** Site-root-relative prefix for built-in Stratum Core textures (`resource_packs/stratum-core/textures/`). */
+export const STRATUM_CORE_TEXTURES_BASE =
+  "assets/mods/resource_packs/stratum-core/textures/";
+
+export const BLOCK_TEXTURE_MANIFEST_PATH = `${STRATUM_CORE_TEXTURES_BASE}block_texture_manifest.json`;
+export const ITEM_TEXTURE_MANIFEST_PATH = `${STRATUM_CORE_TEXTURES_BASE}item_texture_manifest.json`;
+
+/** Absolute URL for a file under {@link STRATUM_CORE_TEXTURES_BASE} (e.g. `logo.png`, `GUI/pointer_line.png`). */
+export function stratumCoreTextureAssetUrl(relativeToTexturesRoot: string): string {
+  const base = import.meta.env.BASE_URL;
+  const rel = relativeToTexturesRoot.replace(/^\/+/, "");
+  return `${base}${STRATUM_CORE_TEXTURES_BASE}${rel}`;
+}
 
 export type TextureManifestJson = {
   readonly textures: Record<string, string>;
-  /**
-   * Texture **names** (keys in `textures`) that may have optional `name_alt_1.png`, `name_alt_2.png`, …
-   * next to the base file. Omitted or empty → no alt probing (most tiles have no variants).
-   */
-  readonly probe_texture_alts?: readonly string[];
 };
 
 export async function fetchTextureManifestJson(

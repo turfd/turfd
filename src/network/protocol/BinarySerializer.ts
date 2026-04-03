@@ -22,7 +22,7 @@ const CHUNK_CELLS = CHUNK_SIZE * CHUNK_SIZE;
 const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 
 /** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 3;
+export const WIRE_PROTOCOL_VERSION = 4;
 
 /** Max UTF-8 bytes for handshake display name (profile + guest labels). */
 export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;

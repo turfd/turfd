@@ -4,6 +4,8 @@ import {
   RenderTexture,
 } from "pixi.js";
 import type { EventBus } from "../core/EventBus";
+import { MAX_RENDER_DEVICE_PIXEL_RATIO } from "../core/constants";
+import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 
 import type { World } from "../world/World";
 import type { WorldLightingParams } from "../world/lighting/WorldTime";
@@ -61,6 +63,11 @@ const BG_UNDERGROUND_FADE_RANGE = 224;
 
 function clamp01(t: number): number {
   return Math.min(1, Math.max(0, t));
+}
+
+function effectiveDevicePixelRatio(): number {
+  const dpr = window.devicePixelRatio >= 1 ? window.devicePixelRatio : 1;
+  return Math.min(dpr, MAX_RENDER_DEVICE_PIXEL_RATIO);
 }
 
 /** 0 outside [edge0, edge1], smooth Hermite inside. */
@@ -186,7 +193,7 @@ export class RenderPipeline implements RenderPipelineLayers {
       preference: "webgl",
       powerPreference: "high-performance",
       backgroundAlpha: 0,
-      resolution: window.devicePixelRatio >= 1 ? window.devicePixelRatio : 1,
+      resolution: effectiveDevicePixelRatio(),
       autoDensity: true,
     });
 
@@ -257,8 +264,9 @@ export class RenderPipeline implements RenderPipelineLayers {
     if (ctx === null || cvs === null) {
       return;
     }
-    const cw = Math.max(1, Math.round(this.mount.clientWidth * devicePixelRatio));
-    const ch = Math.max(1, Math.round(this.mount.clientHeight * devicePixelRatio));
+    const dpr = effectiveDevicePixelRatio();
+    const cw = Math.max(1, Math.round(this.mount.clientWidth * dpr));
+    const ch = Math.max(1, Math.round(this.mount.clientHeight * dpr));
     if (cw !== this._skyCssW || ch !== this._skyCssH) {
       cvs.width = cw;
       cvs.height = ch;
@@ -307,7 +315,7 @@ export class RenderPipeline implements RenderPipelineLayers {
       const sx = cw * 0.5 + sunDir[0] * spread;
       const sy = baseY - sunDir[1] * ch * 0.2;
       ctx.beginPath();
-      ctx.arc(sx, sy, 16 * devicePixelRatio, 0, Math.PI * 2);
+      ctx.arc(sx, sy, 16 * dpr, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(255,243,176,${sunAlpha})`;
       ctx.fill();
     }
@@ -324,7 +332,7 @@ export class RenderPipeline implements RenderPipelineLayers {
       const mx = cw * 0.5 + moonDir[0] * spread;
       const my = baseY - moonDir[1] * ch * 0.2;
       ctx.beginPath();
-      ctx.arc(mx, my, 12 * devicePixelRatio, 0, Math.PI * 2);
+      ctx.arc(mx, my, 12 * dpr, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(216,220,255,${moonAlpha})`;
       ctx.fill();
     }
@@ -446,8 +454,7 @@ export class RenderPipeline implements RenderPipelineLayers {
   }
 
   private async tryLoadBackgroundImage(): Promise<void> {
-    const base = import.meta.env.BASE_URL;
-    const imageUrl = `${base}assets/textures/bg.png`;
+    const imageUrl = stratumCoreTextureAssetUrl("bg.png");
     const image = new Image();
     image.decoding = "async";
     image.src = imageUrl;

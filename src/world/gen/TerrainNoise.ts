@@ -13,10 +13,22 @@ import { mulberry32 } from "./GeneratorContext";
 /** Horizontal scale for forest/plains bands (macro noise). ~1 cycle per this many blocks. */
 const BIOME_MAX_BLOCKS = 250;
 
-/** Horizontal scale for forest-type selection (oak vs spruce). */
+/** Horizontal scale for forest-type selection (oak / birch / spruce bands). */
 const FOREST_TYPE_SCALE = 400;
 
-export type ForestType = "oak" | "spruce";
+/**
+ * Desert bands: same order of magnitude as {@link BIOME_MAX_BLOCKS} but a separate
+ * noise channel (offset 777) so desert regions are large and independent of forest macro.
+ */
+const DESERT_SCALE_BLOCKS = 280;
+
+/** Raw desert field above this (after smoothstep) counts as desert if forest is sparse. */
+const DESERT_THRESHOLD = 0.58;
+
+/** Forest density must stay below this so dense woods are never overridden by desert. */
+const DESERT_MAX_FOREST_DENSITY = 0.22;
+
+export type ForestType = "oak" | "birch" | "spruce";
 
 export class TerrainNoise {
   private readonly noise2D: ReturnType<typeof createNoise2D>;
@@ -70,11 +82,32 @@ export class TerrainNoise {
   /**
    * Which type of forest grows at this column.
    * Uses a large-scale noise channel (separate Y offset) so you get extended
-   * regions of oak forest vs spruce forest.
+   * regions of oak, birch, and spruce forest.
    */
   getForestType(wx: number): ForestType {
     const raw = this.noise2D(wx / FOREST_TYPE_SCALE, 555);
-    return raw > 0 ? "spruce" : "oak";
+    const t = raw * 0.5 + 0.5;
+    if (t < 0.34) {
+      return "oak";
+    }
+    if (t < 0.67) {
+      return "birch";
+    }
+    return "spruce";
+  }
+
+  /**
+   * Large-scale desert biome mask. False when forest density is high so trees and desert
+   * rarely coincide on the same column.
+   */
+  isDesert(wx: number): boolean {
+    if (this.getForestDensity(wx) >= DESERT_MAX_FOREST_DENSITY) {
+      return false;
+    }
+    const macroRaw = this.noise2D(wx / DESERT_SCALE_BLOCKS, 777);
+    const macro01 = macroRaw * 0.5 + 0.5;
+    const band = smoothstep(DESERT_THRESHOLD - 0.12, DESERT_THRESHOLD + 0.18, macro01);
+    return band >= 0.5;
   }
 }
 

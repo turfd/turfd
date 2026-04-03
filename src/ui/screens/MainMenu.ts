@@ -3,6 +3,8 @@
  * Visual: live PixiJS world background (MenuBackground) + pixel-art DOM overlay.
  */
 import type { IAuthProvider } from "../../auth/IAuthProvider";
+import type { EventBus } from "../../core/EventBus";
+import type { ModRepository } from "../../mods/ModRepository";
 import { mountProfileScreen } from "./ProfileScreen";
 import type {
   IndexedDBStore,
@@ -18,7 +20,11 @@ import {
   setStratumRoomRating,
   type ListedRoom,
 } from "../../network/roomDirectoryApi";
+import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
+import { createWorldPackEditorController } from "../worldEditPacksUi";
+import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
 import { MenuBackground } from "./MenuBackground";
+import { WorkshopScreen } from "./WorkshopScreen";
 
 export type MainMenuResult =
   | { action: "new"; name: string; seed: number }
@@ -96,9 +102,12 @@ function injectStyles(base: string): void {
       src: url('${fontUrl("m5x7.ttf")}') format('truetype');
       font-weight: normal;
       font-style: normal;
+      font-display: swap;
     }
 
     :root {
+      /* +4px applied to M5x7 font-size rules below (bitmap font reads better ~22–26px body) */
+      --mm-m5-nudge: 4px;
       --mm-ink: #f2f2f7;
       --mm-ink-mid: #aeaeb2;
       --mm-ink-soft: #8e8e93;
@@ -121,8 +130,10 @@ function injectStyles(base: string): void {
       flex-direction: column;
       pointer-events: none;
       font-family: 'BoldPixels', 'Courier New', monospace;
+      font-weight: normal;
+      font-synthesis: none;
       -webkit-font-smoothing: none;
-      -moz-osx-font-smoothing: unset;
+      -moz-osx-font-smoothing: grayscale;
       text-rendering: optimizeSpeed;
       color: var(--mm-ink);
       background: transparent;
@@ -140,12 +151,12 @@ function injectStyles(base: string): void {
     }
     .mm-discord {
       pointer-events: auto;
-      padding: 0.5rem 0.95rem;
+      padding: 0.55rem 1.05rem;
       background: var(--mm-surface-deep);
       border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       cursor: pointer;
@@ -206,7 +217,7 @@ function injectStyles(base: string): void {
     }
     .mm-brand-kicker {
       font-family: 'M5x7', monospace;
-      font-size: 14px;
+      font-size: calc(14px + var(--mm-m5-nudge));
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
@@ -222,7 +233,7 @@ function injectStyles(base: string): void {
     .mm-brand-subtitle {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(18px + var(--mm-m5-nudge));
       line-height: 1.4;
       color: var(--mm-ink-mid);
     }
@@ -234,12 +245,12 @@ function injectStyles(base: string): void {
     .mm-nav-btn {
       display: block;
       width: 100%;
-      padding: 12px 14px;
+      padding: 14px 16px;
       background: var(--mm-surface-deep);
       border: 1px solid transparent;
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
+      font-size: 20px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       text-align: left;
@@ -269,7 +280,7 @@ function injectStyles(base: string): void {
     .mm-nav-label-sub {
       display: block;
       margin-top: 3px;
-      font-size: 12px;
+      font-size: calc(14px + var(--mm-m5-nudge));
       letter-spacing: 0.06em;
       opacity: 0.7;
       font-family: 'M5x7', monospace;
@@ -277,7 +288,7 @@ function injectStyles(base: string): void {
     .mm-nav-meta {
       margin-top: auto;
       font-family: 'M5x7', monospace;
-      font-size: 15px;
+      font-size: calc(17px + var(--mm-m5-nudge));
       line-height: 1.35;
       color: var(--mm-ink-soft);
       border-top: 1px solid var(--mm-border);
@@ -321,11 +332,12 @@ function injectStyles(base: string): void {
     }
     .mm-panel-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 19px;
+      font-size: clamp(22px, 2.6vw, 28px);
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 1px;
       color: var(--mm-ink);
       margin: 0 0 1.1rem;
+      line-height: 1.15;
     }
 
     /* ── What's New: home = compact card, bottom-right of main column ----- */
@@ -364,7 +376,7 @@ function injectStyles(base: string): void {
     .mm-home-changelog-kicker {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: 14px;
       text-transform: uppercase;
       letter-spacing: 0.07em;
       color: var(--mm-ink-soft);
@@ -372,7 +384,7 @@ function injectStyles(base: string): void {
     .mm-home-changelog-title {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
+      font-size: 20px;
       line-height: 1.2;
       letter-spacing: 0.04em;
       text-transform: uppercase;
@@ -381,9 +393,10 @@ function injectStyles(base: string): void {
     .mm-home-changelog-cta {
       align-self: flex-start;
       margin-top: 4px;
-      padding: 8px 14px;
-      font-size: 14px;
+      padding: 10px 16px;
+      font-size: 15px;
       letter-spacing: 0.06em;
+      min-height: 0;
     }
     .mm-whats-new::-webkit-scrollbar { width: 4px; }
     .mm-whats-new::-webkit-scrollbar-track { background: transparent; }
@@ -393,7 +406,7 @@ function injectStyles(base: string): void {
     }
     .mm-whats-new-body {
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(19px + var(--mm-m5-nudge));
       line-height: 1.45;
       color: var(--mm-ink-mid);
       margin: 0;
@@ -405,7 +418,7 @@ function injectStyles(base: string): void {
     }
     .mm-whats-new-body strong {
       font-family: 'BoldPixels', monospace;
-      font-size: 16px;
+      font-size: 17px;
       color: var(--mm-ink);
       display: block;
       margin-top: 12px;
@@ -477,7 +490,7 @@ function injectStyles(base: string): void {
     .mm-world-info { flex: 1; min-width: 0; }
     .mm-world-name {
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
+      font-size: 20px;
       color: var(--mm-ink);
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -487,18 +500,29 @@ function injectStyles(base: string): void {
     }
     .mm-world-meta {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(18px + var(--mm-m5-nudge));
       color: var(--mm-ink-soft);
       margin-top: 4px;
       line-height: 1.3;
     }
+    .mm-world-desc {
+      margin-top: 6px;
+      font-family: 'M5x7', monospace;
+      font-size: calc(16px + var(--mm-m5-nudge));
+      line-height: 1.4;
+      color: var(--mm-ink-mid);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
     .mm-world-edit {
-      padding: 8px 13px;
+      padding: 10px 18px;
       background: var(--mm-surface-raised);
       border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -515,7 +539,7 @@ function injectStyles(base: string): void {
     .mm-world-empty {
       padding: 2rem 1.25rem;
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(20px + var(--mm-m5-nudge));
       color: var(--mm-ink-soft);
       text-align: center;
       line-height: 1.45;
@@ -538,6 +562,28 @@ function injectStyles(base: string): void {
       margin-top: 12px;
       flex-shrink: 0;
     }
+    .mm-host-world-editor-card {
+      display: flex;
+      flex-direction: column;
+      width: min(52rem, 100%);
+      max-width: 100%;
+      max-height: min(92vh, 820px);
+      min-height: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    .mm-host-world-editor-card .mm-bedrock-world-shell {
+      flex: 1;
+      min-height: min(560px, 78vh);
+    }
+    .mm-bedrock-world-section-subtitle {
+      margin: 18px 0 8px;
+      font-family: 'BoldPixels', monospace;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--mm-ink-soft);
+    }
     .mm-solo-footer {
       display: flex;
       justify-content: flex-start;
@@ -546,12 +592,14 @@ function injectStyles(base: string): void {
 
     /* ── Action buttons ───────────────────────────── */
     .mm-btn {
-      padding: 12px 22px;
+      box-sizing: border-box;
+      padding: 14px 22px;
+      min-height: 44px;
       background: var(--mm-ink);
       border: 1px solid var(--mm-ink);
       color: #1c1c1e;
       font-family: 'BoldPixels', monospace;
-      font-size: 16px;
+      font-size: 17px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -584,35 +632,48 @@ function injectStyles(base: string): void {
       background: rgba(255, 69, 58, 0.28);
       opacity: 1;
     }
+    .mm-btn.mm-btn-danger {
+      padding: 14px 22px;
+      min-height: 48px;
+      font-size: 17px;
+    }
+    .mm-btn.mm-bedrock-pack-remove,
+    .mm-btn.mm-bedrock-pack-add {
+      padding: 10px 18px;
+      font-size: 16px;
+      min-height: 44px;
+    }
 
     /* ── Fields ───────────────────────────────────── */
     .mm-field { margin-bottom: 14px; }
     .mm-field label {
       display: block;
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.07em;
       color: var(--mm-ink-soft);
       margin-bottom: 6px;
     }
     .mm-field input[type="text"],
+    .mm-field input[type="search"],
     .mm-field input[type="number"],
     .mm-field input[type="email"],
     .mm-field input[type="password"] {
       width: 100%;
       box-sizing: border-box;
-      padding: 12px 14px;
+      padding: 14px 16px;
       background: var(--mm-surface-deep);
       border: 1px solid var(--mm-border);
       color: var(--mm-ink);
       font-family: 'M5x7', monospace;
-      font-size: 19px;
+      font-size: calc(21px + var(--mm-m5-nudge));
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
       transition: border-color 0.14s ease;
     }
     .mm-field input[type="text"]:focus,
+    .mm-field input[type="search"]:focus,
     .mm-field input[type="number"]:focus,
     .mm-field input[type="email"]:focus,
     .mm-field input[type="password"]:focus {
@@ -629,9 +690,1130 @@ function injectStyles(base: string): void {
     .mm-note {
       margin: 0 0 1rem;
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(20px + var(--mm-m5-nudge));
       line-height: 1.5;
       color: var(--mm-ink-mid);
+    }
+    .mm-field textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 88px;
+      padding: 14px 16px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      color: var(--mm-ink);
+      font-family: 'M5x7', monospace;
+      font-size: calc(21px + var(--mm-m5-nudge));
+      line-height: 1.4;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      resize: vertical;
+      transition: border-color 0.14s ease;
+    }
+    .mm-field textarea:focus {
+      outline: none;
+      border-color: var(--mm-border-strong);
+    }
+    .mm-field textarea::placeholder {
+      color: var(--mm-ink-soft);
+      opacity: 0.7;
+    }
+
+    /* ── Workshop (Stratum menu aesthetic; no native select styling) ───────── */
+    .mm-workshop-root {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      font-family: 'M5x7', monospace;
+      color: var(--mm-ink);
+      -webkit-font-smoothing: none;
+    }
+    .mm-workshop-root .mm-panel-title {
+      margin-bottom: 0.35rem;
+    }
+    .mm-workshop-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .mm-workshop-tab {
+      padding: 12px 16px;
+      background: var(--mm-surface-deep);
+      border: 1px solid transparent;
+      color: var(--mm-ink-mid);
+      font-family: 'BoldPixels', monospace;
+      font-size: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      transition: border-color 130ms ease, background 130ms ease, color 130ms ease;
+    }
+    .mm-workshop-tab:hover:not(:disabled) {
+      background: var(--mm-surface-raised);
+      border-color: var(--mm-border);
+      color: var(--mm-ink);
+    }
+    .mm-workshop-tab-active {
+      background: var(--mm-surface-raised) !important;
+      border-color: var(--mm-border-strong) !important;
+      color: var(--mm-ink) !important;
+    }
+    .mm-workshop-tab:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+    }
+    .mm-workshop-tab-secondary {
+      padding: 8px 12px;
+      font-size: 13px;
+      background: transparent;
+      border: 1px dashed var(--mm-border);
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-tab-secondary:hover:not(:disabled) {
+      background: var(--mm-surface-deep);
+      border-style: solid;
+      color: var(--mm-ink-mid);
+    }
+    .mm-workshop-tab-secondary.mm-workshop-tab-active {
+      border-style: solid !important;
+      border-color: var(--mm-border-strong) !important;
+      color: var(--mm-ink) !important;
+      background: var(--mm-surface-raised) !important;
+    }
+    .mm-workshop-root--mod-detail .mm-workshop-tab.mm-workshop-tab-active {
+      box-shadow: inset 0 0 0 1px rgba(46, 204, 113, 0.35);
+    }
+    .mm-workshop-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 4px;
+    }
+    .mm-workshop-body::-webkit-scrollbar {
+      width: 4px;
+    }
+    .mm-workshop-body::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-workshop-body:has(.mm-workshop-browser) {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding-right: 2px;
+    }
+    .mm-workshop-browser {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
+    }
+    .mm-workshop-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .mm-workshop-filter-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex-shrink: 0;
+      padding: 12px 14px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      transition: border-color 120ms ease;
+    }
+    .mm-workshop-filter-strip-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 12px;
+    }
+    .mm-workshop-type-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .mm-workshop-sort-pills {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .mm-workshop-sort-pills::before {
+      content: "Sort";
+      font-family: 'BoldPixels', monospace;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--mm-ink-soft);
+      margin-right: 2px;
+      padding-right: 4px;
+    }
+    .mm-workshop-sort-pill {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 8px 14px;
+      background: var(--mm-surface-raised);
+      border: 1px solid var(--mm-border);
+      color: var(--mm-ink-mid);
+      font-family: 'BoldPixels', monospace;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      border-radius: 999px;
+      corner-shape: squircle;
+      transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .mm-workshop-sort-pill:not(.mm-workshop-sort-pill-active):hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: var(--mm-border-strong);
+      color: var(--mm-ink);
+    }
+    .mm-workshop-sort-pill-active {
+      border-color: rgba(46, 204, 113, 0.55);
+      background: rgba(46, 204, 113, 0.16);
+      color: #b8f5c8;
+    }
+    .mm-workshop-sort-pill-active:hover {
+      background: rgba(46, 204, 113, 0.24);
+      border-color: rgba(46, 204, 113, 0.72);
+      color: #d8f8e0;
+    }
+    .mm-workshop-type-pill {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 8px 14px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      color: var(--mm-ink-mid);
+      font-family: 'BoldPixels', monospace;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      border-radius: 999px;
+      corner-shape: squircle;
+      transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .mm-workshop-type-pill:not(.mm-workshop-type-pill-active):hover {
+      background: var(--mm-surface-raised);
+      border-color: var(--mm-border-strong);
+      color: var(--mm-ink);
+    }
+    .mm-workshop-type-pill-active {
+      border-color: rgba(46, 204, 113, 0.55);
+      background: rgba(46, 204, 113, 0.16);
+      color: #b8f5c8;
+    }
+    .mm-workshop-type-pill-active:hover {
+      background: rgba(46, 204, 113, 0.24);
+      border-color: rgba(46, 204, 113, 0.72);
+      color: #d8f8e0;
+    }
+    .mm-workshop-filter-strip .mm-workshop-type-pill:not(.mm-workshop-type-pill-active) {
+      background: var(--mm-surface-raised);
+    }
+    .mm-workshop-search-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px;
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      transition: border-color 120ms ease, background 120ms ease;
+    }
+    .mm-workshop-search-wrap:focus-within {
+      border-color: var(--mm-border-strong);
+      background: rgba(0, 0, 0, 0.28);
+    }
+    .mm-workshop-search-icon {
+      flex-shrink: 0;
+      font-size: 20px;
+      line-height: 1;
+      color: var(--mm-ink-soft);
+      opacity: 0.85;
+    }
+    .mm-workshop-search-input {
+      flex: 1;
+      min-width: 0;
+      padding: 10px 0;
+      background: transparent;
+      border: 0;
+      color: var(--mm-ink);
+      font-family: 'M5x7', monospace;
+      font-size: calc(17px + var(--mm-m5-nudge));
+      outline: none;
+    }
+    .mm-workshop-search-input::placeholder {
+      color: var(--mm-ink-soft);
+      opacity: 0.75;
+    }
+    .mm-workshop-list-status {
+      margin: 0;
+      font-family: 'M5x7', monospace;
+      font-size: calc(14px + var(--mm-m5-nudge));
+      line-height: 1.35;
+      color: var(--mm-ink-mid);
+      min-height: 1.35em;
+    }
+    .mm-workshop-list-status[hidden] {
+      display: none !important;
+    }
+    .mm-workshop-grid-host {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      padding-right: 2px;
+    }
+    .mm-workshop-grid-host::-webkit-scrollbar {
+      width: 4px;
+    }
+    .mm-workshop-grid-host::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-workshop-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .mm-workshop-rowcard {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: stretch;
+      gap: 14px;
+      padding: 12px 14px;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid var(--mm-border);
+      background: var(--mm-surface-deep);
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 140ms ease, background 140ms ease;
+    }
+    .mm-workshop-rowcard:hover {
+      border-color: var(--mm-border-strong);
+      background: var(--mm-surface-raised);
+    }
+    .mm-workshop-rowcard:focus {
+      outline: none;
+    }
+    .mm-workshop-rowcard:focus-visible {
+      outline: 2px solid rgba(46, 204, 113, 0.65);
+      outline-offset: 2px;
+    }
+    .mm-workshop-rowcard-icon {
+      flex-shrink: 0;
+      width: 72px;
+      height: 72px;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #1c1c1e;
+      border: 1px solid var(--mm-border);
+    }
+    .mm-workshop-rowcard-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    .mm-workshop-rowcard-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .mm-workshop-rowcard-title-row {
+      margin: 0;
+    }
+    .mm-workshop-rowcard-title {
+      font-family: 'BoldPixels', monospace;
+      font-size: 15px;
+      line-height: 1.25;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--mm-ink);
+      margin: 0;
+    }
+    .mm-workshop-rowcard-author {
+      margin: 0;
+      font-size: calc(16px + var(--mm-m5-nudge));
+      line-height: 1.35;
+      color: var(--mm-ink-mid);
+    }
+    .mm-workshop-rowcard-tags {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .mm-workshop-rowcard-tags .mm-workshop-badge {
+      align-self: center;
+    }
+    .mm-workshop-rowcard-aside {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 10px;
+      min-width: 6.5rem;
+      max-width: min(12rem, 40%);
+      text-align: right;
+    }
+    .mm-workshop-rowcard-meta {
+      margin: 0;
+      font-family: 'M5x7', monospace;
+      font-size: calc(14px + var(--mm-m5-nudge));
+      line-height: 1.4;
+      color: var(--mm-ink-mid);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    .mm-workshop-rowcard-install {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 10px 16px !important;
+      font-size: 13px !important;
+      min-height: 42px !important;
+      min-width: 6.5rem;
+      flex-shrink: 0;
+      transition: opacity 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+    .mm-workshop-rowcard-install:not(:disabled):hover {
+      opacity: 0.95;
+    }
+    .mm-workshop-card-stars {
+      display: inline-flex;
+      gap: 2px;
+      font-size: 14px;
+      line-height: 1;
+      letter-spacing: 0.02em;
+    }
+    .mm-workshop-card-star-on {
+      color: #ffd60a;
+    }
+    .mm-workshop-card-star-off {
+      color: var(--mm-ink-soft);
+      opacity: 0.45;
+    }
+    .mm-workshop-badge {
+      display: inline-block;
+      font-family: 'BoldPixels', monospace;
+      font-size: 10px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .mm-workshop-badge-behavior_pack {
+      background: rgba(10, 132, 255, 0.22);
+      color: #7ecbff;
+      border: 1px solid rgba(10, 132, 255, 0.35);
+    }
+    .mm-workshop-badge-resource_pack {
+      background: rgba(52, 199, 89, 0.2);
+      color: #9ee6a8;
+      border: 1px solid rgba(52, 199, 89, 0.32);
+    }
+    .mm-workshop-pager {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--mm-border);
+      background: rgba(0, 0, 0, 0.12);
+      border-radius: 0 0 var(--mm-radius-sm) var(--mm-radius-sm);
+      flex-shrink: 0;
+    }
+    .mm-workshop-pager-btn {
+      min-width: 7rem;
+      padding: 12px 18px !important;
+      min-height: 44px !important;
+      font-size: 14px !important;
+    }
+    @media (max-width: 780px) {
+      .mm-workshop-sort-pills {
+        margin-left: 0;
+        width: 100%;
+      }
+      .mm-workshop-rowcard {
+        flex-wrap: wrap;
+      }
+      .mm-workshop-rowcard-aside {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        text-align: left;
+        border-top: 1px solid var(--mm-border);
+        padding-top: 10px;
+        margin-top: 4px;
+      }
+      .mm-workshop-rowcard-meta {
+        white-space: normal;
+        text-align: left;
+        flex: 1;
+        min-width: 0;
+      }
+      .mm-workshop-rowcard-install {
+        margin-left: auto;
+      }
+      .mm-workshop-detail-columns {
+        grid-template-columns: 1fr;
+      }
+      .mm-workshop-detail-side {
+        order: -1;
+      }
+      .mm-workshop-detail-banner-inner {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .mm-workshop-detail-banner-icon {
+        width: min(88px, 22vw);
+        height: min(88px, 22vw);
+      }
+    }
+    .mm-workshop-detail-page {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      width: 100%;
+      max-width: none;
+      min-height: 0;
+    }
+    .mm-workshop-detail-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 16px;
+    }
+    .mm-workshop-detail-toolbar-context {
+      font-family: 'BoldPixels', monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-detail-back {
+      flex-shrink: 0;
+    }
+    .mm-workshop-detail-banner {
+      position: relative;
+      overflow: hidden;
+      min-height: clamp(132px, 22vw, 200px);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid var(--mm-border);
+      background:
+        linear-gradient(135deg, var(--mm-surface-deep) 0%, rgba(30, 30, 34, 0.98) 48%, rgba(18, 52, 38, 0.35) 100%);
+      background-size: cover;
+      background-position: center;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    .mm-workshop-detail-banner--has-cover {
+      background-color: #121214;
+    }
+    .mm-workshop-detail-banner-scrim {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        rgba(10, 10, 12, 0.92) 0%,
+        rgba(10, 10, 12, 0.78) 42%,
+        rgba(10, 10, 12, 0.55) 72%,
+        rgba(10, 10, 12, 0.35) 100%
+      );
+      pointer-events: none;
+    }
+    .mm-workshop-detail-banner-inner {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 1rem 1.35rem;
+      padding: 16px 18px 18px;
+      min-height: clamp(132px, 22vw, 200px);
+      box-sizing: border-box;
+    }
+    .mm-workshop-detail-banner-icon {
+      flex-shrink: 0;
+      width: clamp(88px, 14vw, 120px);
+      height: clamp(88px, 14vw, 120px);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(0, 0, 0, 0.35);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+      overflow: hidden;
+    }
+    .mm-workshop-detail-banner-icon-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    .mm-workshop-detail-banner-icon-ph {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'BoldPixels', monospace;
+      font-size: clamp(28px, 8vw, 40px);
+      line-height: 1;
+      color: rgba(46, 204, 113, 0.55);
+      background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.2));
+    }
+    .mm-workshop-detail-banner-icon-ph::before {
+      content: "◇";
+      opacity: 0.85;
+    }
+    .mm-workshop-detail-banner-text {
+      flex: 1;
+      min-width: min(100%, 200px);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .mm-workshop-detail-banner .mm-workshop-detail-name {
+      color: #f2f2f7;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    }
+    .mm-workshop-detail-banner .mm-workshop-detail-author {
+      color: rgba(235, 235, 245, 0.72);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    }
+    .mm-workshop-detail-banner-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+      margin-top: 4px;
+    }
+    .mm-workshop-detail-banner-meta .mm-workshop-badge {
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+    }
+    .mm-workshop-detail-banner-stat {
+      font-family: 'M5x7', monospace;
+      font-size: calc(14px + var(--mm-m5-nudge));
+      line-height: 1.3;
+      color: rgba(235, 235, 245, 0.78);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    }
+    .mm-workshop-detail-columns {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) min(300px, 32vw);
+      gap: 20px 24px;
+      align-items: start;
+    }
+    .mm-workshop-detail-main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      padding: 4px 2px 8px;
+    }
+    .mm-workshop-detail-section-title {
+      margin: 0;
+      font-family: 'BoldPixels', monospace;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--mm-ink-soft);
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-workshop-detail-comments-count {
+      color: var(--mm-ink-mid);
+      font-weight: normal;
+    }
+    .mm-workshop-detail-comments-section {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .mm-workshop-detail-comments-section .mm-workshop-comment-list {
+      margin-top: 4px;
+    }
+    .mm-workshop-detail-comments-section .mm-workshop-comment:first-child {
+      padding-top: 6px;
+    }
+    .mm-workshop-detail-side {
+      min-width: 0;
+    }
+    .mm-workshop-detail-side-card {
+      position: sticky;
+      top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 16px 16px 18px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    .mm-workshop-detail-meta-list {
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 6px 12px;
+      font-family: 'M5x7', monospace;
+      font-size: calc(15px + var(--mm-m5-nudge));
+      line-height: 1.35;
+    }
+    .mm-workshop-detail-meta-term {
+      margin: 0;
+      color: var(--mm-ink-soft);
+      font-weight: normal;
+    }
+    .mm-workshop-detail-meta-def {
+      margin: 0;
+      color: var(--mm-ink-mid);
+      word-break: break-word;
+    }
+    .mm-workshop-detail-name {
+      font-family: 'BoldPixels', monospace;
+      font-size: clamp(18px, 2.4vw, 26px);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 0;
+      color: var(--mm-ink);
+      line-height: 1.15;
+    }
+    .mm-workshop-detail-author {
+      margin: 0;
+      font-size: calc(16px + var(--mm-m5-nudge));
+      line-height: 1.35;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-detail-desc {
+      margin: 0;
+      font-size: calc(17px + var(--mm-m5-nudge));
+      line-height: 1.55;
+      color: var(--mm-ink-mid);
+      max-width: none;
+      white-space: pre-wrap;
+    }
+    .mm-workshop-detail-actions {
+      display: flex;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      gap: 10px;
+      margin-top: 0;
+    }
+    .mm-workshop-detail-actions .mm-btn {
+      width: 100%;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+    .mm-workshop-detail-install {
+      min-width: 0;
+      width: 100%;
+      padding: 14px 22px !important;
+    }
+    .mm-workshop-detail-uninstall {
+      min-width: 0;
+      width: 100%;
+    }
+    .mm-workshop-rowcard-install.mm-btn,
+    .mm-workshop-detail-actions .mm-btn,
+    .mm-workshop-library-action-btn.mm-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+    /* The hidden attribute only applies display:none in UA rules; do not override it here. */
+    .mm-workshop-btn-content--idle:not([hidden]) {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .mm-workshop-btn-content--busy:not([hidden]) {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-family: 'M5x7', monospace;
+      font-size: calc(13px + var(--mm-m5-nudge));
+      text-transform: none;
+      letter-spacing: normal;
+      line-height: 1.2;
+    }
+    .mm-workshop-btn-content--idle[hidden],
+    .mm-workshop-btn-content--busy[hidden] {
+      display: none !important;
+    }
+    .mm-workshop-detail-actions .mm-workshop-btn-content--busy:not([hidden]) {
+      width: 100%;
+    }
+    .mm-workshop-spinner--btn {
+      width: 18px;
+      height: 18px;
+      border-width: 2px;
+      flex-shrink: 0;
+    }
+    .mm-workshop-btn--working {
+      cursor: wait;
+    }
+    .mm-workshop-btn--working:hover {
+      opacity: 1;
+    }
+    .mm-workshop-action-feedback {
+      margin: 0 0 12px;
+      min-height: 1.35em;
+      font-family: 'M5x7', monospace;
+      font-size: calc(15px + var(--mm-m5-nudge));
+      line-height: 1.4;
+      color: rgba(52, 199, 89, 0.95);
+    }
+    .mm-workshop-action-feedback[hidden] {
+      display: none !important;
+    }
+    .mm-workshop-detail-rate {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+      padding-top: 12px;
+      margin-top: 0;
+      border-top: 1px solid var(--mm-border);
+    }
+    .mm-workshop-detail-rate-label {
+      font-family: 'BoldPixels', monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-detail-rate .mm-workshop-stars {
+      margin-bottom: 0;
+    }
+    .mm-workshop-stars {
+      display: flex;
+      gap: 3px;
+      margin-bottom: 8px;
+    }
+    .mm-workshop-star {
+      width: 32px;
+      height: 32px;
+      min-height: 0;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      color: #ffd60a;
+      font-family: 'BoldPixels', monospace;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .mm-workshop-star:hover:not(:disabled) {
+      background: var(--mm-surface-raised);
+      border-color: var(--mm-border-strong);
+    }
+    .mm-workshop-star:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-comments {
+      margin-top: 1rem;
+      padding-top: 0;
+      border-top: none;
+    }
+    .mm-workshop-comments-summary {
+      font-family: 'BoldPixels', monospace;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--mm-ink-soft);
+      margin: 0;
+      padding: 10px 0;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+      border-top: 1px solid var(--mm-border);
+    }
+    .mm-workshop-comments-summary::-webkit-details-marker {
+      display: none;
+    }
+    .mm-workshop-comments-summary:hover {
+      color: var(--mm-ink-mid);
+    }
+    .mm-workshop-comments-summary:focus-visible {
+      outline: 2px solid rgba(46, 204, 113, 0.55);
+      outline-offset: 2px;
+      border-radius: var(--mm-radius-sm);
+    }
+    .mm-workshop-comments-inner {
+      padding-bottom: 4px;
+    }
+    .mm-workshop-comment {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-workshop-comment-head {
+      font-family: 'BoldPixels', monospace;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--mm-ink-soft);
+      margin-bottom: 6px;
+    }
+    .mm-workshop-comment-body {
+      font-size: calc(18px + var(--mm-m5-nudge));
+      line-height: 1.45;
+      color: var(--mm-ink-mid);
+    }
+    .mm-workshop-comment-compose {
+      margin-top: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .mm-workshop-comment-compose .mm-field {
+      width: 100%;
+      margin-bottom: 0;
+    }
+    .mm-workshop-owned {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .mm-workshop-owned-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-workshop-owned-label {
+      flex: 1;
+      min-width: 160px;
+      font-size: calc(18px + var(--mm-m5-nudge));
+      color: var(--mm-ink-mid);
+      line-height: 1.35;
+    }
+    .mm-workshop-owned-label strong {
+      font-family: 'BoldPixels', monospace;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--mm-ink);
+      display: block;
+      margin-bottom: 4px;
+    }
+    .mm-workshop-owned-aside {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .mm-workshop-library-intro {
+      margin-bottom: 12px;
+      max-width: 32rem;
+    }
+    .mm-workshop-library-lead {
+      margin: 0 0 8px;
+      font-family: 'M5x7', monospace;
+      font-size: calc(17px + var(--mm-m5-nudge));
+      line-height: 1.4;
+      color: var(--mm-ink-mid);
+    }
+    .mm-workshop-library-tips {
+      margin: 0;
+      padding-left: 1.15rem;
+      font-family: 'M5x7', monospace;
+      font-size: calc(15px + var(--mm-m5-nudge));
+      line-height: 1.45;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-library-tips li {
+      margin-bottom: 4px;
+    }
+    .mm-workshop-library-toolbar {
+      margin-bottom: 10px;
+    }
+    .mm-workshop-library-heading {
+      margin: 14px 0 8px;
+      font-family: 'BoldPixels', monospace;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-library-empty-hint {
+      margin: 0 0 8px;
+      font-family: 'M5x7', monospace;
+      font-size: calc(15px + var(--mm-m5-nudge));
+      line-height: 1.45;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-upload-steps {
+      margin: 0 0 6px;
+      font-family: 'BoldPixels', monospace;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--mm-ink-soft);
+    }
+    .mm-workshop-upload-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-width: 28rem;
+    }
+    .mm-workshop-readonly-val {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      padding: 12px 14px;
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px dashed var(--mm-border);
+      color: var(--mm-ink-mid);
+      font-family: 'M5x7', monospace;
+      font-size: calc(19px + var(--mm-m5-nudge));
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      min-height: 2.5rem;
+    }
+    .mm-workshop-file-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .mm-workshop-file-native {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .mm-workshop-filename {
+      font-family: 'M5x7', monospace;
+      font-size: calc(17px + var(--mm-m5-nudge));
+      color: var(--mm-ink-soft);
+      flex: 1;
+      min-width: 120px;
+    }
+    .mm-workshop-upload-preview-wrap {
+      margin-top: 8px;
+    }
+    .mm-workshop-upload-preview {
+      width: 112px;
+      height: 112px;
+      object-fit: cover;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid var(--mm-border);
+      background: #1c1c1e;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    .mm-workshop-publish-err {
+      font-family: 'M5x7', monospace;
+      font-size: calc(18px + var(--mm-m5-nudge));
+      color: var(--mm-danger);
+      min-height: 1.35em;
+      margin: 8px 0 0;
+    }
+    .mm-workshop-err {
+      font-family: 'M5x7', monospace;
+      font-size: calc(18px + var(--mm-m5-nudge));
+      color: var(--mm-danger);
+      margin: 0 0 10px;
+    }
+    .mm-workshop-loading {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: calc(19px + var(--mm-m5-nudge));
+      color: var(--mm-ink-mid);
+    }
+    .mm-workshop-spinner {
+      width: 22px;
+      height: 22px;
+      border: 2px solid var(--mm-border);
+      border-top-color: var(--mm-ink-mid);
+      border-radius: 50%;
+      animation: mm-workshop-spin 0.7s linear infinite;
+    }
+    @keyframes mm-workshop-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    .mm-workshop-empty {
+      text-align: center;
+      padding: 2.5rem 1rem;
+      font-family: 'M5x7', monospace;
+      font-size: calc(20px + var(--mm-m5-nudge));
+      color: var(--mm-ink-soft);
+      line-height: 1.5;
+    }
+    .mm-workshop-grid-host > .mm-workshop-empty {
+      text-align: left;
+      padding: 2rem 0.25rem;
+    }
+    .mm-workshop-retry {
+      margin-top: 14px;
     }
 
     /* ── Online / settings: fill main column with tab panel ---------------- */
@@ -646,10 +1828,11 @@ function injectStyles(base: string): void {
     }
     .mm-feedback-error {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(18px + var(--mm-m5-nudge));
       color: var(--mm-danger);
       min-height: 1.25em;
       margin-top: 10px;
+      line-height: 1.45;
     }
 
     /* ── Settings rows ───────────────────────────── */
@@ -661,11 +1844,11 @@ function injectStyles(base: string): void {
     }
     .mm-settings-row label {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-soft);
-      width: 104px;
+      width: 112px;
       flex-shrink: 0;
     }
     .mm-settings-row input[type="range"] {
@@ -674,14 +1857,14 @@ function injectStyles(base: string): void {
     }
     .mm-settings-val {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(18px + var(--mm-m5-nudge));
       color: var(--mm-ink-mid);
-      width: 40px;
+      width: 44px;
       text-align: right;
     }
     .mm-settings-section {
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: 14px;
       text-transform: uppercase;
       letter-spacing: 0.07em;
       color: var(--mm-ink-soft);
@@ -692,7 +1875,7 @@ function injectStyles(base: string): void {
     .mm-settings-section:first-child { margin-top: 0; }
     .mm-settings-coming-soon {
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(20px + var(--mm-m5-nudge));
       color: var(--mm-ink-soft);
       margin-top: 4px;
       line-height: 1.45;
@@ -732,16 +1915,17 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border-strong);
       border-radius: var(--mm-radius-md);
       corner-shape: squircle;
-      padding: 1.35rem 1.5rem;
+      padding: 1.45rem 1.6rem;
       animation: mm-modal-card-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
     }
     .mm-modal-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 20px;
+      font-size: clamp(22px, 2.5vw, 26px);
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 1px;
       color: var(--mm-ink);
       margin: 0 0 1.1rem;
+      line-height: 1.15;
     }
     .mm-modal-actions {
       display: flex;
@@ -751,17 +1935,18 @@ function injectStyles(base: string): void {
     }
     .mm-modal-meta {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(19px + var(--mm-m5-nudge));
       color: var(--mm-ink-soft);
       margin-bottom: 12px;
-      line-height: 1.4;
+      line-height: 1.45;
     }
     .mm-modal-feedback {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(19px + var(--mm-m5-nudge));
       color: var(--mm-ink-mid);
       min-height: 1.2em;
       margin-top: 8px;
+      line-height: 1.45;
     }
 
     /* ── Rooms (online tab) ───────────────────── */
@@ -810,14 +1995,14 @@ function injectStyles(base: string): void {
     .mm-rooms-row:hover { background: rgba(255, 255, 255, 0.04); }
     .mm-rooms-row-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: 17px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--mm-ink);
     }
     .mm-rooms-row-meta {
       font-family: 'M5x7', monospace;
-      font-size: 15px;
+      font-size: calc(18px + var(--mm-m5-nudge));
       color: var(--mm-ink-soft);
       display: flex;
       flex-wrap: wrap;
@@ -828,6 +2013,7 @@ function injectStyles(base: string): void {
       padding: 2rem 1rem;
       text-align: center;
       font-family: 'M5x7', monospace;
+      font-size: calc(20px + var(--mm-m5-nudge));
       color: var(--mm-ink-soft);
       line-height: 1.45;
     }
@@ -869,6 +2055,439 @@ function injectStyles(base: string): void {
       justify-content: flex-end;
       flex-wrap: wrap;
     }
+
+    /* Edit World (split layout — embedded in Solo panel, not a modal) */
+    .mm-solo-panel--world-edit {
+      padding: 0;
+      overflow: hidden;
+    }
+    .mm-bedrock-world-shell {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .mm-bedrock-world-topbar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-world-edit-back.mm-btn.mm-btn-subtle {
+      flex-shrink: 0;
+      min-width: 52px;
+      width: 52px;
+      height: 52px;
+      min-height: 0;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'BoldPixels', monospace;
+      font-size: 28px;
+      line-height: 1;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .mm-bedrock-world-heading {
+      margin: 0;
+      font-family: 'BoldPixels', monospace;
+      font-size: clamp(22px, 2.8vw, 28px);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--mm-ink);
+      line-height: 1.15;
+    }
+    .mm-bedrock-world-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: row;
+    }
+    .mm-bedrock-world-sidebar {
+      width: min(288px, 40%);
+      flex-shrink: 0;
+      border-right: 1px solid var(--mm-border);
+      background: var(--mm-surface-deep);
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      gap: 14px;
+      overflow-y: auto;
+    }
+    .mm-bedrock-world-sidebar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .mm-bedrock-world-sidebar::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-bedrock-world-thumb {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid var(--mm-border);
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.35);
+    }
+    .mm-bedrock-world-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    .mm-bedrock-world-thumb-empty {
+      width: 100%;
+      height: 100%;
+      min-height: 76px;
+      background: linear-gradient(145deg, #3a3a3c, #2c2c2e);
+    }
+    .mm-world-edit-save.mm-btn {
+      width: 100%;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 16px 20px;
+      font-size: 18px;
+      min-height: 48px;
+    }
+    .mm-bedrock-world-sidebar .mm-modal-feedback {
+      margin-top: 6px;
+      font-size: calc(19px + var(--mm-m5-nudge));
+      line-height: 1.45;
+    }
+    .mm-bedrock-world-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .mm-bedrock-world-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 14px 14px;
+      border: 1px solid transparent;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      background: transparent;
+      color: var(--mm-ink-mid);
+      font-family: 'M5x7', monospace;
+      font-size: calc(20px + var(--mm-m5-nudge));
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 130ms ease, background 130ms ease, color 130ms ease;
+    }
+    .mm-bedrock-world-nav-item:hover {
+      background: rgba(255, 255, 255, 0.04);
+      border-color: var(--mm-border);
+      color: var(--mm-ink);
+    }
+    .mm-bedrock-world-nav-item--active {
+      background: var(--mm-surface-raised) !important;
+      border-color: var(--mm-border-strong) !important;
+      color: var(--mm-ink) !important;
+    }
+    .mm-bedrock-world-nav-icon {
+      width: 28px;
+      text-align: center;
+      font-size: 17px;
+      font-family: 'BoldPixels', monospace;
+      color: var(--mm-ink-soft);
+      opacity: 0.95;
+    }
+    .mm-bedrock-world-nav-item--active .mm-bedrock-world-nav-icon {
+      color: var(--mm-ink-mid);
+    }
+    .mm-bedrock-world-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--mm-surface);
+    }
+    .mm-bedrock-world-main-head {
+      flex-shrink: 0;
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-bedrock-world-section-title {
+      margin: 0;
+      font-family: 'BoldPixels', monospace;
+      font-size: 17px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--mm-ink-soft);
+    }
+    .mm-bedrock-world-section-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px 20px 24px;
+    }
+    .mm-bedrock-world-section-body::-webkit-scrollbar {
+      width: 4px;
+    }
+    .mm-bedrock-world-section-body::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-bedrock-panel-desc {
+      margin: 0 0 12px;
+      font-family: 'M5x7', monospace;
+      font-size: calc(20px + var(--mm-m5-nudge));
+      line-height: 1.45;
+      color: var(--mm-ink-mid);
+    }
+    .mm-bedrock-pack-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+    }
+    .mm-pack-drag-row.mm-bedrock-pack-row {
+      cursor: grab;
+      padding-left: 8px;
+      gap: 10px;
+    }
+    .mm-pack-drag-row.mm-bedrock-pack-row:active {
+      cursor: grabbing;
+    }
+    .mm-pack-drag-handle {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      align-self: stretch;
+      margin: -4px 0 -4px -2px;
+      padding: 4px 2px;
+      border-radius: 6px;
+      color: var(--mm-ink-soft);
+      opacity: 0.85;
+    }
+    .mm-pack-drag-handle-dots {
+      display: grid;
+      grid-template-columns: 4px 4px;
+      grid-template-rows: repeat(3, 4px);
+      gap: 4px 5px;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .mm-pack-drag-handle-dots span {
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.9;
+    }
+    .mm-pack-drag-row-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .mm-pack-drag-row-index {
+      flex-shrink: 0;
+      font-family: 'BoldPixels', monospace;
+      font-size: 13px;
+      color: var(--mm-ink-soft);
+      min-width: 2rem;
+    }
+    .mm-pack-bedrock-tabs {
+      display: flex;
+      flex-direction: row;
+      gap: 0;
+      margin-bottom: 4px;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-pack-bedrock-tab {
+      margin: 0;
+      padding: 12px 20px 10px;
+      background: transparent;
+      border: none;
+      border-bottom: 3px solid transparent;
+      color: var(--mm-ink-soft);
+      font-family: 'BoldPixels', monospace;
+      font-size: 15px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: color 120ms ease, border-color 120ms ease;
+    }
+    .mm-pack-bedrock-tab:hover {
+      color: var(--mm-ink-mid);
+    }
+    .mm-pack-bedrock-tab--active {
+      color: var(--mm-ink) !important;
+      border-bottom-color: var(--mm-ink) !important;
+    }
+    .mm-pack-bedrock-tab-body {
+      min-height: 120px;
+      padding-top: 14px;
+    }
+    .mm-pack-bedrock-pane-label {
+      margin: 0 0 8px;
+      font-family: 'BoldPixels', monospace;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--mm-ink-soft);
+    }
+    .mm-pack-bedrock-footnote {
+      margin: 12px 0 0 !important;
+      font-size: calc(16px + var(--mm-m5-nudge)) !important;
+      line-height: 1.45 !important;
+    }
+    .mm-pack-available-well {
+      max-height: min(40vh, 320px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 10px 12px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+    }
+    .mm-pack-available-well::-webkit-scrollbar {
+      width: 4px;
+    }
+    .mm-pack-available-well::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-pack-available-mount {
+      min-height: 0;
+    }
+    .mm-bedrock-pack-general-options {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--mm-border);
+    }
+    .mm-bedrock-pack-row-label {
+      font-family: 'M5x7', monospace;
+      font-size: calc(19px + var(--mm-m5-nudge));
+      color: var(--mm-ink-mid);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mm-pack-dual-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .mm-pack-stack-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+    .mm-pack-stack-block-title {
+      margin: 0;
+      font-family: 'BoldPixels', monospace;
+      font-size: 14px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--mm-ink-soft);
+    }
+    .mm-pack-active-well,
+    .mm-pack-installed-inner {
+      max-height: min(32vh, 280px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 10px 12px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+    }
+    .mm-pack-active-well::-webkit-scrollbar,
+    .mm-pack-installed-inner::-webkit-scrollbar {
+      width: 4px;
+    }
+    .mm-pack-active-well::-webkit-scrollbar-thumb,
+    .mm-pack-installed-inner::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-pack-active-empty.mm-note {
+      list-style: none;
+      padding: 10px 6px;
+      margin: 0;
+      text-align: center;
+      font-size: calc(18px + var(--mm-m5-nudge));
+      line-height: 1.4;
+    }
+    .mm-pack-installed-row {
+      cursor: default;
+      margin-bottom: 6px;
+    }
+    .mm-pack-installed-row:last-child {
+      margin-bottom: 0;
+    }
+    .mm-bedrock-mp-toggle {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      margin-top: 8px;
+      cursor: pointer;
+      font-family: 'M5x7', monospace;
+      font-size: calc(20px + var(--mm-m5-nudge));
+      letter-spacing: normal;
+      font-weight: normal;
+      color: var(--mm-ink-mid);
+      line-height: 1.4;
+    }
+    .mm-bedrock-mp-toggle input {
+      margin-top: 3px;
+      flex-shrink: 0;
+      accent-color: #aeaeb2;
+      width: 20px;
+      height: 20px;
+    }
+    .mm-pack-built-in-sub {
+      font-size: calc(16px + var(--mm-m5-nudge));
+      line-height: 1.45;
+      color: var(--mm-ink-soft);
+    }
+    .mm-bedrock-world-meta {
+      font-size: calc(19px + var(--mm-m5-nudge));
+      line-height: 1.45;
+    }
+
+    @media (max-width: 620px) {
+      .mm-bedrock-world-body {
+        flex-direction: column;
+      }
+      .mm-bedrock-world-sidebar {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--mm-border);
+        max-height: 42vh;
+      }
+      .mm-bedrock-world-nav {
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+      .mm-bedrock-world-nav-item {
+        flex: 1 1 auto;
+        min-width: 44%;
+      }
+    }
+
     .mm-comments-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
     .mm-comment-item {
       padding: 10px 12px;
@@ -878,13 +2497,13 @@ function injectStyles(base: string): void {
     }
     .mm-comment-author {
       font-family: 'BoldPixels', monospace;
-      font-size: 12px;
+      font-size: 14px;
       color: var(--mm-ink-mid);
       margin-bottom: 4px;
     }
     .mm-comment-body {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(18px + var(--mm-m5-nudge));
       color: var(--mm-ink-mid);
       line-height: 1.4;
       white-space: pre-wrap;
@@ -892,10 +2511,10 @@ function injectStyles(base: string): void {
     }
     .mm-stars-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
     .mm-star-btn {
-      min-width: 36px;
-      padding: 6px 8px;
+      min-width: 40px;
+      padding: 8px 10px;
       font-family: 'M5x7', monospace;
-      font-size: 15px;
+      font-size: calc(16px + var(--mm-m5-nudge));
       background: var(--mm-surface-deep);
       border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
@@ -909,12 +2528,12 @@ function injectStyles(base: string): void {
     select.mm-select {
       width: 100%;
       box-sizing: border-box;
-      padding: 10px 12px;
+      padding: 12px 14px;
       background: var(--mm-surface-deep);
       border: 1px solid var(--mm-border);
       color: var(--mm-ink);
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(19px + var(--mm-m5-nudge));
       border-radius: var(--mm-radius-sm);
       cursor: pointer;
     }
@@ -922,25 +2541,16 @@ function injectStyles(base: string): void {
       width: 100%;
       box-sizing: border-box;
       min-height: 88px;
-      padding: 12px 14px;
+      padding: 14px 16px;
       background: var(--mm-surface-deep);
       border: 1px solid var(--mm-border);
       color: var(--mm-ink);
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(19px + var(--mm-m5-nudge));
       border-radius: var(--mm-radius-sm);
       resize: vertical;
     }
 
-    /* ── Online: glass panel (match in-game chat chrome) ─────────────── */
-    .mm-online-panel.mm-panel--glass {
-      background: rgba(36, 36, 38, 0.42);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.07);
-      box-shadow: 0 3px 14px rgba(0, 0, 0, 0.22);
-      padding: clamp(1.1rem, 2.5vw, 1.5rem) clamp(1.15rem, 2.8vw, 1.65rem);
-    }
     .mm-online-title-row {
       display: flex;
       align-items: center;
@@ -964,11 +2574,10 @@ function injectStyles(base: string): void {
       flex-direction: column;
       gap: 1rem;
     }
-    .mm-room-glass-card {
-      background: rgba(44, 44, 46, 0.38);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.07);
+    /* Room detail sections: same inset surface as world list / changelog card */
+    .mm-room-section-card {
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
       border-radius: var(--mm-radius-md);
       corner-shape: squircle;
       padding: 1.15rem 1.25rem;
@@ -976,7 +2585,7 @@ function injectStyles(base: string): void {
     }
     .mm-room-section-kicker {
       font-family: 'BoldPixels', monospace;
-      font-size: 11px;
+      font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.1em;
       color: var(--mm-ink-soft);
@@ -990,11 +2599,11 @@ function injectStyles(base: string): void {
     }
     .mm-rooms-badge {
       font-family: 'M5x7', monospace;
-      font-size: 14px;
-      padding: 4px 10px;
+      font-size: calc(16px + var(--mm-m5-nudge));
+      padding: 6px 12px;
       border-radius: 999px;
-      background: rgba(0, 0, 0, 0.22);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: var(--mm-surface-raised);
+      border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
     }
     .mm-room-detail-scroll {
@@ -1007,32 +2616,29 @@ function injectStyles(base: string): void {
       padding-right: 2px;
     }
     .mm-room-detail-scroll::-webkit-scrollbar { width: 4px; }
+    .mm-room-detail-scroll::-webkit-scrollbar-track { background: transparent; }
     .mm-room-detail-scroll::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.15);
+      background: var(--mm-border-strong);
       border-radius: 4px;
     }
-    .mm-comment-item {
-      background: rgba(0, 0, 0, 0.18);
-      border-color: rgba(255, 255, 255, 0.06);
-    }
     .mm-placeholder-block {
-      border: 1px dashed rgba(255, 255, 255, 0.14);
+      border: 1px dashed var(--mm-border);
       border-radius: var(--mm-radius-sm);
       padding: 1.35rem 1.15rem;
       text-align: center;
-      background: rgba(0, 0, 0, 0.12);
+      background: var(--mm-surface-deep);
     }
     .mm-placeholder-block-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: 15px;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 1px;
       color: var(--mm-ink-mid);
       margin: 0 0 8px;
     }
     .mm-placeholder-block-body {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: calc(18px + var(--mm-m5-nudge));
       line-height: 1.5;
       color: var(--mm-ink-soft);
       margin: 0;
@@ -1040,11 +2646,65 @@ function injectStyles(base: string): void {
       margin-left: auto;
       margin-right: auto;
     }
+    /*
+     * M5x7 is a fixed bitmap grid in a TTF. Browsers still rasterize it with anti-aliasing;
+     * fractional font-size (e.g. clamp + vw), em letter-spacing, and synthesized bold make
+     * stems look uneven. Snap responsive titles where supported; keep body M5x7 at normal spacing.
+     */
+    .mm-note,
+    .mm-modal-meta,
+    .mm-modal-feedback,
+    .mm-bedrock-panel-desc,
+    .mm-bedrock-world-meta,
+    .mm-whats-new-body,
+    .mm-bedrock-pack-row-label,
+    .mm-pack-built-in-sub,
+    .mm-pack-active-empty.mm-note,
+    .mm-world-meta,
+    .mm-world-desc,
+    .mm-nav-meta,
+    .mm-nav-label-sub,
+    .mm-brand-subtitle,
+    .mm-placeholder-block-body,
+    .mm-settings-val,
+    .mm-settings-coming-soon,
+    .mm-feedback-error {
+      letter-spacing: normal;
+      font-weight: normal;
+    }
+    .mm-field input[type="text"],
+    .mm-field input[type="search"],
+    .mm-field input[type="number"],
+    .mm-field input[type="email"],
+    .mm-field input[type="password"],
+    .mm-field textarea {
+      letter-spacing: normal;
+      font-weight: normal;
+    }
+
+    @supports (font-size: round(nearest, 22px, 1px)) {
+      .mm-panel-title {
+        font-size: round(nearest, clamp(22px, 2.6vw, 28px), 1px);
+      }
+      .mm-modal-title {
+        font-size: round(nearest, clamp(22px, 2.5vw, 26px), 1px);
+      }
+      .mm-bedrock-world-heading {
+        font-size: round(nearest, clamp(22px, 2.8vw, 28px), 1px);
+      }
+      .mm-brand-title {
+        font-size: round(nearest, clamp(32px, 5vw, 48px), 1px);
+      }
+      .mm-workshop-detail-name {
+        font-size: round(nearest, clamp(18px, 2.4vw, 26px), 1px);
+      }
+    }
+
     .mm-room-join-footer {
       flex-shrink: 0;
       margin-top: auto;
       padding-top: 1rem;
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      border-top: 1px solid var(--mm-border);
       display: flex;
       flex-wrap: wrap;
       align-items: flex-end;
@@ -1055,22 +2715,19 @@ function injectStyles(base: string): void {
       min-width: min(200px, 100%);
       margin-bottom: 0;
     }
-    .mm-online-panel .mm-rooms-list {
-      background: rgba(0, 0, 0, 0.2);
-      border-color: rgba(255, 255, 255, 0.08);
-    }
-    .mm-online-panel .mm-rooms-row {
-      border-bottom-color: rgba(255, 255, 255, 0.06);
-    }
-    .mm-online-panel .mm-field input,
-    .mm-online-panel .mm-select,
-    .mm-online-panel textarea.mm-textarea {
-      background: rgba(36, 36, 38, 0.45);
-      border-color: rgba(255, 255, 255, 0.09);
-    }
-
     @media (prefers-reduced-motion: reduce) {
       .mm-nav-btn, .mm-btn, .mm-discord, .mm-world-row { transition: none; }
+      .mm-workshop-spinner,
+      .mm-workshop-spinner--btn {
+        animation: none;
+      }
+      .mm-workshop-rowcard,
+      .mm-workshop-type-pill,
+      .mm-workshop-sort-pill,
+      .mm-workshop-search-wrap,
+      .mm-workshop-filter-strip {
+        transition: none;
+      }
       .mm-modal,
       .mm-modal-card {
         animation: none;
@@ -1123,13 +2780,19 @@ const WHATS_NEW_HTML = `
 // MainMenu
 // ---------------------------------------------------------------------------
 
-type NavTab = "solo" | "online" | "settings" | "profile";
+type NavTab = "solo" | "online" | "workshop" | "settings" | "profile";
+
+export type MainMenuWorkshopDeps = {
+  bus: EventBus;
+  modRepository: ModRepository;
+};
 
 export class MainMenu {
   static async show(
     mount: HTMLElement,
     store: IndexedDBStore,
     auth: IAuthProvider,
+    workshop?: MainMenuWorkshopDeps,
   ): Promise<MainMenuResult> {
     const base = import.meta.env.BASE_URL;
     injectStyles(base);
@@ -1160,7 +2823,7 @@ export class MainMenu {
       discordBtn.type = "button";
       discordBtn.textContent = "Discord";
       discordBtn.addEventListener("click", () => {
-        window.open("https://discord.gg/stratum", "_blank", "noopener");
+        window.open("https://discord.gg/wBDA9c7DKk", "_blank", "noopener");
       });
       topbar.appendChild(discordBtn);
       root.appendChild(topbar);
@@ -1177,7 +2840,7 @@ export class MainMenu {
       brand.className = "mm-brand";
       const brandLogo = document.createElement("img");
       brandLogo.className = "mm-brand-logo";
-      brandLogo.src = `${base}assets/textures/logo.png`;
+      brandLogo.src = stratumCoreTextureAssetUrl("logo.png");
       brandLogo.alt = "Stratum";
       brand.appendChild(brandLogo);
       nav.appendChild(brand);
@@ -1190,11 +2853,19 @@ export class MainMenu {
       const navBtns = new Map<NavTab, HTMLButtonElement>();
 
       let profileUnmount: (() => void) | null = null;
+      let workshopUnmount: (() => void) | null = null;
 
       function disposeProfile(): void {
         if (profileUnmount !== null) {
           profileUnmount();
           profileUnmount = null;
+        }
+      }
+
+      function disposeWorkshop(): void {
+        if (workshopUnmount !== null) {
+          workshopUnmount();
+          workshopUnmount = null;
         }
       }
 
@@ -1206,6 +2877,9 @@ export class MainMenu {
       }> = [
         { id: "solo", label: "Solo" },
         { id: "online", label: "Online" },
+        ...(workshop !== undefined
+          ? [{ id: "workshop" as const, label: "Workshop" }]
+          : []),
         { id: "settings", label: "Settings" },
         { id: "profile", label: "Profile", sub: "Account" },
       ];
@@ -1322,80 +2996,11 @@ export class MainMenu {
         nameInput.focus();
       }
 
-      function openEditModal(
-        world: WorldMetadata,
-        rerenderList: () => Promise<void>,
-      ): void {
-        closeModal();
-        const modal = document.createElement("div");
-        modal.className = "mm-modal";
-        const card = document.createElement("div");
-        card.className = "mm-modal-card";
-
-        const heading = document.createElement("h3");
-        heading.className = "mm-modal-title";
-        heading.textContent = "Edit World";
-
-        const nameField = makeField("World name");
-        const nameInput = document.createElement("input");
-        nameInput.type = "text";
-        nameInput.value = world.name;
-        nameField.appendChild(nameInput);
-
-        const meta = document.createElement("p");
-        meta.className = "mm-modal-meta";
-        meta.textContent = `Seed ${world.seed} · ${formatDate(world.lastPlayedAt)}`;
-
-        const feedback = document.createElement("div");
-        feedback.className = "mm-modal-feedback";
-
-        const actions = document.createElement("div");
-        actions.className = "mm-modal-actions";
-        const closeBtn = makeBtn("Close", "mm-btn mm-btn-subtle");
-        closeBtn.addEventListener("click", closeModal);
-        const deleteBtn = makeBtn("Delete", "mm-btn mm-btn-danger");
-        deleteBtn.addEventListener("click", () => {
-          if (pendingDeleteUuid !== world.uuid) {
-            pendingDeleteUuid = world.uuid;
-            deleteBtn.textContent = "Confirm Delete";
-            feedback.textContent = "Press again to permanently delete this world.";
-            return;
-          }
-          void store.deleteWorld(world.uuid).then(async () => {
-            closeModal();
-            await rerenderList();
-          });
-        });
-        const saveBtn = makeBtn("Save", "mm-btn");
-        saveBtn.addEventListener("click", () => {
-          const nextName = nameInput.value.trim() || "My World";
-          void store.renameWorld(world.uuid, nextName).then(async () => {
-            feedback.textContent = "Saved.";
-            await rerenderList();
-            closeModal();
-          });
-        });
-        actions.appendChild(closeBtn);
-        actions.appendChild(deleteBtn);
-        actions.appendChild(saveBtn);
-
-        card.appendChild(heading);
-        card.appendChild(nameField);
-        card.appendChild(meta);
-        card.appendChild(feedback);
-        card.appendChild(actions);
-        modal.appendChild(card);
-        modal.addEventListener("click", (ev) => {
-          if (ev.target === modal) closeModal();
-        });
-        root.appendChild(modal);
-        nameInput.focus();
-      }
-
       // -- Render functions --------------------------------------------------
 
       function renderHome(): void {
         disposeProfile();
+        disposeWorkshop();
         content.replaceChildren();
         content.classList.add("mm-content-home");
         content.classList.remove("mm-content-tab");
@@ -1428,7 +3033,7 @@ export class MainMenu {
         const readMoreBtn = makeBtn("Read More", "mm-btn mm-btn-subtle mm-home-changelog-cta");
         readMoreBtn.addEventListener("click", () => {
           // Placeholder CTA until changelog route/details view is implemented.
-          window.open("https://discord.gg/stratum", "_blank", "noopener");
+          window.open("https://discord.gg/wBDA9c7DKk", "_blank", "noopener");
         });
         wnCopy.appendChild(readMoreBtn);
 
@@ -1443,11 +3048,37 @@ export class MainMenu {
         content.classList.add("mm-content-tab");
         if (tab === "solo") renderSolo();
         else if (tab === "online") renderOnline();
+        else if (tab === "workshop") renderWorkshop();
         else if (tab === "settings") renderSettings();
         else if (tab === "profile") renderProfile();
       }
 
+      function renderWorkshop(): void {
+        if (workshop === undefined) {
+          return;
+        }
+        disposeProfile();
+        disposeWorkshop();
+        content.replaceChildren();
+        closeModal();
+        const screen = new WorkshopScreen({
+          bus: workshop.bus,
+          getModPublicUrl: (p: string) => {
+            const c = auth.getSupabaseClient();
+            if (c === null) {
+              return "";
+            }
+            return c.storage.from("mods").getPublicUrl(p).data.publicUrl;
+          },
+          isInstalled: (modId: string) => workshop.modRepository.isInstalled(modId),
+          getUserId: () => auth.getSession()?.userId ?? null,
+          getInstalledPacks: () => workshop.modRepository.getInstalled(),
+        });
+        workshopUnmount = screen.mount(content);
+      }
+
       function renderProfile(): void {
+        disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
         closeModal();
@@ -1455,56 +3086,76 @@ export class MainMenu {
       }
 
       function renderSolo(): void {
+        disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
         closeModal();
 
         const panel = document.createElement("div");
         panel.className = "mm-panel mm-solo-panel";
-
-        const title = document.createElement("p");
-        title.className = "mm-panel-title";
-        title.textContent = "Worlds";
-        panel.appendChild(title);
-
-        const list = document.createElement("div");
-        list.className = "mm-worldlist";
-        panel.appendChild(list);
-
-        // Stale-update guard: if list is detached, skip re-render
-        const rerenderList = async (): Promise<void> => {
-          if (!list.isConnected) return;
-          list.replaceChildren();
-          const worlds = (await store.listWorlds()).sort(sortWorldsByLastPlayed);
-          if (!list.isConnected) return;
-          if (worlds.length === 0) {
-            const empty = document.createElement("div");
-            empty.className = "mm-world-empty";
-            empty.textContent = "No worlds yet. Create one below.";
-            list.appendChild(empty);
-            return;
-          }
-          for (const world of worlds) {
-            appendWorldRowToList(list, world, () => {
-              cleanup();
-              resolve({ action: "load", uuid: world.uuid });
-            }, {
-              onEdit: (w) => {
-                openEditModal(w, rerenderList);
-              },
-            });
-          }
-        };
-
-        const footer = document.createElement("div");
-        footer.className = "mm-solo-footer";
-        const createBtn = makeBtn("New World", "mm-btn");
-        createBtn.addEventListener("click", openCreateModal);
-        footer.appendChild(createBtn);
-        panel.appendChild(footer);
-
         content.appendChild(panel);
-        void rerenderList();
+
+        function mountListView(): void {
+          panel.classList.remove("mm-solo-panel--world-edit");
+          panel.replaceChildren();
+
+          const title = document.createElement("p");
+          title.className = "mm-panel-title";
+          title.textContent = "Worlds";
+          panel.appendChild(title);
+
+          const list = document.createElement("div");
+          list.className = "mm-worldlist";
+          panel.appendChild(list);
+
+          const rerenderList = async (): Promise<void> => {
+            if (!list.isConnected) return;
+            list.replaceChildren();
+            const worlds = (await store.listWorlds()).sort(sortWorldsByLastPlayed);
+            if (!list.isConnected) return;
+            if (worlds.length === 0) {
+              const empty = document.createElement("div");
+              empty.className = "mm-world-empty";
+              empty.textContent = "No worlds yet. Create one below.";
+              list.appendChild(empty);
+              return;
+            }
+            for (const world of worlds) {
+              appendWorldRowToList(list, world, () => {
+                cleanup();
+                resolve({ action: "load", uuid: world.uuid });
+              }, {
+                onEdit: (w) => {
+                  openWorldEditor(w);
+                },
+              });
+            }
+          };
+
+          const footer = document.createElement("div");
+          footer.className = "mm-solo-footer";
+          const createBtn = makeBtn("New World", "mm-btn");
+          createBtn.addEventListener("click", openCreateModal);
+          footer.appendChild(createBtn);
+          panel.appendChild(footer);
+
+          void rerenderList();
+        }
+
+        function openWorldEditor(world: WorldMetadata): void {
+          closeModal();
+          panel.classList.add("mm-solo-panel--world-edit");
+          panel.replaceChildren();
+          mountBedrockWorldEditor({
+            container: panel,
+            worldUuid: world.uuid,
+            mode: "solo",
+            onBack: mountListView,
+            afterSaveSuccess: mountListView,
+          });
+        }
+
+        mountListView();
       }
 
       function loadHostPrefs(): {
@@ -1555,6 +3206,433 @@ export class MainMenu {
             worldUuid: p.worldUuid,
           }),
         );
+      }
+
+      function mountBedrockWorldEditor(opts: {
+        container: HTMLElement;
+        worldUuid: string;
+        mode: "solo" | "host";
+        hostRoomPrefs?: ReturnType<typeof loadHostPrefs>;
+        onBack: () => void;
+        afterSaveSuccess?: () => void;
+      }): void {
+        void (async () => {
+          const fresh = await store.loadWorld(opts.worldUuid);
+          if (!opts.container.isConnected) {
+            return;
+          }
+          if (fresh === undefined) {
+            opts.container.replaceChildren();
+            const errP = document.createElement("p");
+            errP.className = "mm-modal-meta";
+            errP.textContent = "This world no longer exists.";
+            opts.container.appendChild(errP);
+            return;
+          }
+          const worldUuid = fresh.uuid;
+          opts.container.replaceChildren();
+
+          const shell = document.createElement("div");
+          shell.className = "mm-bedrock-world-shell";
+
+          const topbar = document.createElement("div");
+          topbar.className = "mm-bedrock-world-topbar";
+          const backBtn = document.createElement("button");
+          backBtn.type = "button";
+          backBtn.className = "mm-btn mm-btn-subtle mm-world-edit-back";
+          backBtn.setAttribute(
+            "aria-label",
+            opts.mode === "host" ? "Back to world list" : "Back to worlds",
+          );
+          backBtn.textContent = "‹";
+          backBtn.addEventListener("click", opts.onBack);
+          const heading = document.createElement("h2");
+          heading.className = "mm-bedrock-world-heading";
+          heading.textContent =
+            opts.mode === "host" ? "Host world" : "Edit World";
+          topbar.appendChild(backBtn);
+          topbar.appendChild(heading);
+
+          const body = document.createElement("div");
+          body.className = "mm-bedrock-world-body";
+
+          const sidebar = document.createElement("aside");
+          sidebar.className = "mm-bedrock-world-sidebar";
+
+          const thumbWrap = document.createElement("div");
+          thumbWrap.className = "mm-bedrock-world-thumb";
+          const previewUrl = fresh.previewImageDataUrl;
+          if (previewUrl !== undefined && previewUrl.length > 0) {
+            const img = document.createElement("img");
+            img.src = previewUrl;
+            img.alt = "";
+            img.decoding = "async";
+            thumbWrap.appendChild(img);
+          } else {
+            const ph = document.createElement("div");
+            ph.className = "mm-bedrock-world-thumb-empty";
+            ph.setAttribute("aria-hidden", "true");
+            thumbWrap.appendChild(ph);
+          }
+          sidebar.appendChild(thumbWrap);
+
+          const saveSidebar = makeBtn("Save", "mm-btn mm-world-edit-save");
+          const feedback = document.createElement("div");
+          feedback.className = "mm-modal-feedback";
+
+          const WORLD_DESCRIPTION_MAX = 2000;
+          const nameField = makeField("World name");
+          const nameInput = document.createElement("input");
+          nameInput.type = "text";
+          nameInput.value = fresh.name;
+          nameField.appendChild(nameInput);
+
+          const descriptionField = makeField("Description (optional)");
+          const descriptionInput = document.createElement("textarea");
+          descriptionInput.rows = 4;
+          descriptionInput.maxLength = WORLD_DESCRIPTION_MAX;
+          descriptionInput.placeholder =
+            "A short note about this world — shown in your world list.";
+          descriptionInput.value = fresh.description ?? "";
+          descriptionField.appendChild(descriptionInput);
+
+          let roomTitleInput: HTMLInputElement | undefined;
+          let motdInput: HTMLTextAreaElement | undefined;
+          let privCb: HTMLInputElement | undefined;
+          let passInput: HTMLInputElement | undefined;
+
+          let roomSectionTitle: HTMLElement | undefined;
+          let roomTitleField: HTMLElement | undefined;
+          let motdField: HTMLElement | undefined;
+          let roomMotdCountEl: HTMLElement | undefined;
+          let privRow: HTMLElement | undefined;
+          let passField: HTMLElement | undefined;
+
+          if (opts.mode === "host") {
+            const hp = opts.hostRoomPrefs ?? {
+              roomTitle: "",
+              motd: "",
+              isPrivate: false,
+              worldUuid: "",
+            };
+
+            roomSectionTitle = document.createElement("h4");
+            roomSectionTitle.className = "mm-bedrock-world-section-subtitle";
+            roomSectionTitle.textContent = "Room listing";
+
+            roomTitleField = makeField(`Room name (max ${ROOM_TITLE_MAX_LEN})`);
+            roomTitleInput = document.createElement("input");
+            roomTitleInput.type = "text";
+            roomTitleInput.maxLength = ROOM_TITLE_MAX_LEN;
+            roomTitleField.appendChild(roomTitleInput);
+
+            motdField = makeField(
+              `Room description / MOTD (max ${ROOM_MOTD_MAX_LEN})`,
+            );
+            motdInput = document.createElement("textarea");
+            motdInput.className = "mm-textarea";
+            motdInput.maxLength = ROOM_MOTD_MAX_LEN;
+            motdField.appendChild(motdInput);
+
+            roomMotdCountEl = document.createElement("p");
+            roomMotdCountEl.className = "mm-modal-meta";
+            const updateRoomMotdCount = (): void => {
+              roomMotdCountEl!.textContent = `${motdInput!.value.length} / ${ROOM_MOTD_MAX_LEN} characters`;
+            };
+
+            privRow = document.createElement("div");
+            privRow.className = "mm-settings-row";
+            privRow.style.marginBottom = "8px";
+            const privLab = document.createElement("label");
+            privLab.textContent = "Private room";
+            privCb = document.createElement("input");
+            privCb.type = "checkbox";
+            privRow.appendChild(privLab);
+            privRow.appendChild(privCb);
+
+            passField = makeField(
+              "Room password (min 4, not saved in browser)",
+            );
+            passInput = document.createElement("input");
+            passInput.type = "password";
+            passInput.autocomplete = "new-password";
+            passField.appendChild(passInput);
+
+            const syncPassField = (): void => {
+              passField!.style.display = privCb!.checked ? "block" : "none";
+            };
+
+            roomTitleInput.value =
+              hp.worldUuid === worldUuid && hp.roomTitle.trim() !== ""
+                ? hp.roomTitle
+                : "My room";
+            motdInput.value = hp.motd;
+            privCb.checked = hp.isPrivate;
+            updateRoomMotdCount();
+            motdInput.addEventListener("input", updateRoomMotdCount);
+            syncPassField();
+            privCb.addEventListener("change", syncPassField);
+          }
+
+          const meta = document.createElement("p");
+          meta.className = "mm-modal-meta mm-bedrock-world-meta";
+          meta.style.marginTop = "12px";
+          meta.textContent = `Seed ${fresh.seed} · Last played ${formatDate(fresh.lastPlayedAt)}`;
+
+          const deleteBtn = makeBtn("Delete world…", "mm-btn mm-btn-danger");
+          deleteBtn.style.marginTop = "22px";
+          deleteBtn.addEventListener("click", () => {
+            if (pendingDeleteUuid !== worldUuid) {
+              pendingDeleteUuid = worldUuid;
+              deleteBtn.textContent = "Confirm delete world";
+              feedback.textContent = "Press again to permanently delete.";
+              feedback.classList.add("mm-feedback-error");
+              return;
+            }
+            void store.deleteWorld(worldUuid).then(() => {
+              pendingDeleteUuid = null;
+              opts.onBack();
+            });
+          });
+
+          const packCtrl = createWorldPackEditorController({
+            worldMeta: fresh,
+            repo: workshop?.modRepository ?? null,
+            getInstalled:
+              workshop !== undefined
+                ? () => workshop.modRepository.getInstalled()
+                : null,
+            persistPackMetadata: async (patch) => {
+              try {
+                await store.patchWorldMetadata(worldUuid, (prev) => {
+                  if (prev === undefined) {
+                    throw new Error(`World not found: ${worldUuid}`);
+                  }
+                  return {
+                    ...prev,
+                    workshopBehaviorMods: patch.workshopBehaviorMods,
+                    workshopResourceMods: patch.workshopResourceMods,
+                    requirePacksBeforeJoin: patch.requirePacksBeforeJoin,
+                    workshopMods: undefined,
+                  };
+                });
+                feedback.classList.remove("mm-feedback-error");
+              } catch (err: unknown) {
+                const msg =
+                  err instanceof Error ? err.message : "Could not save pack list.";
+                feedback.textContent = msg;
+                feedback.classList.add("mm-feedback-error");
+              }
+            },
+          });
+          const { getPatch } = packCtrl;
+
+          const persistWorldEdits = async (): Promise<void> => {
+            const nextName = nameInput.value.trim() || "My World";
+            const descTrim = descriptionInput.value.trim();
+            const nextDescription =
+              descTrim.length > 0
+                ? descTrim.slice(0, WORLD_DESCRIPTION_MAX)
+                : undefined;
+            await store.patchWorldMetadata(worldUuid, (prev) => {
+              if (prev === undefined) {
+                throw new Error(`World not found: ${worldUuid}`);
+              }
+              const patch = getPatch();
+              return {
+                ...prev,
+                name: nextName,
+                description: nextDescription,
+                workshopBehaviorMods: patch.workshopBehaviorMods,
+                workshopResourceMods: patch.workshopResourceMods,
+                requirePacksBeforeJoin: patch.requirePacksBeforeJoin,
+                workshopMods: undefined,
+                lastPlayedAt: Date.now(),
+              };
+            });
+          };
+
+          saveSidebar.addEventListener("click", () => {
+            void persistWorldEdits()
+              .then(() => {
+                feedback.textContent = "Saved.";
+                feedback.classList.remove("mm-feedback-error");
+                opts.afterSaveSuccess?.();
+              })
+              .catch((err: unknown) => {
+                feedback.textContent =
+                  err instanceof Error ? err.message : "Save failed.";
+                feedback.classList.add("mm-feedback-error");
+              });
+          });
+          sidebar.appendChild(saveSidebar);
+
+          if (opts.mode === "host") {
+            const hostRoomBtn = makeBtn("Host room", "mm-btn");
+            hostRoomBtn.addEventListener("click", () => {
+              if (
+                roomTitleInput === undefined ||
+                motdInput === undefined ||
+                privCb === undefined ||
+                passInput === undefined
+              ) {
+                return;
+              }
+              const roomTitle = roomTitleInput.value.trim();
+              if (roomTitle.length < 1) {
+                feedback.textContent = "Enter a room name.";
+                feedback.classList.add("mm-feedback-error");
+                return;
+              }
+              const motd = motdInput.value.slice(0, ROOM_MOTD_MAX_LEN);
+              const isPrivate = privCb.checked;
+              const pw = passInput.value;
+              if (isPrivate && pw.trim().length < 4) {
+                feedback.textContent =
+                  "Private rooms need a password of at least 4 characters.";
+                feedback.classList.add("mm-feedback-error");
+                return;
+              }
+              feedback.classList.remove("mm-feedback-error");
+              void persistWorldEdits()
+                .then(() => {
+                  saveHostPrefs({
+                    roomTitle,
+                    motd,
+                    isPrivate,
+                    worldUuid,
+                  });
+                  cleanup();
+                  resolve({
+                    action: "multiplayer-host",
+                    worldUuid,
+                    roomTitle,
+                    motd,
+                    isPrivate,
+                    roomPassword: isPrivate ? pw : undefined,
+                  });
+                })
+                .catch((err: unknown) => {
+                  feedback.textContent =
+                    err instanceof Error ? err.message : "Save failed.";
+                  feedback.classList.add("mm-feedback-error");
+                });
+            });
+            sidebar.appendChild(hostRoomBtn);
+          }
+
+          sidebar.appendChild(feedback);
+
+          type BedrockTab = "general" | "behavior" | "resource";
+          const tabDefs: {
+            id: BedrockTab;
+            label: string;
+            icon: string;
+            panelTitle: string;
+          }[] = [
+            { id: "general", label: "General", icon: "▣", panelTitle: "General" },
+            {
+              id: "behavior",
+              label: "Behavior Packs",
+              icon: "◇",
+              panelTitle: "Behavior Packs",
+            },
+            {
+              id: "resource",
+              label: "Resource Packs",
+              icon: "◈",
+              panelTitle: "Resource Packs",
+            },
+          ];
+
+          const bedrockNav = document.createElement("nav");
+          bedrockNav.className = "mm-bedrock-world-nav";
+          const bedrockNavBtns = new Map<BedrockTab, HTMLButtonElement>();
+          let activeTab: BedrockTab = "general";
+
+          const main = document.createElement("div");
+          main.className = "mm-bedrock-world-main";
+          const mainHead = document.createElement("div");
+          mainHead.className = "mm-bedrock-world-main-head";
+          const sectionTitle = document.createElement("h3");
+          sectionTitle.className = "mm-bedrock-world-section-title";
+          mainHead.appendChild(sectionTitle);
+          const mainBody = document.createElement("div");
+          mainBody.className = "mm-bedrock-world-section-body";
+          main.appendChild(mainHead);
+          main.appendChild(mainBody);
+
+          const generalPanel = document.createElement("div");
+          generalPanel.appendChild(nameField);
+          generalPanel.appendChild(descriptionField);
+          if (
+            opts.mode === "host" &&
+            roomSectionTitle !== undefined &&
+            roomTitleField !== undefined &&
+            motdField !== undefined &&
+            roomMotdCountEl !== undefined &&
+            privRow !== undefined &&
+            passField !== undefined
+          ) {
+            generalPanel.appendChild(roomSectionTitle);
+            generalPanel.appendChild(roomTitleField);
+            generalPanel.appendChild(motdField);
+            generalPanel.appendChild(roomMotdCountEl);
+            generalPanel.appendChild(privRow);
+            generalPanel.appendChild(passField);
+          }
+          generalPanel.appendChild(meta);
+          generalPanel.appendChild(packCtrl.generalPackOptions);
+          generalPanel.appendChild(deleteBtn);
+
+          function renderActivePanel(): void {
+            const def = tabDefs.find((t) => t.id === activeTab);
+            sectionTitle.textContent = def?.panelTitle ?? "";
+            for (const [id, b] of bedrockNavBtns) {
+              b.classList.toggle(
+                "mm-bedrock-world-nav-item--active",
+                id === activeTab,
+              );
+            }
+            mainBody.replaceChildren();
+            if (activeTab === "general") {
+              mainBody.appendChild(generalPanel);
+            } else if (activeTab === "behavior") {
+              mainBody.appendChild(packCtrl.behaviorPanel);
+            } else {
+              mainBody.appendChild(packCtrl.resourcePanel);
+            }
+          }
+
+          for (const t of tabDefs) {
+            const nb = document.createElement("button");
+            nb.type = "button";
+            nb.className = "mm-bedrock-world-nav-item";
+            const ic = document.createElement("span");
+            ic.className = "mm-bedrock-world-nav-icon";
+            ic.textContent = t.icon;
+            ic.setAttribute("aria-hidden", "true");
+            const lb = document.createElement("span");
+            lb.textContent = t.label;
+            nb.appendChild(ic);
+            nb.appendChild(lb);
+            nb.addEventListener("click", () => {
+              activeTab = t.id;
+              renderActivePanel();
+            });
+            bedrockNavBtns.set(t.id, nb);
+            bedrockNav.appendChild(nb);
+          }
+          sidebar.appendChild(bedrockNav);
+
+          body.appendChild(sidebar);
+          body.appendChild(main);
+          shell.appendChild(topbar);
+          shell.appendChild(body);
+          opts.container.appendChild(shell);
+          renderActivePanel();
+          nameInput.focus();
+        })();
       }
 
       function openJoinByCodeModal(): void {
@@ -1721,7 +3799,7 @@ export class MainMenu {
           for (const w of worlds) {
             appendWorldRowToList(list, w, () => {
               modal.remove();
-              openHostDetailsModal(w.uuid, prefs);
+              openHostWorldEditorModal(w.uuid, prefs);
             });
           }
         })();
@@ -1737,7 +3815,7 @@ export class MainMenu {
         root.appendChild(modal);
       }
 
-      function openHostDetailsModal(
+      function openHostWorldEditorModal(
         worldUuid: string,
         prefs: ReturnType<typeof loadHostPrefs>,
       ): void {
@@ -1745,120 +3823,27 @@ export class MainMenu {
         const modal = document.createElement("div");
         modal.className = "mm-modal";
         const card = document.createElement("div");
-        card.className = "mm-modal-card";
-
-        const heading = document.createElement("h3");
-        heading.className = "mm-modal-title";
-        heading.textContent = "Room details";
-
-        const titleField = makeField(`Room name (max ${ROOM_TITLE_MAX_LEN})`);
-        const titleInput = document.createElement("input");
-        titleInput.type = "text";
-        titleInput.maxLength = ROOM_TITLE_MAX_LEN;
-        titleInput.value =
-          prefs.worldUuid === worldUuid && prefs.roomTitle.trim() !== ""
-            ? prefs.roomTitle
-            : "My room";
-        titleField.appendChild(titleInput);
-
-        const motdField = makeField(`Description / MOTD (max ${ROOM_MOTD_MAX_LEN})`);
-        const motdInput = document.createElement("textarea");
-        motdInput.className = "mm-textarea";
-        motdInput.maxLength = ROOM_MOTD_MAX_LEN;
-        motdInput.value = prefs.motd;
-        motdField.appendChild(motdInput);
-
-        const countEl = document.createElement("p");
-        countEl.className = "mm-modal-meta";
-        const updateCount = (): void => {
-          countEl.textContent = `${motdInput.value.length} / ${ROOM_MOTD_MAX_LEN} characters`;
-        };
-        updateCount();
-        motdInput.addEventListener("input", updateCount);
-
-        const privRow = document.createElement("div");
-        privRow.className = "mm-settings-row";
-        privRow.style.marginBottom = "8px";
-        const privLab = document.createElement("label");
-        privLab.textContent = "Private";
-        const privCb = document.createElement("input");
-        privCb.type = "checkbox";
-        privCb.checked = prefs.isPrivate;
-        privRow.appendChild(privLab);
-        privRow.appendChild(privCb);
-
-        const passField = makeField("Room password (min 4, not saved in browser)");
-        const passInput = document.createElement("input");
-        passInput.type = "password";
-        passInput.autocomplete = "new-password";
-        passField.appendChild(passInput);
-
-        const syncPassField = (): void => {
-          passField.style.display = privCb.checked ? "block" : "none";
-        };
-        syncPassField();
-        privCb.addEventListener("change", syncPassField);
-
-        const errEl = document.createElement("div");
-        errEl.className = "mm-feedback-error";
-
-        const actions = document.createElement("div");
-        actions.className = "mm-modal-actions";
-        const backBtn = makeBtn("Back", "mm-btn mm-btn-subtle");
-        backBtn.addEventListener("click", () => {
-          modal.remove();
-          openHostWorldFlow();
-        });
-        const hostBtn = makeBtn("Host", "mm-btn");
-        hostBtn.addEventListener("click", () => {
-          const roomTitle = titleInput.value.trim();
-          if (roomTitle.length < 1) {
-            errEl.textContent = "Enter a room name.";
-            return;
-          }
-          const motd = motdInput.value.slice(0, ROOM_MOTD_MAX_LEN);
-          const isPrivate = privCb.checked;
-          const pw = passInput.value;
-          if (isPrivate && pw.trim().length < 4) {
-            errEl.textContent = "Private rooms need a password of at least 4 characters.";
-            return;
-          }
-          saveHostPrefs({
-            roomTitle,
-            motd,
-            isPrivate,
-            worldUuid,
-          });
-          cleanup();
-          resolve({
-            action: "multiplayer-host",
-            worldUuid,
-            roomTitle,
-            motd,
-            isPrivate,
-            roomPassword: isPrivate ? pw : undefined,
-          });
-        });
-        actions.appendChild(backBtn);
-        actions.appendChild(hostBtn);
-
-        card.appendChild(heading);
-        card.appendChild(titleField);
-        card.appendChild(motdField);
-        card.appendChild(countEl);
-        card.appendChild(privRow);
-        card.appendChild(passField);
-        card.appendChild(errEl);
-        card.appendChild(actions);
+        card.className = "mm-modal-card mm-host-world-editor-card";
         modal.appendChild(card);
         modal.addEventListener("click", (ev) => {
           if (ev.target === modal) closeModal();
         });
         root.appendChild(modal);
-        titleInput.focus();
+
+        mountBedrockWorldEditor({
+          container: card,
+          worldUuid,
+          mode: "host",
+          hostRoomPrefs: prefs,
+          onBack: () => {
+            modal.remove();
+            openHostWorldFlow();
+          },
+        });
       }
 
       function renderOnline(): void {
+        disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
         closeModal();
@@ -1866,7 +3851,7 @@ export class MainMenu {
 
         const client = auth.getSupabaseClient();
         const panel = document.createElement("div");
-        panel.className = "mm-panel mm-online-panel mm-panel--glass";
+        panel.className = "mm-panel mm-online-panel";
 
         const titleRow = document.createElement("div");
         titleRow.className = "mm-online-title-row";
@@ -1974,7 +3959,7 @@ export class MainMenu {
           scroll.className = "mm-room-detail-scroll";
 
           const aboutCard = document.createElement("section");
-          aboutCard.className = "mm-room-glass-card";
+          aboutCard.className = "mm-room-section-card";
           const kAbout = document.createElement("p");
           kAbout.className = "mm-room-section-kicker";
           kAbout.textContent = "About this room";
@@ -2025,7 +4010,7 @@ export class MainMenu {
           scroll.appendChild(aboutCard);
 
           const commentsCard = document.createElement("section");
-          commentsCard.className = "mm-room-glass-card";
+          commentsCard.className = "mm-room-section-card";
           const kComm = document.createElement("p");
           kComm.className = "mm-room-section-kicker";
           kComm.textContent = "Comments";
@@ -2036,7 +4021,7 @@ export class MainMenu {
           scroll.appendChild(commentsCard);
 
           const participate = document.createElement("section");
-          participate.className = "mm-room-glass-card";
+          participate.className = "mm-room-section-card";
           const kPart = document.createElement("p");
           kPart.className = "mm-room-section-kicker";
           kPart.textContent = "Your rating & comment";
@@ -2341,6 +4326,7 @@ export class MainMenu {
       }
 
       function renderSettings(): void {
+        disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
         closeModal();
@@ -2390,6 +4376,29 @@ export class MainMenu {
           panel.appendChild(row);
         }
 
+        const texSection = document.createElement("div");
+        texSection.className = "mm-settings-section";
+        texSection.textContent = "Texture packs";
+        panel.appendChild(texSection);
+        const texHint = document.createElement("p");
+        texHint.className = "mm-settings-coming-soon";
+        texHint.style.marginBottom = "10px";
+        texHint.textContent =
+          "Global resource packs load after each world’s resource packs. Changes apply the next time you start or load a world.";
+        panel.appendChild(texHint);
+        const texBtn = makeBtn(
+          "Manage global texture packs…",
+          "mm-btn mm-btn-secondary",
+        );
+        texBtn.addEventListener("click", () => {
+          void openGlobalTexturePacksModal({
+            store,
+            getInstalled: () =>
+              workshop?.modRepository.getInstalled() ?? [],
+          });
+        });
+        panel.appendChild(texBtn);
+
         const bindSection = document.createElement("div");
         bindSection.className = "mm-settings-section";
         bindSection.textContent = "Controls";
@@ -2405,6 +4414,7 @@ export class MainMenu {
       // -- Cleanup -----------------------------------------------------------
       function cleanup(): void {
         clearOnlinePoll();
+        disposeWorkshop();
         disposeProfile();
         root.remove();
         // Destroy background: the destroyed flag stops init() mid-flight if still running.
@@ -2462,6 +4472,14 @@ function appendWorldRowToList(
   metaEl.textContent = `Seed ${world.seed} · ${formatDate(world.lastPlayedAt)}`;
   info.appendChild(nameEl);
   info.appendChild(metaEl);
+  const descText = world.description?.trim();
+  if (descText !== undefined && descText.length > 0) {
+    const descEl = document.createElement("div");
+    descEl.className = "mm-world-desc";
+    descEl.textContent = descText;
+    descEl.title = descText;
+    info.appendChild(descEl);
+  }
   row.appendChild(thumbWrap);
   row.appendChild(info);
   if (edit !== undefined) {

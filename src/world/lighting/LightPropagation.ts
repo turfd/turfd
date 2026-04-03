@@ -24,6 +24,22 @@ const BLOCK_LIGHT_PADDED = CHUNK_SIZE + 2 * BLOCK_LIGHT_PAD;
 const MAX_BLOCK_LIGHT_QUEUE =
   BLOCK_LIGHT_PADDED * BLOCK_LIGHT_PADDED * (BLOCK_LIGHT_MAX + 2);
 
+/** Sky BFS uses SKY_LIGHT_MAX border; sizes match {@link computeSkyLight} workspace. */
+const SKY_LIGHT_PAD = SKY_LIGHT_MAX;
+const SKY_PADDED = CHUNK_SIZE + 2 * SKY_LIGHT_PAD;
+const SKY_BEST_LEN = SKY_PADDED * SKY_PADDED;
+const SKY_QUEUE_LEN = SKY_PADDED * SKY_PADDED * 2;
+
+const _skyBest = new Uint8Array(SKY_BEST_LEN);
+const _skyQx = new Int32Array(SKY_QUEUE_LEN);
+const _skyQy = new Int32Array(SKY_QUEUE_LEN);
+const _skyQl = new Uint8Array(SKY_QUEUE_LEN);
+
+const _blockBest = new Uint8Array(BLOCK_LIGHT_PADDED * BLOCK_LIGHT_PADDED);
+const _blockQx = new Int32Array(MAX_BLOCK_LIGHT_QUEUE);
+const _blockQy = new Int32Array(MAX_BLOCK_LIGHT_QUEUE);
+const _blockQl = new Uint8Array(MAX_BLOCK_LIGHT_QUEUE);
+
 /** Neighbour deltas for block-light BFS (hoisted — avoid per-queue-step array alloc). */
 const BLOCK_LIGHT_NB = [
   [1, 0],
@@ -56,17 +72,16 @@ export function computeSkyLight(
 ): void {
   skyLight.fill(0);
 
-  const border = SKY_LIGHT_MAX;
-  const padded = CHUNK_SIZE + 2 * border;
-  const wxMin = chunkX * CHUNK_SIZE - border;
-  const wyMin = chunkY * CHUNK_SIZE - border;
+  const padded = SKY_PADDED;
+  const wxMin = chunkX * CHUNK_SIZE - SKY_LIGHT_PAD;
+  const wyMin = chunkY * CHUNK_SIZE - SKY_LIGHT_PAD;
 
-  const best = new Uint8Array(padded * padded);
-
-  const MAX_QUEUE = padded * padded * 2;
-  const qx = new Int32Array(MAX_QUEUE);
-  const qy = new Int32Array(MAX_QUEUE);
-  const ql = new Uint8Array(MAX_QUEUE);
+  const best = _skyBest;
+  best.fill(0);
+  const qx = _skyQx;
+  const qy = _skyQy;
+  const ql = _skyQl;
+  const MAX_QUEUE = SKY_QUEUE_LEN;
   let head = 0;
   let tail = 0;
 
@@ -165,10 +180,11 @@ export function computeBlockLight(
   const wyMin = chunkY * CHUNK_SIZE - BLOCK_LIGHT_PAD;
   const pw = BLOCK_LIGHT_PADDED;
 
-  const best = new Uint8Array(pw * pw);
-  const qx = new Int32Array(MAX_BLOCK_LIGHT_QUEUE);
-  const qy = new Int32Array(MAX_BLOCK_LIGHT_QUEUE);
-  const ql = new Uint8Array(MAX_BLOCK_LIGHT_QUEUE);
+  const best = _blockBest;
+  best.fill(0);
+  const qx = _blockQx;
+  const qy = _blockQy;
+  const ql = _blockQl;
   let head = 0;
   let tail = 0;
 

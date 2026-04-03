@@ -3,7 +3,7 @@
  * Block terrain uses {@link BLOCK_TEXTURE_MANIFEST_PATH}; item entities use a record
  * resolved from block + item manifests (see {@link resolveItemTextureRecord}).
  *
- * Optional `_alt_N` tiles are **opt-in**: list base texture names in `probe_texture_alts` on the manifest.
+ * Optional `_alt_N` files beside each base PNG are discovered automatically (HEAD probe `_alt_1`… until miss).
  */
 import { Rectangle, Texture, TextureSource } from "pixi.js";
 import type { TextureManifestJson } from "../core/textureManifest";
@@ -29,23 +29,15 @@ function loadImageElement(url: string): Promise<HTMLImageElement> {
 }
 
 /**
- * For manifest keys listed in `probeNames` only: discover optional `name_alt_1.png`, `name_alt_2.png`, …
+ * For every base manifest key (not already `*_alt_N`): discover optional `name_alt_1.png`, `name_alt_2.png`, …
  * beside the base file. Uses HEAD + image Content-Type check; stops at first miss per base.
  */
-async function discoverAltVariants(
-  raw: Record<string, string>,
-  probeNames: ReadonlySet<string>,
-): Promise<Record<string, string>> {
-  if (probeNames.size === 0) {
-    return raw;
-  }
-
+async function discoverAltVariants(raw: Record<string, string>): Promise<Record<string, string>> {
   const expanded: Record<string, string> = { ...raw };
 
   const probes: Promise<void>[] = [];
   for (const [name, path] of Object.entries(raw)) {
     if (/_alt_\d+$/.test(name)) continue;
-    if (!probeNames.has(name)) continue;
     const dotIdx = path.lastIndexOf(".");
     const basePath = dotIdx >= 0 ? path.slice(0, dotIdx) : path;
     const ext = dotIdx >= 0 ? path.slice(dotIdx) : ".png";
@@ -121,6 +113,9 @@ export class AtlasLoader {
   private readonly variantCache = new Map<string, readonly Texture[]>();
   private atlasTexture: Texture | null = null;
   private packedSource: TextureSource | null = null;
+  /** Retained for workshop patches; cleared in {@link destroyPacked}. */
+  private atlasCanvas: HTMLCanvasElement | null = null;
+  private lastPlacements: PackedEntry[] = [];
 
   constructor(
     private readonly manifestRelativePath: string = BLOCK_TEXTURE_MANIFEST_PATH,
@@ -138,13 +133,7 @@ export class AtlasLoader {
     if (raw === null || typeof raw !== "object") {
       throw new Error(`${this.manifestRelativePath}: "textures" must be an object`);
     }
-    const probeList = manifest.probe_texture_alts;
-    const probeSet = new Set<string>(
-      Array.isArray(probeList)
-        ? probeList.filter((n): n is string => typeof n === "string" && n.length > 0)
-        : [],
-    );
-    const expanded = await discoverAltVariants(raw, probeSet);
+    const expanded = await discoverAltVariants(raw);
     await this.packTextures(expanded, this.manifestRelativePath);
   }
 
@@ -226,7 +215,117 @@ export class AtlasLoader {
     this.atlasTexture = new Texture({ source });
     this.atlasTexture.source.scaleMode = "nearest";
 
+    this.atlasCanvas = canvas;
+    this.lastPlacements = placements.slice();
+
     this.buildVariantMap();
+  }
+
+  /**
+   * Adds rectangular regions from a decoded spritesheet PNG (workshop mods). Skips frame names
+   * that already exist in the atlas (additive only).
+   */
+  async appendWorkshopSpritesheet(
+    imageBytes: Uint8Array,
+    rects: readonly {
+      name: string;
+      sx: number;
+      sy: number;
+      sw: number;
+      sh: number;
+    }[],
+  ): Promise<void> {
+    if (this.atlasCanvas === null || this.packedSource === null) {
+      throw new Error("AtlasLoader.load() must complete before appendWorkshopSpritesheet()");
+    }
+    const toAdd = rects.filter((r) => !this.textureMap.has(r.name));
+    if (toAdd.length === 0) {
+      return;
+    }
+    const blob = new Blob([imageBytes], { type: "image/png" });
+    const bmp = await createImageBitmap(blob);
+    try {
+      const oldCanvas = this.atlasCanvas;
+      const oldPlacements = this.lastPlacements;
+      const oldW = oldCanvas.width;
+      const oldH = oldCanvas.height;
+      const sizes = toAdd.map((r) => ({ name: r.name, w: r.sw, h: r.sh }));
+      const { width: newRegionW, height: newRegionH, placements: newLocal } = shelfPack(sizes);
+      const totalW = Math.max(oldW, newRegionW);
+      const totalH = oldH + newRegionH;
+      if (totalW > MAX_PACK_DIMENSION || totalH > MAX_PACK_DIMENSION) {
+        throw new Error(
+          `Workshop atlas append exceeds ${MAX_PACK_DIMENSION}px; reduce texture count or size`,
+        );
+      }
+      const nextCanvas = document.createElement("canvas");
+      nextCanvas.width = totalW;
+      nextCanvas.height = totalH;
+      const ctx = nextCanvas.getContext("2d");
+      if (ctx === null) {
+        throw new Error("Canvas 2D context unavailable for workshop atlas append");
+      }
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(oldCanvas, 0, 0);
+      const offsetY = oldH;
+      const byName = new Map(newLocal.map((p) => [p.name, p]));
+      for (const r of toAdd) {
+        const p = byName.get(r.name);
+        if (p === undefined) {
+          continue;
+        }
+        const dx = p.x;
+        const dy = p.y + offsetY;
+        ctx.drawImage(bmp, r.sx, r.sy, r.sw, r.sh, dx, dy, p.w, p.h);
+      }
+      const mergedPlacements: PackedEntry[] = [
+        ...oldPlacements,
+        ...newLocal.map((p) => ({
+          name: p.name,
+          x: p.x,
+          y: p.y + offsetY,
+          w: p.w,
+          h: p.h,
+        })),
+      ];
+      this.destroyPackedKeepWorkshopStateForRebuild();
+      const source = TextureSource.from(nextCanvas);
+      source.scaleMode = "nearest";
+      this.packedSource = source;
+      this.textureMap.clear();
+      for (const p of mergedPlacements) {
+        const sub = new Texture({
+          source,
+          frame: new Rectangle(p.x, p.y, p.w, p.h),
+        });
+        sub.source.scaleMode = "nearest";
+        this.textureMap.set(p.name, sub);
+      }
+      this.atlasTexture = new Texture({ source });
+      this.atlasTexture.source.scaleMode = "nearest";
+      this.atlasCanvas = nextCanvas;
+      this.lastPlacements = mergedPlacements;
+      this.buildVariantMap();
+    } finally {
+      bmp.close();
+    }
+  }
+
+  /** Drops GPU textures without clearing workshop canvas/placement bookkeeping (internal). */
+  private destroyPackedKeepWorkshopStateForRebuild(): void {
+    this.variantCache.clear();
+    for (const t of this.textureMap.values()) {
+      t.destroy(false);
+    }
+    this.textureMap.clear();
+    if (this.atlasTexture) {
+      this.atlasTexture.destroy(false);
+      this.atlasTexture = null;
+    }
+    if (this.packedSource) {
+      this.packedSource.destroy();
+      this.packedSource = null;
+    }
   }
 
   getAtlasTexture(): Texture {
@@ -302,6 +401,8 @@ export class AtlasLoader {
       this.packedSource.destroy();
       this.packedSource = null;
     }
+    this.atlasCanvas = null;
+    this.lastPlacements = [];
   }
 
   destroy(): void {

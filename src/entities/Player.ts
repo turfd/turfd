@@ -11,6 +11,7 @@ import {
   ITEM_THROW_SPAWN_OFFSET_PX,
   ITEM_THROW_SPEED_PX,
   PLAYER_HEIGHT,
+  PLAYER_MAX_HEALTH,
   PLAYER_WIDTH,
   REACH_BLOCKS,
   STEP_INTERVAL,
@@ -71,6 +72,8 @@ export type PlayerState = {
   onGround: boolean;
   facingRight: boolean;
   hotbarSlot: number;
+  /** Integer HP in `[0, PLAYER_MAX_HEALTH]`. */
+  health: number;
   /** Tab: edit back-wall tiles (place/break) instead of foreground. */
   backgroundEditMode: boolean;
   breakTarget: { wx: number; wy: number; layer: BreakTargetLayer } | null;
@@ -168,6 +171,7 @@ export class Player {
     onGround: false,
     facingRight: true,
     hotbarSlot: 0,
+    health: PLAYER_MAX_HEALTH,
     backgroundEditMode: false,
     breakTarget: null,
     breakProgress: 0,
@@ -220,6 +224,16 @@ export class Player {
     this.state.velocity.y = 0;
     this.state.coyoteTimeRemaining = 0;
     this.state.jumpBufferRemaining = 0;
+    this.state.health = PLAYER_MAX_HEALTH;
+  }
+
+  /** Reduce health; amount is floored. HP does not go below 0. */
+  takeDamage(amount: number): void {
+    if (amount <= 0) {
+      return;
+    }
+    const d = Math.floor(amount);
+    this.state.health = Math.max(0, this.state.health - d);
   }
 
   /** Restore position, hotbar, and inventory from persistence. */
@@ -228,11 +242,20 @@ export class Player {
     feetWorldY: number,
     hotbarSlot: number,
     inventory?: ({ key: string; count: number } | null)[],
+    health?: number,
   ): void {
     this.spawnAt(feetWorldX, feetWorldY);
     const slot = ((hotbarSlot % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
     this.state.hotbarSlot = slot;
     this.prevHotbarSlot = slot;
+    if (health !== undefined) {
+      this.state.health = Math.max(
+        0,
+        Math.min(PLAYER_MAX_HEALTH, Math.floor(health)),
+      );
+    } else {
+      this.state.health = PLAYER_MAX_HEALTH;
+    }
     if (inventory !== undefined) {
       this.inventory.restore(inventory);
     }
@@ -589,9 +612,14 @@ export class Player {
                     }
                   }
                 }
-                if (!overlapsAnyPlayer) {
+                if (
+                  !overlapsAnyPlayer &&
+                  world.canPlaceForegroundWithCactusRules(wx, wy, placesBlockId)
+                ) {
                   const topId = this.registry.getByIdentifier("stratum:tall_grass_top").id;
-                  if (!world.setBlock(wx, wy, placesBlockId)) {
+                  if (!world.canPlaceForegroundWithCactusRules(wx, wy + 1, topId)) {
+                    // tall grass top would touch cactus horizontally
+                  } else if (!world.setBlock(wx, wy, placesBlockId)) {
                     // vertical bounds
                   } else if (!world.setBlock(wx, wy + 1, topId)) {
                     world.setBlock(wx, wy, 0);
@@ -640,7 +668,10 @@ export class Player {
                     }
                   }
                 }
-                if (!overlapsAnyPlayer) {
+                if (
+                  !overlapsAnyPlayer &&
+                  world.canPlaceForegroundWithCactusRules(wx, wy, placesBlockId)
+                ) {
                   const placed = this.registry.getById(placesBlockId);
                   if (!world.setBlock(wx, wy, placesBlockId)) {
                     // vertical bounds

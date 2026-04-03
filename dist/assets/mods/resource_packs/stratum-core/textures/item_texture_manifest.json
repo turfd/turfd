@@ -1,0 +1,8 @@
+{
+  "textures": {
+    "wooden_axe": "assets/mods/resource_packs/stratum-core/textures/items/wooden_axe.png",
+    "wooden_pickaxe": "assets/mods/resource_packs/stratum-core/textures/items/wooden_pickaxe.png",
+    "wooden_shovel": "assets/mods/resource_packs/stratum-core/textures/items/wooden_shovel.png",
+    "stick": "assets/mods/resource_packs/stratum-core/textures/items/stick.png"
+  }
+}

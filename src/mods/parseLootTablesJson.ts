@@ -2,7 +2,8 @@
  * Validates `blocks.loot.json` (loot table definitions keyed by namespaced table id).
  */
 import { z } from "zod";
-import type { LootEntry, LootTable } from "../items/LootResolver";
+import type { BlockRegistry } from "../world/blocks/BlockRegistry";
+import type { LootEntry, LootResolver, LootTable } from "../items/LootResolver";
 
 const lootEntrySchema = z
   .object({
@@ -52,4 +53,24 @@ export function parseLootTablesJson(raw: unknown): LootTablesFile {
     format_version: "1.0.0",
     loot_tables,
   };
+}
+
+/** Registers loot tables for every block that references a table id present in `data`. */
+export function registerLootTablesForBlocks(
+  registry: BlockRegistry,
+  resolver: LootResolver,
+  data: LootTablesFile,
+): void {
+  for (let i = 0; i < registry.size; i++) {
+    const block = registry.getById(i);
+    const key = block.lootTable;
+    if (key === undefined) {
+      continue;
+    }
+    const table = data.loot_tables[key];
+    if (table === undefined) {
+      continue;
+    }
+    resolver.registerTable(block.id, table);
+  }
 }

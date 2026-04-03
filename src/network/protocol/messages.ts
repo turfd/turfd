@@ -6,6 +6,7 @@ import {
   type ChunkDataWirePayload,
   type BlockUpdateWirePayload,
 } from "./BinarySerializer";
+import type { WorkshopModRef } from "../../persistence/IndexedDBStore";
 
 /** Message type IDs for the binary network protocol (first byte of every packet). */
 export enum MessageType {
@@ -27,6 +28,8 @@ export enum MessageType {
    * Host → clients: another peer’s pose (star topology). Subject is the moving player’s PeerJS id.
    */
   PLAYER_STATE_RELAY = 0x0c,
+  /** Host → client: ordered behavior + world resource pack refs (join / protocol v4). */
+  PACK_STACK = 0x0d,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -58,6 +61,13 @@ export type WorldSyncMsg = {
 export type WorldTimeMsg = {
   type: MessageType.WORLD_TIME;
   worldTimeMs: number;
+};
+
+export type PackStackMsg = {
+  type: MessageType.PACK_STACK;
+  behaviorRefs: WorkshopModRef[];
+  resourceRefs: WorkshopModRef[];
+  requirePacksBeforeJoin: boolean;
 };
 
 export type SessionEndedMsg = {
@@ -138,7 +148,8 @@ export type NetworkMessage =
   | PingMsg
   | WorldSyncMsg
   | WorldTimeMsg
-  | SessionEndedMsg;
+  | SessionEndedMsg
+  | PackStackMsg;
 
 const LE = true;
 const textEnc = new TextEncoder();
@@ -147,6 +158,81 @@ const textDec = new TextDecoder();
 /** Max UTF-8 bytes for CHAT sender peer id and message body. */
 const CHAT_PEER_ID_MAX = 512;
 const CHAT_TEXT_MAX = 1024;
+
+const PACK_STACK_MAX_REFS_PER_LIST = 48;
+const PACK_STACK_STR_MAX = 256;
+
+function encodePackStackRefs(refs: readonly WorkshopModRef[]): Uint8Array[] {
+  const parts: Uint8Array[] = [];
+  for (const r of refs) {
+    let rid = textEnc.encode(r.recordId);
+    let mid = textEnc.encode(r.modId);
+    let ver = textEnc.encode(r.version);
+    if (rid.length > PACK_STACK_STR_MAX) {
+      rid = rid.slice(0, PACK_STACK_STR_MAX);
+    }
+    if (mid.length > PACK_STACK_STR_MAX) {
+      mid = mid.slice(0, PACK_STACK_STR_MAX);
+    }
+    if (ver.length > PACK_STACK_STR_MAX) {
+      ver = ver.slice(0, PACK_STACK_STR_MAX);
+    }
+    const h = new ArrayBuffer(2 + 2 + 2);
+    const hv = new DataView(h);
+    hv.setUint16(0, rid.length, LE);
+    hv.setUint16(2, mid.length, LE);
+    hv.setUint16(4, ver.length, LE);
+    parts.push(new Uint8Array(h));
+    parts.push(rid);
+    parts.push(mid);
+    parts.push(ver);
+  }
+  return parts;
+}
+
+function packStackRefsWireSize(refs: readonly WorkshopModRef[]): number {
+  let n = 0;
+  for (const r of refs) {
+    const rl = Math.min(textEnc.encode(r.recordId).length, PACK_STACK_STR_MAX);
+    const ml = Math.min(textEnc.encode(r.modId).length, PACK_STACK_STR_MAX);
+    const vl = Math.min(textEnc.encode(r.version).length, PACK_STACK_STR_MAX);
+    n += 6 + rl + ml + vl;
+  }
+  return n;
+}
+
+function decodePackStackRefs(
+  view: DataView,
+  buf: ArrayBuffer,
+  start: number,
+  count: number,
+): { refs: WorkshopModRef[]; nextOffset: number } {
+  const refs: WorkshopModRef[] = [];
+  let o = start;
+  for (let i = 0; i < count; i++) {
+    if (o + 6 > buf.byteLength) {
+      throw new Error("PACK_STACK: truncated ref header");
+    }
+    const rl = view.getUint16(o, LE);
+    const ml = view.getUint16(o + 2, LE);
+    const vl = view.getUint16(o + 4, LE);
+    o += 6;
+    if (rl > PACK_STACK_STR_MAX || ml > PACK_STACK_STR_MAX || vl > PACK_STACK_STR_MAX) {
+      throw new Error("PACK_STACK: string too long");
+    }
+    if (o + rl + ml + vl > buf.byteLength) {
+      throw new Error("PACK_STACK: truncated strings");
+    }
+    const recordId = textDec.decode(new Uint8Array(buf, o, rl));
+    o += rl;
+    const modId = textDec.decode(new Uint8Array(buf, o, ml));
+    o += ml;
+    const version = textDec.decode(new Uint8Array(buf, o, vl));
+    o += vl;
+    refs.push({ recordId, modId, version });
+  }
+  return { refs, nextOffset: o };
+}
 
 /** Wire size of a `PLAYER_STATE` packet (type byte + payload). */
 export const PLAYER_STATE_WIRE_BYTE_LENGTH = 36;
@@ -271,6 +357,46 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
 
     case MessageType.WORLD_SYNC: {
       return BinarySerializer.serializeWorldSync(msg.seed, msg.worldTimeMs);
+    }
+
+    case MessageType.PACK_STACK: {
+      const bh = Math.min(
+        msg.behaviorRefs.length,
+        PACK_STACK_MAX_REFS_PER_LIST,
+      );
+      const rh = Math.min(
+        msg.resourceRefs.length,
+        PACK_STACK_MAX_REFS_PER_LIST,
+      );
+      const brefs = msg.behaviorRefs.slice(0, bh);
+      const rrefs = msg.resourceRefs.slice(0, rh);
+      const flags = msg.requirePacksBeforeJoin ? 1 : 0;
+      const body =
+        1 +
+        1 +
+        2 +
+        2 +
+        packStackRefsWireSize(brefs) +
+        packStackRefsWireSize(rrefs);
+      const buf = new ArrayBuffer(body);
+      const view = new DataView(buf);
+      let o = 0;
+      view.setUint8(o++, MessageType.PACK_STACK);
+      view.setUint8(o++, flags);
+      view.setUint16(o, bh, LE);
+      o += 2;
+      view.setUint16(o, rh, LE);
+      o += 2;
+      const u8 = new Uint8Array(buf);
+      for (const part of encodePackStackRefs(brefs)) {
+        u8.set(part, o);
+        o += part.length;
+      }
+      for (const part of encodePackStackRefs(rrefs)) {
+        u8.set(part, o);
+        o += part.length;
+      }
+      return buf;
     }
 
     case MessageType.WORLD_TIME: {
@@ -440,6 +566,31 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         type: MessageType.WORLD_SYNC,
         seed: payload.seed,
         worldTimeMs: payload.worldTimeMs,
+      };
+    }
+
+    case MessageType.PACK_STACK: {
+      if (v.byteLength < 6) {
+        throw new Error("PACK_STACK: buffer too short");
+      }
+      const flags = v.getUint8(1);
+      const bc = v.getUint16(2, LE);
+      const rc = v.getUint16(4, LE);
+      if (bc > PACK_STACK_MAX_REFS_PER_LIST || rc > PACK_STACK_MAX_REFS_PER_LIST) {
+        throw new Error("PACK_STACK: ref count too large");
+      }
+      const { refs: behaviorRefs, nextOffset: o1 } = decodePackStackRefs(
+        v,
+        buf,
+        6,
+        bc,
+      );
+      const { refs: resourceRefs } = decodePackStackRefs(v, buf, o1, rc);
+      return {
+        type: MessageType.PACK_STACK,
+        behaviorRefs,
+        resourceRefs,
+        requirePacksBeforeJoin: (flags & 1) !== 0,
       };
     }
 

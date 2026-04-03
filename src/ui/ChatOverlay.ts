@@ -230,8 +230,8 @@ export class ChatOverlay {
       "display:flex",
       "flex-direction:column",
       "justify-content:flex-end",
-      /* Match hotbar stack bottom (1.1rem in inventory.css) + bar/name height + gap */
-      "padding:0 10px calc(1.1rem + 6.25rem)",
+      /* Match hotbar stack bottom (1.1rem in inventory.css) + hearts + name + bar + gaps */
+      "padding:0 10px calc(1.1rem + 8rem)",
       "box-sizing:border-box",
     ].join(";");
 

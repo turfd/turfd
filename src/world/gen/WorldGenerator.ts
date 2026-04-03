@@ -9,6 +9,7 @@ import { TerrainNoise, type ForestType } from "./TerrainNoise";
 import { CaveGenerator } from "./CaveGenerator";
 import { OreVeins } from "./OreVeins";
 import { SedimentPockets } from "./SedimentPockets";
+import { forEachDeciduousBushCell, forEachSpruceBushCell } from "./treeCanopy";
 
 // ---------------------------------------------------------------------------
 // Oak tree shapes (round-ish canopy)
@@ -75,13 +76,22 @@ const SPRUCE_VARIANTS: readonly SpruceTreeSpec[] = [
   },
 ] as const;
 
+/** Birch: taller trunk; avoid radiusY 1 (reads as a flat cap on the grid). */
+const BIRCH_SINGLE_VARIANTS: readonly SingleTreeSpec[] = [
+  { trunkHeight: 5, canopyCenterDy: 6, radiusX: 2, radiusY: 2 },
+  { trunkHeight: 6, canopyCenterDy: 7, radiusX: 2, radiusY: 2 },
+  { trunkHeight: 5, canopyCenterDy: 6, radiusX: 2, radiusY: 3 },
+] as const;
+
 type TreeShape =
   | { type: "oak"; shape: OakTreeShape }
+  | { type: "birch"; spec: SingleTreeSpec }
   | { type: "spruce"; spec: SpruceTreeSpec };
 
 const TREE_PADDING_BLOCKS = 10;
 
 export class WorldGenerator {
+  private readonly blockRegistry: BlockRegistry;
   private readonly terrain: TerrainNoise;
   private readonly caves: CaveGenerator;
   private readonly ores: OreVeins;
@@ -93,14 +103,22 @@ export class WorldGenerator {
   private readonly bedrockId: number;
   private readonly oakLogId: number;
   private readonly spruceLogId: number;
-  private readonly leavesId: number;
+  private readonly oakLeavesId: number;
+  private readonly spruceLeavesId: number;
+  private readonly birchLogId: number;
+  private readonly birchLeavesId: number;
   private readonly shortGrassId: number;
   private readonly tallGrassBottomId: number;
   private readonly tallGrassTopId: number;
   private readonly dandelionId: number;
   private readonly poppyId: number;
+  private readonly sandId: number;
+  private readonly sandstoneId: number;
+  private readonly cactusId: number;
+  private readonly deadBushId: number;
 
   constructor(seed: number, registry: BlockRegistry) {
+    this.blockRegistry = registry;
     const root = new GeneratorContext(seed);
     this.terrain = new TerrainNoise(seed);
     this.caves = new CaveGenerator(root.fork(0xca_57));
@@ -113,12 +131,19 @@ export class WorldGenerator {
     this.bedrockId = registry.getByIdentifier("stratum:bedrock").id;
     this.oakLogId = registry.getByIdentifier("stratum:oak_log").id;
     this.spruceLogId = registry.getByIdentifier("stratum:spruce_log").id;
-    this.leavesId = registry.getByIdentifier("stratum:leaves").id;
+    this.oakLeavesId = registry.getByIdentifier("stratum:oak_leaves").id;
+    this.spruceLeavesId = registry.getByIdentifier("stratum:spruce_leaves").id;
+    this.birchLogId = registry.getByIdentifier("stratum:birch_log").id;
+    this.birchLeavesId = registry.getByIdentifier("stratum:birch_leaves").id;
     this.shortGrassId = registry.getByIdentifier("stratum:short_grass").id;
     this.tallGrassBottomId = registry.getByIdentifier("stratum:tall_grass_bottom").id;
     this.tallGrassTopId = registry.getByIdentifier("stratum:tall_grass_top").id;
     this.dandelionId = registry.getByIdentifier("stratum:dandelion").id;
     this.poppyId = registry.getByIdentifier("stratum:poppy").id;
+    this.sandId = registry.getByIdentifier("stratum:sand").id;
+    this.sandstoneId = registry.getByIdentifier("stratum:sandstone").id;
+    this.cactusId = registry.getByIdentifier("stratum:cactus").id;
+    this.deadBushId = registry.getByIdentifier("stratum:dead_bush").id;
   }
 
   getSurfaceHeight(wx: number): number {
@@ -140,6 +165,7 @@ export class WorldGenerator {
     }
     this.placeBackgroundTrees(chunk, origin.wx, origin.wy);
     this.decorateSurfaceVegetation(chunk, origin.wx, origin.wy);
+    this.decorateDesertSurface(chunk, origin.wx, origin.wy);
     this.fillTerrainBackgroundLayer(chunk, origin.wx, origin.wy);
 
     chunk.dirty = true;
@@ -165,11 +191,9 @@ export class WorldGenerator {
     if (wy > surfaceY) {
       return 0;
     }
-    if (wy === surfaceY) {
-      return this.grassId;
-    }
-    if (wy >= surfaceY - 4 && wy < surfaceY) {
-      return this.dirtId;
+    const topsoilDepth = this.topsoilDepth(wx);
+    if (wy > surfaceY - topsoilDepth) {
+      return this.topsoilBlockId(wx, wy, surfaceY);
     }
     if (wy === WORLD_Y_MIN) {
       return this.stoneId;
@@ -222,6 +246,84 @@ export class WorldGenerator {
     }
   }
 
+  /** In-chunk ±X neighbors: solid non-replaceable blocks invalidate cactus (matches player rules at edges). */
+  private horizontalNeighborSolidForCactus(chunk: Chunk, lx: number, ly: number): boolean {
+    for (const dlx of [-1, 1] as const) {
+      const nx = lx + dlx;
+      if (nx < 0 || nx >= CHUNK_SIZE) {
+        continue;
+      }
+      const nid = chunk.blocks[localIndex(nx, ly)]!;
+      if (nid === this.airId) {
+        continue;
+      }
+      const def = this.blockRegistry.getById(nid);
+      if (def.solid && !def.replaceable) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Sparse cacti and dead bushes on desert surface sand (same chunk only for cactus stacks). */
+  private decorateDesertSurface(chunk: Chunk, originWx: number, originWy: number): void {
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      const wx = originWx + lx;
+      if (!this.terrain.isDesert(wx)) {
+        continue;
+      }
+      const surfaceY = this.terrain.getSurfaceHeight(wx);
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        const wy = originWy + ly;
+        if (wy !== surfaceY) {
+          continue;
+        }
+        const idx = localIndex(lx, ly);
+        if (chunk.blocks[idx] !== this.sandId) {
+          continue;
+        }
+        if (ly + 1 >= CHUNK_SIZE) {
+          continue;
+        }
+        const aboveIdx = localIndex(lx, ly + 1);
+        if (chunk.blocks[aboveIdx] !== this.airId) {
+          continue;
+        }
+        const h = this.hash2(wx * 401 + 3, wy * 307 + 19);
+        if (h % 1000 >= 160) {
+          continue;
+        }
+        const h2 = this.hash2(wx * 811 + 1, wy * 503 + 29);
+        if (h2 % 10 < 5) {
+          const height = 2 + ((h2 >>> 8) % 3);
+          let ok = true;
+          for (let k = 1; k <= height; k++) {
+            if (ly + k >= CHUNK_SIZE) {
+              ok = false;
+              break;
+            }
+            if (chunk.blocks[localIndex(lx, ly + k)] !== this.airId) {
+              ok = false;
+              break;
+            }
+            if (this.horizontalNeighborSolidForCactus(chunk, lx, ly + k)) {
+              ok = false;
+              break;
+            }
+          }
+          if (!ok) {
+            continue;
+          }
+          for (let k = 1; k <= height; k++) {
+            chunk.blocks[localIndex(lx, ly + k)] = this.cactusId;
+          }
+        } else {
+          chunk.blocks[aboveIdx] = this.deadBushId;
+        }
+      }
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Tree placement
   // -------------------------------------------------------------------------
@@ -254,6 +356,24 @@ export class WorldGenerator {
       return;
     }
 
+    if (shape.type === "birch") {
+      const s = shape.spec;
+      this.placeSymmetricCanopy(
+        chunk,
+        originWx,
+        originWy,
+        anchorWx,
+        surfaceY + s.canopyCenterDy,
+        s.radiusX,
+        s.radiusY,
+        this.birchLeavesId,
+      );
+      for (let dy = 1; dy <= s.trunkHeight; dy++) {
+        this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy, this.birchLogId);
+      }
+      return;
+    }
+
     const oakShape = shape.shape;
     const trunkId = this.oakLogId;
 
@@ -266,6 +386,7 @@ export class WorldGenerator {
         surfaceY + oakShape.spec.canopyCenterDy,
         oakShape.spec.radiusX,
         oakShape.spec.radiusY,
+        this.oakLeavesId,
       );
       for (let dy = 1; dy <= oakShape.spec.trunkHeight; dy++) {
         this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy, trunkId);
@@ -276,7 +397,16 @@ export class WorldGenerator {
     const s = oakShape.spec;
     const canopyCx = anchorWx + 1;
     const canopyCy = surfaceY + s.canopyCenterDy;
-    this.placeSymmetricCanopy(chunk, originWx, originWy, canopyCx, canopyCy, s.radiusX, s.radiusY);
+    this.placeSymmetricCanopy(
+      chunk,
+      originWx,
+      originWy,
+      canopyCx,
+      canopyCy,
+      s.radiusX,
+      s.radiusY,
+      this.oakLeavesId,
+    );
 
     for (let dy = 1; dy <= s.baseTrunkH; dy++) {
       this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy, trunkId);
@@ -303,18 +433,9 @@ export class WorldGenerator {
     const layers = spec.canopyLayers;
     const canopyBottom = surfaceY + spec.canopyStartDy;
 
-    // Place canopy layers from bottom to top
-    for (let i = 0; i < layers.length; i++) {
-      const wy = canopyBottom + i;
-      const halfW = layers[layers.length - 1 - i]!;
-      for (let dx = -halfW; dx <= halfW; dx++) {
-        this.placeBackgroundCell(
-          chunk, originWx, originWy,
-          anchorWx + dx, wy,
-          this.leavesId,
-        );
-      }
-    }
+    forEachSpruceBushCell(anchorWx, canopyBottom, layers, (wx, wy) => {
+      this.placeBackgroundCell(chunk, originWx, originWy, wx, wy, this.spruceLeavesId);
+    });
 
     // Place trunk (overwrites leaves in the trunk column)
     for (let dy = 1; dy <= spec.trunkHeight; dy++) {
@@ -326,7 +447,7 @@ export class WorldGenerator {
   // Canopy / trunk primitives
   // -------------------------------------------------------------------------
 
-  /** Ellipse canopy symmetric in ±dx. */
+  /** Rounded deciduous crown (oak/birch); bushier than a plain grid ellipse. */
   private placeSymmetricCanopy(
     chunk: Chunk,
     originWx: number,
@@ -335,28 +456,11 @@ export class WorldGenerator {
     canopyCy: number,
     radiusX: number,
     radiusY: number,
+    leavesId: number,
   ): void {
-    for (let dy = -radiusY; dy <= radiusY; dy++) {
-      for (let dx = -radiusX; dx <= radiusX; dx++) {
-        const nx = dx / radiusX;
-        const ny = dy / radiusY;
-        const dist = nx * nx + ny * ny;
-        if (dist > 1) {
-          continue;
-        }
-        if (dy < 0 && Math.abs(dx) > radiusX - 1 && dist > 0.78) {
-          continue;
-        }
-        this.placeBackgroundCell(
-          chunk,
-          originWx,
-          originWy,
-          canopyCx + dx,
-          canopyCy + dy,
-          this.leavesId,
-        );
-      }
-    }
+    forEachDeciduousBushCell(canopyCx, canopyCy, radiusX, radiusY, (wx, wy) => {
+      this.placeBackgroundCell(chunk, originWx, originWy, wx, wy, leavesId);
+    });
   }
 
   private placeBackgroundCell(
@@ -395,7 +499,12 @@ export class WorldGenerator {
     }
     const idx = localIndex(lxLocal, lyLocal);
     const existing = chunk.blocks[idx]!;
-    if (existing !== this.airId && existing !== this.leavesId) {
+    if (
+      existing !== this.airId &&
+      existing !== this.oakLeavesId &&
+      existing !== this.spruceLeavesId &&
+      existing !== this.birchLeavesId
+    ) {
       return;
     }
     chunk.blocks[idx] = trunkId;
@@ -407,6 +516,9 @@ export class WorldGenerator {
   // -------------------------------------------------------------------------
 
   private shouldSpawnTreeAt(wx: number, surfaceY: number, density: number): boolean {
+    if (this.terrain.isDesert(wx)) {
+      return false;
+    }
     if (density <= 0.01) {
       return false;
     }
@@ -470,6 +582,11 @@ export class WorldGenerator {
       return { type: "spruce", spec: SPRUCE_VARIANTS[idx]! };
     }
 
+    if (forestType === "birch") {
+      const idx = h % BIRCH_SINGLE_VARIANTS.length;
+      return { type: "birch", spec: BIRCH_SINGLE_VARIANTS[idx]! };
+    }
+
     if (density >= 0.35 && h % 7 === 0) {
       return { type: "oak", shape: { kind: "twinFork", spec: OAK_TWIN_FORK_SPEC } };
     }
@@ -499,11 +616,9 @@ export class WorldGenerator {
     if (wy > surfaceY) {
       return this.airId;
     }
-    if (wy === surfaceY) {
-      return this.grassId;
-    }
-    if (wy >= surfaceY - 4 && wy < surfaceY) {
-      return this.dirtId;
+    const topsoilDepth = this.topsoilDepth(wx);
+    if (wy > surfaceY - topsoilDepth) {
+      return this.topsoilBlockId(wx, wy, surfaceY);
     }
     if (wy === WORLD_Y_MIN) {
       return this.bedrockId;
@@ -523,5 +638,39 @@ export class WorldGenerator {
       return ore;
     }
     return this.sediment.getFill(wx, wy);
+  }
+
+  /** Temperate: 1 grass + 4 dirt. Desert: 3–5 sand + 2–3 sandstone (per-column hash). */
+  private topsoilDepth(wx: number): number {
+    if (!this.terrain.isDesert(wx)) {
+      return 5;
+    }
+    const { sandDepth, sandstoneDepth } = this.desertTopsoilSlices(wx);
+    return sandDepth + sandstoneDepth;
+  }
+
+  private desertTopsoilSlices(wx: number): { sandDepth: number; sandstoneDepth: number } {
+    const h = this.hash2(wx * 923 + 11, 0xdea9_01);
+    const sandDepth = 3 + (h % 3);
+    const sandstoneDepth = 2 + ((h >>> 8) % 2);
+    return { sandDepth, sandstoneDepth };
+  }
+
+  private topsoilBlockId(wx: number, wy: number, surfaceY: number): number {
+    const d = surfaceY - wy;
+    if (!this.terrain.isDesert(wx)) {
+      if (d === 0) {
+        return this.grassId;
+      }
+      return this.dirtId;
+    }
+    const { sandDepth, sandstoneDepth } = this.desertTopsoilSlices(wx);
+    if (d < sandDepth) {
+      return this.sandId;
+    }
+    if (d < sandDepth + sandstoneDepth) {
+      return this.sandstoneId;
+    }
+    return this.sandId;
   }
 }

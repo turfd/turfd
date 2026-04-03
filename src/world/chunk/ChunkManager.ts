@@ -1,5 +1,4 @@
-/** In-memory chunk cache with view-distance eviction and optional generator fill. */
-import { VIEW_DISTANCE_CHUNKS } from "../../core/constants";
+/** In-memory chunk cache with simulation-distance eviction and optional generator fill. */
 import type { ChunkCoord } from "./ChunkCoord";
 import type { Chunk } from "./Chunk";
 
@@ -68,6 +67,30 @@ export class ChunkManager {
     };
   }
 
+  /**
+   * Loaded chunks whose Chebyshev distance from `centre` is at most `distance`.
+   * Iterates the axis-aligned square of chunk coordinates only (O(distance²)), not all loaded chunks.
+   */
+  *getChunksWithinDistance(centre: ChunkCoord, distance: number): Iterable<Chunk> {
+    const { cx: ccx, cy: ccy } = centre;
+    const loX = ccx - distance;
+    const hiX = ccx + distance;
+    const loY = ccy - distance;
+    const hiY = ccy + distance;
+    for (let cx = loX; cx <= hiX; cx++) {
+      const row = this.loaded.get(cx);
+      if (row === undefined) {
+        continue;
+      }
+      for (let cy = loY; cy <= hiY; cy++) {
+        const chunk = row.get(cy);
+        if (chunk !== undefined) {
+          yield chunk;
+        }
+      }
+    }
+  }
+
   markAllDirty(): void {
     for (const row of this.loaded.values()) {
       for (const chunk of row.values()) {
@@ -77,10 +100,15 @@ export class ChunkManager {
   }
 
   /**
-   * Drops chunks whose Chebyshev distance from `centre` exceeds {@link VIEW_DISTANCE_CHUNKS}.
+   * Drops chunks whose Chebyshev distance from `centre` exceeds `maxDistance`, except
+   * columns with |cx| <= `spawnStripRadius` (always kept once loaded).
    * @returns Evicted chunk coordinates (for cache invalidation, etc.).
    */
-  updateLoadedChunks(centre: ChunkCoord): ChunkCoord[] {
+  updateLoadedChunks(
+    centre: ChunkCoord,
+    maxDistance: number,
+    spawnStripRadius: number,
+  ): ChunkCoord[] {
     const evicted: ChunkCoord[] = [];
     for (const row of this.loaded.values()) {
       for (const chunk of row.values()) {
@@ -88,7 +116,8 @@ export class ChunkManager {
           Math.abs(chunk.coord.cx - centre.cx),
           Math.abs(chunk.coord.cy - centre.cy),
         );
-        if (d > VIEW_DISTANCE_CHUNKS) {
+        const inSpawnStrip = Math.abs(chunk.coord.cx) <= spawnStripRadius;
+        if (d > maxDistance && !inSpawnStrip) {
           evicted.push({ cx: chunk.coord.cx, cy: chunk.coord.cy });
         }
       }

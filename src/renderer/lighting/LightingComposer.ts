@@ -92,14 +92,12 @@ export class LightingComposer {
       if (tex === undefined) {
         continue;
       }
-      const parts = key.split(",");
-      const cxStr = parts[0];
-      const cyStr = parts[1];
-      if (cxStr === undefined || cyStr === undefined) {
+      const comma = key.indexOf(",");
+      if (comma <= 0) {
         continue;
       }
-      const cx = Number.parseInt(cxStr, 10);
-      const cy = Number.parseInt(cyStr, 10);
+      const cx = Number.parseInt(key.slice(0, comma), 10);
+      const cy = Number.parseInt(key.slice(comma + 1), 10);
       const chunk = this._world.getChunk(cx, cy);
       if (chunk === undefined) {
         continue;
