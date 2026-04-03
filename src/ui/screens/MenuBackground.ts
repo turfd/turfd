@@ -409,6 +409,7 @@ export class MenuBackground {
     // -- Camera baseline (surface at 55% down screen) -----------------------
     const midWX    = Math.floor((CHUNKS_X * CHUNK_SIZE) / 2);
     const surfaceY = generator.getSurfaceHeight(midWX);
+    this.surfaceYForLayout = surfaceY;
 
     this.baseX = screenW / 2 - (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2;
     this.baseY = screenH * 0.55 + (surfaceY + 1) * BLOCK_SIZE * zoom;
@@ -416,11 +417,55 @@ export class MenuBackground {
 
     worldContainer.position.set(this.baseX, this.baseY);
 
+    this.lastRendererW = app.renderer.width;
+    this.lastRendererH = app.renderer.height;
+
     // Await bg image (null if load failed)
     this.bgImage = await bgPromise;
 
     this.startTime = performance.now();
     this.rafId = requestAnimationFrame((t) => this.animate(t));
+  }
+
+  /**
+   * Pixi `resizeTo: mount` updates the canvas, but our offscreen albedo target and
+   * adaptive zoom stay stale unless we sync (same idea as RenderPipeline#syncSizeFromRenderer).
+   */
+  private syncLayoutFromRenderer(): void {
+    const app = this.app;
+    const worldContainer = this.worldContainer;
+    const albedoRT = this.albedoRT;
+    const composite = this.composite;
+    if (!app || !worldContainer || !albedoRT || !composite) return;
+
+    const rw = app.renderer.width;
+    const rh = app.renderer.height;
+    if (rw === this.lastRendererW && rh === this.lastRendererH) return;
+
+    this.lastRendererW = rw;
+    this.lastRendererH = rh;
+
+    const rwR = Math.max(1, Math.round(rw));
+    const rhR = Math.max(1, Math.round(rh));
+    albedoRT.resize(rwR, rhR);
+
+    const dpr     = app.renderer.resolution;
+    const screenW = rw / dpr;
+    const screenH = rh / dpr;
+    composite.resize(screenW, screenH);
+
+    const zoom = computeZoom(screenW);
+    this.zoom = zoom;
+    worldContainer.scale.set(zoom);
+
+    this.baseX = screenW / 2 - (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2;
+    this.baseY =
+      screenH * 0.55 +
+      (this.surfaceYForLayout + 1) * BLOCK_SIZE * zoom;
+    this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
+
+    this.lastCenterCX = -9999;
+    this.lastCenterCY = -9999;
   }
 
   // ---------------------------------------------------------------------------
@@ -523,6 +568,8 @@ export class MenuBackground {
 
   private animate(now: number): void {
     if (this.destroyed || !this.app || !this.worldContainer) return;
+
+    this.syncLayoutFromRenderer();
 
     const app            = this.app;
     const worldContainer = this.worldContainer;
