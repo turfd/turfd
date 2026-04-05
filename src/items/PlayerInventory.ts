@@ -1,8 +1,16 @@
 /** Fixed-size inventory managing ItemStack slots, stack merging, consumption, and cursor stack. */
 
 import { HOTBAR_SIZE, INVENTORY_SIZE } from "../core/constants";
-import type { ItemId, ItemStack } from "../core/itemDefinition";
+import type { ItemDefinition, ItemId, ItemStack } from "../core/itemDefinition";
+import {
+  clampDamageForDefinition,
+  isStackBroken,
+} from "../core/itemDefinition";
 import type { ItemRegistry } from "./ItemRegistry";
+
+export type SerializedInventorySlot =
+  | { key: string; count: number; damage?: number }
+  | null;
 
 export class PlayerInventory {
   private readonly _slots: (ItemStack | null)[];
@@ -28,7 +36,15 @@ export class PlayerInventory {
       this.normalizeCursor();
       return null;
     }
-    return { itemId: this._cursorStack.itemId, count: this._cursorStack.count };
+    return this.copyStack(this._cursorStack);
+  }
+
+  private copyStack(s: ItemStack): ItemStack {
+    const out: ItemStack = { itemId: s.itemId, count: s.count };
+    if (s.damage !== undefined && s.damage > 0) {
+      out.damage = s.damage;
+    }
+    return out;
   }
 
   private maxStackFor(itemId: ItemId): number {
@@ -42,6 +58,31 @@ export class PlayerInventory {
     }
   }
 
+  private damageMatchesForMerge(
+    def: ItemDefinition | undefined,
+    a: number | undefined,
+    b: number | undefined,
+  ): boolean {
+    if (def?.maxDurability === undefined) {
+      return true;
+    }
+    const da = clampDamageForDefinition(def, a);
+    const db = clampDamageForDefinition(def, b);
+    return da === db;
+  }
+
+  private slotWithNormalizedDamage(stack: ItemStack): ItemStack {
+    const def = this._registry.getById(stack.itemId);
+    const d = clampDamageForDefinition(def, stack.damage);
+    if (def?.maxDurability === undefined) {
+      return { itemId: stack.itemId, count: stack.count };
+    }
+    if (d <= 0) {
+      return { itemId: stack.itemId, count: stack.count };
+    }
+    return { itemId: stack.itemId, count: stack.count, damage: d };
+  }
+
   /**
    * Merge cursor into inventory storage (e.g. when closing UI). Returns overflow not placed.
    */
@@ -49,29 +90,105 @@ export class PlayerInventory {
     if (this._cursorStack === null) {
       return 0;
     }
-    const { itemId, count } = this._cursorStack;
-    const overflow = this.add(itemId, count);
-    if (overflow === 0) {
+    const rest = this.addItemStack(this.copyStack(this._cursorStack));
+    if (rest === null) {
       this._cursorStack = null;
-    } else {
-      this._cursorStack = { itemId, count: overflow };
+      return 0;
     }
-    return overflow;
+    this._cursorStack = rest;
+    return rest.count;
   }
 
   /**
    * Add items to the inventory. Fills existing partial stacks first,
-   * then uses empty slots.
+   * then uses empty slots. New stacks use damage 0 (full durability).
    * @returns The number of items that could not fit (overflow).
    */
   add(itemId: ItemId, count: number): number {
     if (count <= 0) return 0;
-    return PlayerInventory.addOntoSlotArray(
-      this._slots,
-      (id) => this.maxStackFor(id),
-      itemId,
-      count,
-    );
+    const rest = this.addItemStack({ itemId, count });
+    return rest === null ? 0 : rest.count;
+  }
+
+  /**
+   * Add a stack with optional per-item damage. Returns overflow stack, or null if all merged.
+   */
+  addItemStack(stack: ItemStack): ItemStack | null {
+    return this.addItemStackWithFirstSlot(stack).rest;
+  }
+
+  /**
+   * Same as {@link addItemStack}, plus the first inventory slot index that received items
+   * (merge or new stack), for shift–move animations.
+   */
+  addItemStackWithFirstSlot(stack: ItemStack): {
+    rest: ItemStack | null;
+    firstSlot: number | null;
+  } {
+    if (stack.count <= 0) {
+      return { rest: null, firstSlot: null };
+    }
+    const def = this._registry.getById(stack.itemId);
+    if (def === undefined) {
+      return { rest: stack, firstSlot: null };
+    }
+    const normalized = this.slotWithNormalizedDamage(stack);
+    if (isStackBroken(def, normalized.damage)) {
+      return { rest: null, firstSlot: null };
+    }
+    const maxStack = def.maxStack;
+    let remaining = normalized.count;
+    const itemId = normalized.itemId;
+    const dmg = normalized.damage;
+    let firstSlot: number | null = null;
+
+    for (let i = 0; i < INVENTORY_SIZE && remaining > 0; i++) {
+      const slot = this._slots[i];
+      if (slot === null || slot === undefined || slot.itemId !== itemId) {
+        continue;
+      }
+      if (!this.damageMatchesForMerge(def, slot.damage, dmg)) {
+        continue;
+      }
+      if (slot.count >= maxStack) {
+        continue;
+      }
+      const space = maxStack - slot.count;
+      const toAdd = Math.min(remaining, space);
+      if (toAdd <= 0) {
+        continue;
+      }
+      if (firstSlot === null) {
+        firstSlot = i;
+      }
+      slot.count += toAdd;
+      remaining -= toAdd;
+    }
+
+    for (let i = 0; i < INVENTORY_SIZE && remaining > 0; i++) {
+      if (this._slots[i] !== null && this._slots[i] !== undefined) {
+        continue;
+      }
+      const toAdd = Math.min(remaining, maxStack);
+      if (firstSlot === null) {
+        firstSlot = i;
+      }
+      const s: ItemStack = { itemId, count: toAdd };
+      if (def.maxDurability !== undefined && dmg !== undefined && dmg > 0) {
+        s.damage = dmg;
+      }
+      this._slots[i] = s;
+      remaining -= toAdd;
+    }
+
+    if (remaining <= 0) {
+      return { rest: null, firstSlot };
+    }
+    const out: ItemStack = { itemId, count: remaining };
+    if (def.maxDurability !== undefined && dmg !== undefined && dmg > 0) {
+      out.damage = dmg;
+    }
+    return { rest: out, firstSlot };
   }
 
   /**
@@ -86,48 +203,15 @@ export class PlayerInventory {
       if (s === null || s === undefined) {
         slots.push(null);
       } else {
-        slots.push({ itemId: s.itemId, count: s.count });
+        slots.push(this.copyStack(s));
       }
     }
-    return PlayerInventory.addOntoSlotArray(
-      slots,
-      (id) => this.maxStackFor(id),
-      itemId,
-      count,
-    );
-  }
-
-  /**
-   * Mutates `slots` in place (same algorithm as {@link add}).
-   */
-  private static addOntoSlotArray(
-    slots: (ItemStack | null)[],
-    maxStackFor: (itemId: ItemId) => number,
-    itemId: ItemId,
-    count: number,
-  ): number {
-    const maxStack = maxStackFor(itemId);
-    let remaining = count;
-
-    for (let i = 0; i < INVENTORY_SIZE && remaining > 0; i++) {
-      const slot = slots[i];
-      if (slot !== null && slot !== undefined && slot.itemId === itemId && slot.count < maxStack) {
-        const space = maxStack - slot.count;
-        const toAdd = Math.min(remaining, space);
-        slot.count += toAdd;
-        remaining -= toAdd;
-      }
+    const inv = new PlayerInventory(this._registry);
+    for (let i = 0; i < INVENTORY_SIZE; i++) {
+      inv._slots[i] = slots[i] ?? null;
     }
-
-    for (let i = 0; i < INVENTORY_SIZE && remaining > 0; i++) {
-      if (slots[i] === null || slots[i] === undefined) {
-        const toAdd = Math.min(remaining, maxStack);
-        slots[i] = { itemId, count: toAdd };
-        remaining -= toAdd;
-      }
-    }
-
-    return remaining;
+    const rest = inv.addItemStack({ itemId, count });
+    return rest === null ? 0 : rest.count;
   }
 
   /** Returns a copy of the stack at the given slot index, or null. */
@@ -135,7 +219,7 @@ export class PlayerInventory {
     if (slot < 0 || slot >= INVENTORY_SIZE) return null;
     const s = this._slots[slot];
     if (s === null || s === undefined) return null;
-    return { itemId: s.itemId, count: s.count };
+    return this.copyStack(s);
   }
 
   /** Overwrites a slot. If stack count is <= 0 the slot is cleared. */
@@ -143,9 +227,14 @@ export class PlayerInventory {
     if (slot < 0 || slot >= INVENTORY_SIZE) return;
     if (stack === null || stack.count <= 0) {
       this._slots[slot] = null;
-    } else {
-      this._slots[slot] = { itemId: stack.itemId, count: stack.count };
+      return;
     }
+    const def = this._registry.getById(stack.itemId);
+    if (def !== undefined && isStackBroken(def, stack.damage)) {
+      this._slots[slot] = null;
+      return;
+    }
+    this._slots[slot] = this.slotWithNormalizedDamage(stack);
   }
 
   /** Swap the contents of two slot indices. */
@@ -165,7 +254,7 @@ export class PlayerInventory {
     if (this._cursorStack !== null) return;
     const s = this._slots[slot];
     if (s === null || s === undefined) return;
-    this._cursorStack = { itemId: s.itemId, count: s.count };
+    this._cursorStack = this.copyStack(s);
     this._slots[slot] = null;
   }
 
@@ -177,8 +266,19 @@ export class PlayerInventory {
     if (s === null || s === undefined || s.count <= 0) return;
     const take = Math.ceil(s.count / 2);
     const remain = s.count - take;
-    this._cursorStack = { itemId: s.itemId, count: take };
-    this._slots[slot] = remain > 0 ? { itemId: s.itemId, count: remain } : null;
+    this._cursorStack = this.slotWithNormalizedDamage({
+      itemId: s.itemId,
+      count: take,
+      damage: s.damage,
+    });
+    this._slots[slot] =
+      remain > 0
+        ? this.slotWithNormalizedDamage({
+            itemId: s.itemId,
+            count: remain,
+            damage: s.damage,
+          })
+        : null;
   }
 
   /** Place one item from the cursor into a slot (merge or new stack). */
@@ -189,11 +289,21 @@ export class PlayerInventory {
 
     const slotStack = this._slots[slot];
     const max = this.maxStackFor(cur.itemId);
+    const def = this._registry.getById(cur.itemId);
 
     if (slotStack === null || slotStack === undefined) {
-      this._slots[slot] = { itemId: cur.itemId, count: 1 };
+      const one = this.slotWithNormalizedDamage({
+        itemId: cur.itemId,
+        count: 1,
+        damage: cur.damage,
+      });
+      this._slots[slot] = one;
       cur.count -= 1;
-    } else if (slotStack.itemId === cur.itemId && slotStack.count < max) {
+    } else if (
+      slotStack.itemId === cur.itemId &&
+      slotStack.count < max &&
+      this.damageMatchesForMerge(def, slotStack.damage, cur.damage)
+    ) {
       slotStack.count += 1;
       cur.count -= 1;
     }
@@ -221,13 +331,21 @@ export class PlayerInventory {
     if (slotStack === null || slotStack === undefined) {
       const max = this.maxStackFor(cur.itemId);
       const put = Math.min(cur.count, max);
-      this._slots[slot] = { itemId: cur.itemId, count: put };
+      this._slots[slot] = this.slotWithNormalizedDamage({
+        itemId: cur.itemId,
+        count: put,
+        damage: cur.damage,
+      });
       cur.count -= put;
       this.normalizeCursor();
       return;
     }
 
-    if (slotStack.itemId === cur.itemId) {
+    const def = this._registry.getById(cur.itemId);
+    if (
+      slotStack.itemId === cur.itemId &&
+      this.damageMatchesForMerge(def, slotStack.damage, cur.damage)
+    ) {
       const max = this.maxStackFor(cur.itemId);
       const space = max - slotStack.count;
       if (space <= 0) return;
@@ -238,8 +356,16 @@ export class PlayerInventory {
       return;
     }
 
-    const tmpCursor: ItemStack = { itemId: cur.itemId, count: cur.count };
-    this._cursorStack = { itemId: slotStack.itemId, count: slotStack.count };
+    const tmpCursor: ItemStack = this.slotWithNormalizedDamage({
+      itemId: cur.itemId,
+      count: cur.count,
+      damage: cur.damage,
+    });
+    this._cursorStack = this.slotWithNormalizedDamage({
+      itemId: slotStack.itemId,
+      count: slotStack.count,
+      damage: slotStack.damage,
+    });
     this._slots[slot] = tmpCursor;
   }
 
@@ -266,28 +392,42 @@ export class PlayerInventory {
    * Shift–quick-move (Minecraft-style): move the whole stack from `slot` into the other
    * region (main ↔ hotbar), merging into partial stacks first then filling empty slots
    * left-to-right / top-to-bottom. No-op if the cursor already holds items.
+   * @returns First target slot that received items, or null if nothing moved.
    */
-  quickMoveFromSlot(slot: number): void {
-    if (slot < 0 || slot >= INVENTORY_SIZE) return;
-    if (this._cursorStack !== null) return;
+  quickMoveFromSlot(slot: number): number | null {
+    if (slot < 0 || slot >= INVENTORY_SIZE) return null;
+    if (this._cursorStack !== null) return null;
     const src = this._slots[slot];
-    if (src === null || src === undefined || src.count <= 0) return;
+    if (src === null || src === undefined || src.count <= 0) return null;
 
     const itemId = src.itemId;
     let remaining = src.count;
     const max = this.maxStackFor(itemId);
+    const def = this._registry.getById(itemId);
+    const dmg = src.damage;
 
     const toHotbar = slot >= HOTBAR_SIZE;
     const targetIndices: number[] = toHotbar
       ? Array.from({ length: HOTBAR_SIZE }, (_, i) => i)
       : Array.from({ length: INVENTORY_SIZE - HOTBAR_SIZE }, (_, i) => i + HOTBAR_SIZE);
 
+    let firstDest: number | null = null;
+
     for (const i of targetIndices) {
       if (remaining <= 0) break;
       const t = this._slots[i];
-      if (t !== null && t !== undefined && t.itemId === itemId && t.count < max) {
+      if (
+        t !== null &&
+        t !== undefined &&
+        t.itemId === itemId &&
+        t.count < max &&
+        this.damageMatchesForMerge(def, t.damage, dmg)
+      ) {
         const space = max - t.count;
         const move = Math.min(space, remaining);
+        if (move > 0 && firstDest === null) {
+          firstDest = i;
+        }
         t.count += move;
         remaining -= move;
       }
@@ -297,15 +437,40 @@ export class PlayerInventory {
       if (remaining <= 0) break;
       if (this._slots[i] === null || this._slots[i] === undefined) {
         const put = Math.min(max, remaining);
-        this._slots[i] = { itemId, count: put };
+        if (firstDest === null) {
+          firstDest = i;
+        }
+        this._slots[i] = this.slotWithNormalizedDamage({
+          itemId,
+          count: put,
+          damage: dmg,
+        });
         remaining -= put;
       }
+    }
+
+    if (firstDest === null) {
+      return null;
     }
 
     if (remaining <= 0) {
       this._slots[slot] = null;
     } else {
-      this._slots[slot] = { itemId, count: remaining };
+      this._slots[slot] = this.slotWithNormalizedDamage({
+        itemId,
+        count: remaining,
+        damage: dmg,
+      });
+    }
+    return firstDest;
+  }
+
+  /** @internal External UI (e.g. drag-drop) may set the cursor stack after a merge. */
+  replaceCursorStack(stack: ItemStack | null): void {
+    if (stack === null || stack.count <= 0) {
+      this._cursorStack = null;
+    } else {
+      this._cursorStack = this.slotWithNormalizedDamage(stack);
     }
   }
 
@@ -321,13 +486,21 @@ export class PlayerInventory {
 
     const itemId = hub.itemId;
     const max = this.maxStackFor(itemId);
+    const def = this._registry.getById(itemId);
     let room = max - hub.count;
     if (room <= 0) return;
 
     for (let i = 0; i < INVENTORY_SIZE && room > 0; i++) {
       if (i === slot) continue;
       const s = this._slots[i];
-      if (s === null || s === undefined || s.itemId !== itemId) continue;
+      if (
+        s === null ||
+        s === undefined ||
+        s.itemId !== itemId ||
+        !this.damageMatchesForMerge(def, s.damage, hub.damage)
+      ) {
+        continue;
+      }
       const take = Math.min(s.count, room);
       hub.count += take;
       s.count -= take;
@@ -378,9 +551,15 @@ export class PlayerInventory {
 
     const to = this._slots[toSlot];
     const max = this.maxStackFor(from.itemId);
+    const def = this._registry.getById(from.itemId);
+    const one = this.slotWithNormalizedDamage({
+      itemId: from.itemId,
+      count: 1,
+      damage: from.damage,
+    });
 
     if (to === null || to === undefined) {
-      this._slots[toSlot] = { itemId: from.itemId, count: 1 };
+      this._slots[toSlot] = one;
       from.count -= 1;
       if (from.count <= 0) {
         this._slots[fromSlot] = null;
@@ -388,7 +567,11 @@ export class PlayerInventory {
       return;
     }
 
-    if (to.itemId === from.itemId && to.count < max) {
+    if (
+      to.itemId === from.itemId &&
+      to.count < max &&
+      this.damageMatchesForMerge(def, to.damage, from.damage)
+    ) {
       to.count += 1;
       from.count -= 1;
       if (from.count <= 0) {
@@ -398,11 +581,30 @@ export class PlayerInventory {
   }
 
   /**
-   * Snapshot every slot as `{ key, count }` using stable string keys.
+   * After mining, tilling, or similar: if the held hotbar stack is damageable, add one use.
+   * Clears the slot when the tool breaks.
+   */
+  applyToolUseFromMining(hotbarSlot: number): void {
+    if (hotbarSlot < 0 || hotbarSlot >= HOTBAR_SIZE) return;
+    const s = this._slots[hotbarSlot];
+    if (s === null || s === undefined || s.count <= 0) return;
+    const def = this._registry.getById(s.itemId);
+    if (def?.maxDurability === undefined) return;
+    const cur = clampDamageForDefinition(def, s.damage);
+    const next = cur + 1;
+    if (next >= def.maxDurability) {
+      this._slots[hotbarSlot] = null;
+      return;
+    }
+    s.damage = next;
+  }
+
+  /**
+   * Snapshot every slot using stable string keys.
    * Null slots are preserved so slot positions round-trip exactly.
    */
-  serialize(): ({ key: string; count: number } | null)[] {
-    const out: ({ key: string; count: number } | null)[] = [];
+  serialize(): SerializedInventorySlot[] {
+    const out: SerializedInventorySlot[] = [];
     for (let i = 0; i < INVENTORY_SIZE; i++) {
       const s = this._slots[i];
       if (s === null || s === undefined || s.count <= 0) {
@@ -412,7 +614,12 @@ export class PlayerInventory {
         if (def === undefined) {
           out.push(null);
         } else {
-          out.push({ key: def.key, count: s.count });
+          const d = clampDamageForDefinition(def, s.damage);
+          if (def.maxDurability !== undefined && d > 0) {
+            out.push({ key: def.key, count: s.count, damage: d });
+          } else {
+            out.push({ key: def.key, count: s.count });
+          }
         }
       }
     }
@@ -423,7 +630,7 @@ export class PlayerInventory {
    * Restore slots from data produced by {@link serialize}.
    * Unknown keys (e.g. removed mods) are silently skipped.
    */
-  restore(data: ({ key: string; count: number } | null)[]): void {
+  restore(data: readonly SerializedInventorySlot[]): void {
     for (let i = 0; i < INVENTORY_SIZE; i++) {
       const entry = i < data.length ? data[i] : null;
       if (entry === null || entry === undefined) {
@@ -435,7 +642,16 @@ export class PlayerInventory {
         this._slots[i] = null;
         continue;
       }
-      this._slots[i] = { itemId: def.id, count: entry.count };
+      const d = clampDamageForDefinition(def, entry.damage);
+      if (isStackBroken(def, d)) {
+        this._slots[i] = null;
+        continue;
+      }
+      const stack: ItemStack = { itemId: def.id, count: entry.count };
+      if (def.maxDurability !== undefined && d > 0) {
+        stack.damage = d;
+      }
+      this._slots[i] = stack;
     }
   }
 

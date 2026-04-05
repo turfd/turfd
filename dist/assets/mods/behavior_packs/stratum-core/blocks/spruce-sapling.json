@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:spruce_sapling" },
+    "description": {
+      "identifier": "stratum:spruce_sapling"
+    },
     "components": {
       "stratum:display_name": "Spruce Sapling",
-      "stratum:texture": { "all": "spruce_sapling" },
+      "stratum:texture": {
+        "all": "spruce_sapling"
+      },
       "stratum:solid": false,
       "stratum:transparent": true,
       "stratum:water": false,
@@ -13,7 +17,8 @@
       "stratum:light_absorption": 0,
       "stratum:material": "grass",
       "stratum:replaceable": true,
-      "stratum:loot_table": "stratum:spruce_sapling"
+      "stratum:loot_table": "stratum:spruce_sapling",
+      "stratum:numeric_id": 45
     }
   }
 }

@@ -1,6 +1,6 @@
 /** Authoritative crafting: canCraft / craft transactions against {@link PlayerInventory}. */
 
-import { RECIPE_STATION_CRAFTING_TABLE } from "../core/constants";
+import { RECIPE_STATION_CRAFTING_TABLE, RECIPE_STATION_FURNACE } from "../core/constants";
 import type { ItemId } from "../core/itemDefinition";
 import type { CraftResult, IngredientSlot, RecipeDefinition } from "../core/recipe";
 import type { PlayerInventory } from "../items/PlayerInventory";
@@ -9,7 +9,14 @@ import type { RecipeRegistry } from "../world/RecipeRegistry";
 
 export interface CraftingStationContext {
   readonly nearCraftingTable: boolean;
+  readonly nearFurnace: boolean;
 }
+
+/** Per-slot counts for crafting UI (inventory only; ignores station, cursor, output space). */
+export type RecipeIngredientAvailability = {
+  readonly need: number;
+  readonly have: number;
+};
 
 export class CraftingSystem {
   constructor(
@@ -72,6 +79,9 @@ export class CraftingSystem {
     if (recipe.station === RECIPE_STATION_CRAFTING_TABLE) {
       return ctx.nearCraftingTable;
     }
+    if (recipe.station === RECIPE_STATION_FURNACE) {
+      return ctx.nearFurnace;
+    }
     return false;
   }
 
@@ -112,12 +122,13 @@ export class CraftingSystem {
     ctx: CraftingStationContext,
   ): CraftResult {
     if (!this.canCraft(recipe, inventory, batches, ctx)) {
-      return {
-        ok: false,
-        reason: recipe.station === RECIPE_STATION_CRAFTING_TABLE && !ctx.nearCraftingTable
-          ? "Move closer to a crafting table."
-          : "Cannot craft.",
-      };
+      let reason = "Cannot craft.";
+      if (recipe.station === RECIPE_STATION_CRAFTING_TABLE && !ctx.nearCraftingTable) {
+        reason = "Move closer to a crafting table.";
+      } else if (recipe.station === RECIPE_STATION_FURNACE && !ctx.nearFurnace) {
+        reason = "Move closer to a furnace.";
+      }
+      return { ok: false, reason };
     }
 
     for (const ing of recipe.ingredients) {
@@ -174,5 +185,89 @@ export class CraftingSystem {
 
   getRecipeById(id: string): RecipeDefinition | undefined {
     return this._recipes.getById(id);
+  }
+
+  /**
+   * For each ingredient slot: how many are needed vs how many the player holds
+   * (any item matching the slot’s item id or tag).
+   */
+  recipeIngredientAvailability(
+    recipe: RecipeDefinition,
+    inventory: PlayerInventory,
+  ): RecipeIngredientAvailability[] {
+    return recipe.ingredients.map((ing) => {
+      const ids = this.resolveIngredientIds(ing);
+      const have = ids.length === 0 ? 0 : this.countInInventory(inventory, ids);
+      return { need: ing.count, have };
+    });
+  }
+
+  /** True if the player has at least one item matching any ingredient slot. */
+  recipeTouchesInventory(recipe: RecipeDefinition, inventory: PlayerInventory): boolean {
+    for (const ing of recipe.ingredients) {
+      const ids = this.resolveIngredientIds(ing);
+      if (ids.length > 0 && this.countInInventory(inventory, ids) > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Station + empty cursor + ingredients only (furnace tab / enqueue). */
+  canAffordIngredientsFurnace(
+    recipe: RecipeDefinition,
+    inventory: PlayerInventory,
+    batches: number,
+    ctx: CraftingStationContext,
+  ): boolean {
+    if (recipe.station !== RECIPE_STATION_FURNACE) {
+      return false;
+    }
+    if (!Number.isInteger(batches) || batches <= 0) {
+      return false;
+    }
+    if (!this.stationSatisfied(recipe, ctx)) {
+      return false;
+    }
+    if (inventory.getCursorStack() !== null) {
+      return false;
+    }
+    for (const ing of recipe.ingredients) {
+      const ids = this.resolveIngredientIds(ing);
+      if (ids.length === 0) {
+        return false;
+      }
+      if (this.countInInventory(inventory, ids) < ing.count * batches) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  consumeIngredientsOnly(recipe: RecipeDefinition, inventory: PlayerInventory, batches: number): boolean {
+    for (const ing of recipe.ingredients) {
+      const ids = this.resolveIngredientIds(ing);
+      if (ids.length === 0) {
+        return false;
+      }
+      if (!this.consumeFromMatching(inventory, ids, ing.count * batches)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  maxCraftableIngredientBatchesFurnace(
+    recipe: RecipeDefinition,
+    inventory: PlayerInventory,
+    ctx: CraftingStationContext,
+  ): number {
+    if (recipe.station !== RECIPE_STATION_FURNACE) {
+      return 0;
+    }
+    if (!this.stationSatisfied(recipe, ctx) || inventory.getCursorStack() !== null) {
+      return 0;
+    }
+    return this.maxBatchesLimitedByIngredients(recipe, inventory);
   }
 }

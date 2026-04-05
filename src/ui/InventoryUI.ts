@@ -8,7 +8,7 @@ import {
   PLAYER_HEART_COUNT,
   PLAYER_MAX_HEALTH,
 } from "../core/constants";
-import type { ItemId } from "../core/itemDefinition";
+import type { ItemDefinition, ItemId, ItemStack } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { PlayerInventory } from "../items/PlayerInventory";
 import { fetchItemIconUrlMapForRegistry } from "../core/textureManifest";
@@ -19,6 +19,12 @@ import "./inventory.css";
 export type { ItemIconUrlLookup } from "./atlasItemIcon";
 
 type GetInventory = () => PlayerInventory;
+
+/** Shift–LMB quick-move from an overlay slot (Game wires chest priority + fly animation). */
+export type ShiftQuickMoveFromOverlayHandler = (
+  slotIndex: number,
+  slotElement: HTMLElement,
+) => void;
 
 const INV_FONT_STYLE_ID = "stratum-inventory-fonts";
 
@@ -58,7 +64,11 @@ export class InventoryUI {
   private readonly getInventory: GetInventory;
   private iconUrlLookup: Map<string, string> | null = null;
   private readonly overlay: HTMLDivElement;
+  private readonly chestMount: HTMLDivElement;
   private readonly craftingMount: HTMLDivElement;
+  private readonly overlayRowEl: HTMLDivElement;
+  private readonly invPanelEl: HTMLDivElement;
+  private readonly panelResizeObserver: ResizeObserver;
   private readonly hotbarItemNameEl: HTMLDivElement;
   private readonly heartsRowEl: HTMLDivElement;
   private readonly heartClipEls: HTMLDivElement[] = [];
@@ -73,6 +83,7 @@ export class InventoryUI {
   private hotbarNameClearTimer: ReturnType<typeof setTimeout> | null = null;
 
   private pointerDownSlot: number | null = null;
+  private pointerDownSlotEl: HTMLElement | null = null;
   private pointerDownButton: number | null = null;
   private dragOccurred = false;
   private rmbPlacedOnDown = false;
@@ -80,13 +91,15 @@ export class InventoryUI {
   /** Previous serialized stack per slot; null until first {@link update} (avoids startup bump spam). */
   private prevInventoryKeys: string[] | null = null;
 
+  private readonly onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null;
+
   private static slotKey(
-    stack: { itemId: ItemId; count: number } | null,
+    stack: { itemId: ItemId; count: number; damage?: number } | null,
   ): string {
     if (stack === null || stack.count <= 0) {
       return "empty";
     }
-    return `${stack.itemId}:${stack.count}`;
+    return `${stack.itemId}:${stack.count}:${stack.damage ?? 0}`;
   }
 
   private clearHotbarNameTimers(): void {
@@ -129,7 +142,23 @@ export class InventoryUI {
   private hideItemTooltip(): void {
     this.tooltipActiveSlot = null;
     this.itemTooltipEl.classList.remove("inv-item-tooltip--visible");
-    this.itemTooltipEl.textContent = "";
+    this.itemTooltipEl.replaceChildren();
+  }
+
+  private fillItemTooltip(def: ItemDefinition): void {
+    const root = this.itemTooltipEl;
+    root.replaceChildren();
+    const nameLine = document.createElement("div");
+    nameLine.className = "inv-item-tooltip__name";
+    nameLine.textContent = def.displayName;
+    root.appendChild(nameLine);
+    const tip = def.inventoryTooltip;
+    if (tip !== undefined && tip.length > 0) {
+      const detail = document.createElement("div");
+      detail.className = "inv-item-tooltip__detail";
+      detail.textContent = tip;
+      root.appendChild(detail);
+    }
   }
 
   private positionItemTooltip(clientX: number, clientY: number): void {
@@ -165,7 +194,7 @@ export class InventoryUI {
         return;
       }
       this.tooltipActiveSlot = slotIndex;
-      this.itemTooltipEl.textContent = def.displayName;
+      this.fillItemTooltip(def);
       this.itemTooltipEl.classList.add("inv-item-tooltip--visible");
       requestAnimationFrame(() => {
         this.positionItemTooltip(e.clientX, e.clientY);
@@ -195,10 +224,19 @@ export class InventoryUI {
       return;
     }
     const slot = this.pointerDownSlot;
+    const downEl = this.pointerDownSlotEl;
+    this.pointerDownSlotEl = null;
     if (e.button === 0) {
       if (!this.dragOccurred) {
         if (e.shiftKey) {
-          this.getInventory().quickMoveFromSlot(slot);
+          if (
+            this.onShiftQuickMoveFromOverlay !== null &&
+            downEl !== null
+          ) {
+            this.onShiftQuickMoveFromOverlay(slot, downEl);
+          } else {
+            this.getInventory().quickMoveFromSlot(slot);
+          }
         } else {
           this.getInventory().handleLmbClick(slot);
         }
@@ -214,10 +252,16 @@ export class InventoryUI {
     this.dragOccurred = false;
   };
 
-  constructor(mount: HTMLElement, itemRegistry: ItemRegistry, getInventory: GetInventory) {
+  constructor(
+    mount: HTMLElement,
+    itemRegistry: ItemRegistry,
+    getInventory: GetInventory,
+    onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null = null,
+  ) {
     ensureInventoryFonts();
     this.itemRegistry = itemRegistry;
     this.getInventory = getInventory;
+    this.onShiftQuickMoveFromOverlay = onShiftQuickMoveFromOverlay;
 
     const root = document.createElement("div");
     root.id = "inventory-ui-root";
@@ -251,15 +295,13 @@ export class InventoryUI {
     for (let i = 0; i < PLAYER_HEART_COUNT; i++) {
       const slot = document.createElement("div");
       slot.className = "inv-heart-slot";
-      const empty = document.createElement("span");
-      empty.className = "inv-heart-glyph inv-heart-glyph--empty";
-      empty.textContent = "\u2665";
+      const empty = document.createElement("i");
+      empty.className = "fa-solid fa-heart inv-heart inv-heart--empty";
       empty.setAttribute("aria-hidden", "true");
       const clip = document.createElement("div");
       clip.className = "inv-heart-clip inv-heart-clip--full";
-      const full = document.createElement("span");
-      full.className = "inv-heart-glyph inv-heart-glyph--full";
-      full.textContent = "\u2665";
+      const full = document.createElement("i");
+      full.className = "fa-solid fa-heart inv-heart inv-heart--full";
       full.setAttribute("aria-hidden", "true");
       clip.appendChild(full);
       slot.appendChild(empty);
@@ -279,9 +321,16 @@ export class InventoryUI {
       slot.dataset.slot = String(i);
       const icon = document.createElement("div");
       icon.className = "inv-slot-icon";
+      const dur = document.createElement("div");
+      dur.className = "inv-slot-durability inv-slot-durability--hidden";
+      dur.setAttribute("aria-hidden", "true");
+      const durFill = document.createElement("div");
+      durFill.className = "inv-slot-durability-fill";
+      dur.appendChild(durFill);
       const count = document.createElement("span");
       count.className = "inv-slot-count";
       slot.appendChild(icon);
+      slot.appendChild(dur);
       slot.appendChild(count);
       hotbarRow.appendChild(slot);
       this.hotbarSlots.push(slot);
@@ -353,17 +402,41 @@ export class InventoryUI {
     panel.appendChild(labelHot);
     panel.appendChild(gridHot);
 
+    const chestMount = document.createElement("div");
+    chestMount.className = "inv-chest-mount inv-chest-mount--collapsed";
+    this.chestMount = chestMount;
+
     const craftingMount = document.createElement("div");
     craftingMount.className = "inv-crafting-mount";
     this.craftingMount = craftingMount;
 
     overlayRow.appendChild(panel);
+    overlayRow.appendChild(chestMount);
     overlayRow.appendChild(craftingMount);
     overlay.appendChild(overlayRow);
     root.appendChild(overlay);
     this.overlay = overlay;
+    this.overlayRowEl = overlayRow;
+    this.invPanelEl = panel;
+    this.panelResizeObserver = new ResizeObserver(() => {
+      this.syncInvSidePanelMaxHeight();
+    });
+    this.panelResizeObserver.observe(panel);
+    window.addEventListener("resize", this.onInvWindowResizeForSidePanels, true);
 
     window.addEventListener("mouseup", this.onWindowMouseUp, true);
+  }
+
+  private readonly onInvWindowResizeForSidePanels = (): void => {
+    this.syncInvSidePanelMaxHeight();
+  };
+
+  /** Keeps chest/crafting columns no taller than the inventory card (see inventory.css). */
+  private syncInvSidePanelMaxHeight(): void {
+    const h = this.invPanelEl.offsetHeight;
+    if (h > 0) {
+      this.overlayRowEl.style.setProperty("--inv-panel-sync-height", `${h}px`);
+    }
   }
 
   private bindSlotElement(slot: HTMLDivElement, slotIndex: number): void {
@@ -376,6 +449,7 @@ export class InventoryUI {
       }
       e.preventDefault();
       this.pointerDownSlot = slotIndex;
+      this.pointerDownSlotEl = slot;
       this.pointerDownButton = e.button;
       this.dragOccurred = false;
       if (e.button === 2) {
@@ -441,9 +515,16 @@ export class InventoryUI {
     slot.dataset.slot = dataSlot;
     const icon = document.createElement("div");
     icon.className = "inv-slot-icon";
+    const dur = document.createElement("div");
+    dur.className = "inv-slot-durability inv-slot-durability--hidden";
+    dur.setAttribute("aria-hidden", "true");
+    const durFill = document.createElement("div");
+    durFill.className = "inv-slot-durability-fill";
+    dur.appendChild(durFill);
     const count = document.createElement("span");
     count.className = "inv-slot-count";
     slot.appendChild(icon);
+    slot.appendChild(dur);
     slot.appendChild(count);
     return { slot, icon, count };
   }
@@ -453,9 +534,36 @@ export class InventoryUI {
     return this.iconUrlLookup;
   }
 
+  /**
+   * When true, the chest column is removed from layout (inventory + crafting only).
+   * When false, the chest mount reserves space for {@link ChestPanel}.
+   */
+  setChestMountCollapsed(collapsed: boolean): void {
+    this.chestMount.classList.toggle("inv-chest-mount--collapsed", collapsed);
+    if (this.inventoryOpen) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          this.syncInvSidePanelMaxHeight();
+        });
+      });
+    }
+  }
+
+  /** Mount point for {@link ChestPanel} (between inventory and crafting). */
+  getChestMount(): HTMLElement {
+    return this.chestMount;
+  }
+
   /** Mount point for {@link CraftingPanel} (sibling of the inventory panel). */
   getCraftingMount(): HTMLElement {
     return this.craftingMount;
+  }
+
+  /** Slot cell inside the open inventory overlay (not the world hotbar). */
+  getOverlaySlotElement(slotIndex: number): HTMLElement | null {
+    return this.root.querySelector(
+      `.inv-panel .inv-slot[data-slot="${slotIndex}"]`,
+    );
   }
 
   /** Resolve icon URLs from block + item texture manifests (Bedrock-style split). */
@@ -474,6 +582,11 @@ export class InventoryUI {
       this.overlay.classList.add("inv-overlay--open");
       this.overlay.setAttribute("aria-hidden", "false");
       this.root.classList.add("inv-root--open");
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          this.syncInvSidePanelMaxHeight();
+        });
+      });
     } else {
       this.overlay.classList.remove("inv-overlay--open");
       this.overlay.setAttribute("aria-hidden", "true");
@@ -592,7 +705,7 @@ export class InventoryUI {
   }
 
   private fillSlot(
-    stack: { itemId: ItemId; count: number } | null,
+    stack: ItemStack | null,
     iconEl: HTMLDivElement,
     countEl: HTMLSpanElement,
     slotEl: HTMLDivElement,
@@ -607,12 +720,20 @@ export class InventoryUI {
       slotEl.classList.remove("inv-slot--selected");
     }
 
+    const durWrap = slotEl.querySelector<HTMLElement>(".inv-slot-durability");
+    const durFill = slotEl.querySelector<HTMLElement>(".inv-slot-durability-fill");
+
     if (stack === null || stack.count <= 0) {
       iconEl.style.cssText = "";
       iconEl.removeAttribute("title");
       slotEl.removeAttribute("title");
       slotEl.removeAttribute("aria-label");
       countEl.textContent = "";
+      durWrap?.classList.add("inv-slot-durability--hidden");
+      if (durFill) {
+        durFill.style.width = "0%";
+        durFill.classList.remove("inv-slot-durability-fill--low");
+      }
       if (playBump) {
         this.triggerSlotIconBump(iconEl);
       }
@@ -626,6 +747,11 @@ export class InventoryUI {
       slotEl.removeAttribute("title");
       slotEl.removeAttribute("aria-label");
       countEl.textContent = stack.count > 1 ? String(stack.count) : "";
+      durWrap?.classList.add("inv-slot-durability--hidden");
+      if (durFill) {
+        durFill.style.width = "0%";
+        durFill.classList.remove("inv-slot-durability-fill--low");
+      }
       if (playBump) {
         this.triggerSlotIconBump(iconEl);
       }
@@ -645,6 +771,23 @@ export class InventoryUI {
       countEl.textContent = "";
       countEl.classList.remove("inv-slot-count--white");
     }
+
+    const maxD = def.maxDurability;
+    if (maxD !== undefined && maxD > 0 && durWrap !== null && durFill !== null) {
+      durWrap.classList.remove("inv-slot-durability--hidden");
+      const dmg = stack.damage ?? 0;
+      const rem = Math.max(0, maxD - dmg);
+      const pct = (rem / maxD) * 100;
+      durFill.style.width = `${pct}%`;
+      durFill.classList.toggle("inv-slot-durability-fill--low", pct <= 25);
+    } else {
+      durWrap?.classList.add("inv-slot-durability--hidden");
+      if (durFill) {
+        durFill.style.width = "0%";
+        durFill.classList.remove("inv-slot-durability-fill--low");
+      }
+    }
+
     if (playBump) {
       this.triggerSlotIconBump(iconEl);
     }

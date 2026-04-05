@@ -1,4 +1,5 @@
 import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
+import { unixRandom01 } from "../../core/unixRandom";
 
 export type LoadingProgressUpdate = {
   stage: string;
@@ -55,40 +56,59 @@ function injectLoadingStyles(base: string): void {
       src: url('${fontUrl("m5x7.ttf")}') format('truetype');
       font-weight: normal;
       font-style: normal;
+      font-display: swap;
     }
 
     .stratum-loading-overlay {
-      --tl-ink: #f2f2f7;
-      --tl-ink-mid: #aeaeb2;
-      --tl-ink-soft: #8e8e93;
-      --tl-surface: rgba(44, 44, 46, 0.88);
-      --tl-surface-deep: rgba(36, 36, 38, 0.94);
-      --tl-border: rgba(255, 255, 255, 0.1);
-      --tl-border-strong: rgba(255, 255, 255, 0.16);
-      --tl-danger: #ff6b6b;
-      --tl-radius-sm: 10px;
-      --tl-radius-md: 14px;
-      --tl-radius-lg: 18px;
-
+      --mm-m5-nudge: 4px;
+      --mm-ink: #f2f2f7;
+      --mm-ink-mid: #aeaeb2;
+      --mm-ink-soft: #8e8e93;
+      --mm-surface: rgba(44, 44, 46, 0.82);
+      --mm-surface-deep: rgba(36, 36, 38, 0.9);
+      --mm-border: rgba(255, 255, 255, 0.1);
+      --mm-border-strong: rgba(255, 255, 255, 0.16);
+      --mm-danger: #ff453a;
+      --mm-radius-sm: 10px;
+      --mm-radius-md: 14px;
+      --mm-radius-lg: 18px;
       position: fixed;
       inset: 0;
       z-index: 1100;
       display: flex;
       flex-direction: column;
-      background: rgba(24, 24, 26, 0.55);
       font-family: 'BoldPixels', 'Courier New', monospace;
+      font-weight: normal;
+      font-synthesis: none;
       -webkit-font-smoothing: none;
-      -moz-osx-font-smoothing: unset;
+      -moz-osx-font-smoothing: grayscale;
       text-rendering: optimizeSpeed;
-      color: var(--tl-ink);
-      padding: clamp(1rem, 4vw, 1.75rem);
+      color: var(--mm-ink, #f2f2f7);
+      pointer-events: none;
       box-sizing: border-box;
       opacity: 0;
-      transition: opacity 0.3s ease;
+      transition: opacity 0.32s ease;
+      /* Let the menu-style world backdrop read through; darken edges for contrast */
+      background:
+        radial-gradient(
+          ellipse 100% 80% at 50% 38%,
+          rgba(14, 15, 18, 0.14) 0%,
+          rgba(10, 11, 13, 0.42) 55%,
+          rgba(6, 7, 9, 0.78) 100%
+        );
     }
 
     .stratum-loading-overlay.stratum-loading-overlay--entered {
       opacity: 1;
+    }
+
+    .stratum-loading-inner {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: clamp(1.1rem, 4vw, 2rem);
+      box-sizing: border-box;
     }
 
     .stratum-loading-main {
@@ -99,15 +119,23 @@ function injectLoadingStyles(base: string): void {
       min-height: 0;
     }
 
+    .stratum-loading-shell {
+      width: 100%;
+      max-width: min(440px, 100%);
+    }
+
     .stratum-loading-card {
-      width: min(32rem, 100%);
-      border-radius: var(--tl-radius-md);
+      width: 100%;
+      border-radius: var(--mm-radius-lg, 18px);
       corner-shape: squircle;
-      border: 1px solid var(--tl-border);
-      background: var(--tl-surface);
-      padding: clamp(1.35rem, 3.5vw, 1.75rem) clamp(1.5rem, 4vw, 2rem);
+      border: 1px solid var(--mm-border, rgba(255, 255, 255, 0.1));
+      background: var(--mm-surface, rgba(44, 44, 46, 0.82));
+      padding: 1.25rem 1.35rem 1.2rem;
       box-sizing: border-box;
-      transform: translateY(14px);
+      box-shadow:
+        0 4px 24px rgba(0, 0, 0, 0.22),
+        0 20px 56px rgba(0, 0, 0, 0.28);
+      transform: translateY(12px);
       opacity: 0;
       transition:
         transform 0.34s cubic-bezier(0.22, 1, 0.36, 1),
@@ -120,136 +148,142 @@ function injectLoadingStyles(base: string): void {
     }
 
     .stratum-loading-card.stratum-loading-card--error {
-      border-color: rgba(255, 69, 58, 0.35);
+      border-color: rgba(255, 69, 58, 0.38);
+      box-shadow:
+        0 4px 24px rgba(0, 0, 0, 0.22),
+        0 20px 56px rgba(80, 20, 20, 0.15);
     }
 
     .stratum-loading-brand {
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       align-items: center;
-      margin-bottom: 1.25rem;
+      gap: 1rem;
+      margin-bottom: 1.1rem;
     }
 
     .stratum-loading-logo {
       display: block;
-      width: min(200px, 52vw);
+      width: min(88px, 20vw);
       height: auto;
+      flex-shrink: 0;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
     }
 
+    .stratum-loading-brand-text {
+      flex: 1;
+      min-width: 0;
+      text-align: left;
+    }
+
     .stratum-loading-kicker {
-      margin: 0.65rem 0 0;
+      margin: 0 0 0.2rem;
       font-family: 'M5x7', monospace;
-      font-size: 17px;
+      font-size: calc(14px + var(--mm-m5-nudge, 4px));
       letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: var(--tl-ink-soft);
+      color: var(--mm-ink-soft, #8e8e93);
     }
 
     .stratum-loading-title {
-      margin: 0 0 1rem;
+      margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 24px;
+      font-size: clamp(20px, 4.2vw, 26px);
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      color: var(--tl-ink);
-      text-align: center;
+      color: var(--mm-ink, #f2f2f7);
+      line-height: 1.12;
     }
 
     .stratum-loading-stage {
       font-family: 'BoldPixels', monospace;
-      font-size: 18px;
+      font-size: clamp(15px, 3.4vw, 17px);
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--tl-ink-mid);
-      text-align: center;
+      letter-spacing: 0.06em;
+      color: var(--mm-ink-mid, #aeaeb2);
+      text-align: left;
       line-height: 1.35;
     }
 
     .stratum-loading-detail {
       min-height: 1.35em;
-      margin-top: 0.5rem;
+      margin-top: 0.45rem;
       font-family: 'M5x7', monospace;
-      font-size: 19px;
+      font-size: calc(17px + var(--mm-m5-nudge, 4px));
       line-height: 1.45;
-      color: var(--tl-ink-soft);
-      text-align: center;
+      color: var(--mm-ink-soft, #8e8e93);
+      text-align: left;
     }
 
     .stratum-loading-progress {
-      margin-top: 1.35rem;
+      margin-top: 1.15rem;
     }
 
     .stratum-loading-track {
       width: 100%;
-      height: 12px;
-      border-radius: 0;
-      border: 2px solid var(--tl-border-strong);
-      background: var(--tl-surface-deep);
+      height: 10px;
+      border-radius: var(--mm-radius-sm, 10px);
+      border: 1px solid var(--mm-border-strong, rgba(255, 255, 255, 0.16));
+      background: var(--mm-surface-deep, rgba(36, 36, 38, 0.9));
       overflow: hidden;
       box-sizing: border-box;
-      image-rendering: pixelated;
-      image-rendering: crisp-edges;
-      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
     }
 
     .stratum-loading-fill {
       height: 100%;
       width: 0%;
-      border-radius: 0;
+      border-radius: calc(var(--mm-radius-sm, 10px) - 1px);
       transform-origin: left center;
-      image-rendering: pixelated;
-      image-rendering: crisp-edges;
-      background: repeating-linear-gradient(
-        90deg,
-        #c8c8cc 0px,
-        #c8c8cc 5px,
-        #a8a8ae 5px,
-        #a8a8ae 8px
+      background: linear-gradient(
+        180deg,
+        rgba(168, 205, 255, 0.98) 0%,
+        rgba(98, 152, 228, 0.92) 48%,
+        rgba(72, 118, 198, 0.9) 100%
       );
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 0 12px rgba(120, 180, 255, 0.22);
+      transition: width 0.1s ease-out;
     }
 
     .stratum-loading-percent {
-      margin-top: 0.5rem;
+      margin-top: 0.4rem;
       min-height: 1.35em;
       text-align: right;
       font-family: 'M5x7', monospace;
-      font-size: 17px;
-      color: var(--tl-ink-soft);
+      font-size: calc(15px + var(--mm-m5-nudge, 4px));
+      color: var(--mm-ink-soft, #8e8e93);
     }
 
     .stratum-loading-stage--error {
-      color: var(--tl-danger);
+      color: var(--mm-danger, #ff453a);
     }
 
-    .stratum-loading-tip-wrap {
-      flex-shrink: 0;
-      max-width: 40rem;
-      width: 100%;
-      margin: 0 auto;
-      padding: 0.5rem 0.5rem 0;
-      box-sizing: border-box;
+    .stratum-loading-tip-panel {
+      margin-top: 1.15rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--mm-border, rgba(255, 255, 255, 0.1));
     }
 
     .stratum-loading-tip-label {
       margin: 0 0 0.35rem;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: 13px;
       text-transform: uppercase;
       letter-spacing: 0.12em;
-      color: var(--tl-ink-soft);
-      text-align: center;
+      color: var(--mm-ink-soft, #8e8e93);
+      text-align: left;
     }
 
     .stratum-loading-tip {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: 18px;
+      font-size: calc(16px + var(--mm-m5-nudge, 4px));
       line-height: 1.5;
-      color: var(--tl-ink-mid);
-      text-align: center;
+      color: var(--mm-ink-mid, #aeaeb2);
+      text-align: left;
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -296,8 +330,14 @@ export class WorldLoadingScreen {
     this.root = document.createElement("div");
     this.root.className = "stratum-loading-overlay";
 
+    const inner = document.createElement("div");
+    inner.className = "stratum-loading-inner";
+
     const main = document.createElement("div");
     main.className = "stratum-loading-main";
+
+    const shell = document.createElement("div");
+    shell.className = "stratum-loading-shell";
 
     this.card = document.createElement("div");
     this.card.className = "stratum-loading-card";
@@ -308,15 +348,18 @@ export class WorldLoadingScreen {
     logo.className = "stratum-loading-logo";
     logo.src = stratumCoreTextureAssetUrl("logo.png");
     logo.alt = "Stratum";
+    const brandText = document.createElement("div");
+    brandText.className = "stratum-loading-brand-text";
     const kicker = document.createElement("p");
     kicker.className = "stratum-loading-kicker";
-    kicker.textContent = "Loading";
-    brand.appendChild(logo);
-    brand.appendChild(kicker);
-
+    kicker.textContent = "Please wait";
     this.titleEl = document.createElement("h2");
     this.titleEl.className = "stratum-loading-title";
-    this.titleEl.textContent = "Preparing World";
+    this.titleEl.textContent = "Preparing world";
+    brandText.appendChild(kicker);
+    brandText.appendChild(this.titleEl);
+    brand.appendChild(logo);
+    brand.appendChild(brandText);
 
     this.stageEl = document.createElement("div");
     this.stageEl.className = "stratum-loading-stage";
@@ -339,26 +382,26 @@ export class WorldLoadingScreen {
     progressWrap.appendChild(track);
     progressWrap.appendChild(this.percentEl);
 
-    this.card.appendChild(brand);
-    this.card.appendChild(this.titleEl);
-    this.card.appendChild(this.stageEl);
-    this.card.appendChild(this.detailEl);
-    this.card.appendChild(progressWrap);
-    main.appendChild(this.card);
-
-    const tipWrap = document.createElement("div");
-    tipWrap.className = "stratum-loading-tip-wrap";
+    const tipPanel = document.createElement("div");
+    tipPanel.className = "stratum-loading-tip-panel";
     const tipLabel = document.createElement("p");
     tipLabel.className = "stratum-loading-tip-label";
     tipLabel.textContent = "Tip";
     this.tipEl = document.createElement("p");
     this.tipEl.className = "stratum-loading-tip";
     this.tipEl.textContent = this._pickRandomTip();
-    tipWrap.appendChild(tipLabel);
-    tipWrap.appendChild(this.tipEl);
+    tipPanel.appendChild(tipLabel);
+    tipPanel.appendChild(this.tipEl);
 
-    this.root.appendChild(main);
-    this.root.appendChild(tipWrap);
+    this.card.appendChild(brand);
+    this.card.appendChild(this.stageEl);
+    this.card.appendChild(this.detailEl);
+    this.card.appendChild(progressWrap);
+    this.card.appendChild(tipPanel);
+    shell.appendChild(this.card);
+    main.appendChild(shell);
+    inner.appendChild(main);
+    this.root.appendChild(inner);
     mount.appendChild(this.root);
 
     requestAnimationFrame(() => {
@@ -380,7 +423,7 @@ export class WorldLoadingScreen {
     let i = this.lastTipIndex;
     if (LOADING_TIPS.length > 1) {
       while (i === this.lastTipIndex) {
-        i = Math.floor(Math.random() * LOADING_TIPS.length);
+        i = Math.floor(unixRandom01() * LOADING_TIPS.length);
       }
     } else {
       i = 0;
@@ -441,7 +484,7 @@ export class WorldLoadingScreen {
     this.card.classList.remove("stratum-loading-card--error");
     this.stageEl.classList.remove("stratum-loading-stage--error");
     this.barFillEl.style.opacity = "";
-    this.titleEl.textContent = "Preparing World";
+    this.titleEl.textContent = "Preparing world";
     this.stageEl.textContent = progress.stage;
     this.detailEl.textContent = progress.detail ?? "";
     if (
@@ -467,7 +510,7 @@ export class WorldLoadingScreen {
     this.barFillEl.style.opacity = "0.35";
     this.percentEl.textContent = "—";
     this.tipEl.textContent = "";
-    const tipLabel = this.root.querySelector(".stratum-loading-tip-label");
+    const tipLabel = this.card.querySelector(".stratum-loading-tip-label");
     if (tipLabel instanceof HTMLElement) {
       tipLabel.style.display = "none";
     }

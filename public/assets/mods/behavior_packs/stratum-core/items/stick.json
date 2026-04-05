@@ -1,10 +1,16 @@
 {
   "format_version": "1.0.0",
   "stratum:item": {
-    "description": { "identifier": "stratum:stick" },
+    "description": {
+      "identifier": "stratum:stick"
+    },
     "components": {
       "stratum:display_name": "Stick",
-      "stratum:texture_key": "stick"
+      "stratum:texture_key": "stick",
+      "stratum:fuel": {
+        "burn_seconds": 2
+      },
+      "stratum:numeric_id": 68
     }
   }
 }

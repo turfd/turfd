@@ -2,13 +2,39 @@
  * Unified keyboard + mouse; sole module that attaches to window/canvas for input.
  */
 import type { Camera } from "../renderer/Camera";
-import {
-  DEFAULT_KEY_BINDINGS,
-  type InputAction,
-} from "./bindings";
+import { type InputAction, type KeybindableAction } from "./bindings";
+import { mergeStoredKeyBindings, snapshotKeyBindings } from "./keyBindingMerge";
 
 const MOUSE_PLACE = 2;
 const MOUSE_BREAK = 0;
+
+/** True when the focused DOM node is typing-oriented (inventory search, chat field, etc.). */
+function isEditableDocumentFocus(el: Element | null): boolean {
+  if (el === null || !(el instanceof HTMLElement)) {
+    return false;
+  }
+  if (el.isContentEditable) {
+    return true;
+  }
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    return true;
+  }
+  if (el instanceof HTMLInputElement) {
+    const t = el.type;
+    return (
+      t !== "button" &&
+      t !== "submit" &&
+      t !== "reset" &&
+      t !== "checkbox" &&
+      t !== "radio" &&
+      t !== "file" &&
+      t !== "range" &&
+      t !== "color" &&
+      t !== "hidden"
+    );
+  }
+  return false;
+}
 
 export class InputManager {
   readonly mouseWorldPos = { x: 0, y: 0 };
@@ -27,6 +53,10 @@ export class InputManager {
   private readonly justPressed = new Set<InputAction>();
   private readonly mouseDown = new Set<number>();
   private readonly mouseJustDown = new Set<number>();
+
+  /** Effective keyboard codes per action (mouse still handles place/break). */
+  private keyBindings: Record<KeybindableAction, readonly string[]> =
+    snapshotKeyBindings(mergeStoredKeyBindings(undefined));
 
   private mouseClientX = 0;
   private mouseClientY = 0;
@@ -76,8 +106,14 @@ export class InputManager {
     this.wheelDelta += e.deltaY;
   };
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    storedOverrides?: Partial<Record<KeybindableAction, readonly string[]>>,
+  ) {
     this.canvas = canvas;
+    this.keyBindings = snapshotKeyBindings(
+      mergeStoredKeyBindings(storedOverrides),
+    );
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("mousemove", this.onMouseMove);
@@ -99,6 +135,34 @@ export class InputManager {
 
   isWorldInputBlocked(): boolean {
     return this.worldInputBlocked;
+  }
+
+  /** While a blocked UI (inventory, pause, etc.) is up and a text field is focused, suppress chat/inventory hotkeys. */
+  private uiTypingSuppressesOverlayHotkeys(): boolean {
+    return this.worldInputBlocked && isEditableDocumentFocus(document.activeElement);
+  }
+
+  /**
+   * RMB pressed this frame, ignoring {@link setWorldInputBlocked} (still false while chat open).
+   * Used to open chest / crafting table while the inventory overlay has world input blocked.
+   */
+  isJustPressedPlaceIgnoreWorldBlock(): boolean {
+    if (this.chatOpen) {
+      return false;
+    }
+    return this.mouseJustDown.has(MOUSE_PLACE);
+  }
+
+  /**
+   * Replace keyboard bindings (e.g. from settings). Does not affect mouse
+   * break/place.
+   */
+  setKeyBindings(
+    next: Record<KeybindableAction, readonly string[]>,
+  ): void {
+    this.keyBindings = snapshotKeyBindings(
+      mergeStoredKeyBindings(next as Partial<Record<KeybindableAction, readonly string[]>>),
+    );
   }
 
   destroy(): void {
@@ -126,13 +190,19 @@ export class InputManager {
     ) {
       return false;
     }
+    if (
+      this.uiTypingSuppressesOverlayHotkeys() &&
+      (action === "inventory" || action === "chat")
+    ) {
+      return false;
+    }
     if (action === "place") {
       return this.mouseDown.has(MOUSE_PLACE);
     }
     if (action === "break") {
       return this.mouseDown.has(MOUSE_BREAK);
     }
-    const keys = DEFAULT_KEY_BINDINGS[action as keyof typeof DEFAULT_KEY_BINDINGS];
+    const keys = this.keyBindings[action as KeybindableAction];
     if (!keys) {
       return false;
     }
@@ -153,6 +223,12 @@ export class InputManager {
       action !== "inventory" &&
       action !== "pause" &&
       action !== "chat"
+    ) {
+      return false;
+    }
+    if (
+      this.uiTypingSuppressesOverlayHotkeys() &&
+      (action === "inventory" || action === "chat")
     ) {
       return false;
     }
@@ -188,10 +264,8 @@ export class InputManager {
   }
 
   private edgeForCode(code: string): void {
-    for (const [action, keys] of Object.entries(DEFAULT_KEY_BINDINGS) as [
-      keyof typeof DEFAULT_KEY_BINDINGS,
-      readonly string[],
-    ][]) {
+    for (const action of Object.keys(this.keyBindings) as KeybindableAction[]) {
+      const keys = this.keyBindings[action];
       if (keys.includes(code)) {
         this.justPressed.add(action as InputAction);
       }

@@ -12,6 +12,9 @@
 
 export type ToolType = "axe" | "pickaxe" | "shovel";
 
+/** Held items may include non-mining tools (e.g. hoe); they never match block `harvestToolType`. */
+export type HeldItemToolType = ToolType | "hoe";
+
 const INSTANT_BREAK_SEC = 0.05;
 
 interface BlockMiningInfo {
@@ -22,7 +25,7 @@ interface BlockMiningInfo {
 }
 
 interface HeldToolInfo {
-  toolType?: ToolType;
+  toolType?: HeldItemToolType;
   toolTier?: number;
   toolSpeed?: number;
 }

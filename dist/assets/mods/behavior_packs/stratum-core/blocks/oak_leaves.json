@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:oak_leaves" },
+    "description": {
+      "identifier": "stratum:oak_leaves"
+    },
     "components": {
       "stratum:display_name": "Oak Leaves",
-      "stratum:texture": { "all": "oak_leaves" },
+      "stratum:texture": {
+        "all": "oak_leaves"
+      },
       "stratum:solid": true,
       "stratum:transparent": true,
       "stratum:water": false,
@@ -12,7 +16,8 @@
       "stratum:light_emission": 0,
       "stratum:light_absorption": 0,
       "stratum:material": "wood",
-      "stratum:loot_table": "stratum:oak_leaves"
+      "stratum:loot_table": "stratum:oak_leaves",
+      "stratum:numeric_id": 19
     }
   }
 }

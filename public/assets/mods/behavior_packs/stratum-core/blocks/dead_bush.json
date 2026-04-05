@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:dead_bush" },
+    "description": {
+      "identifier": "stratum:dead_bush"
+    },
     "components": {
       "stratum:display_name": "Dead Bush",
-      "stratum:texture": { "all": "dead_bush" },
+      "stratum:texture": {
+        "all": "dead_bush"
+      },
       "stratum:solid": false,
       "stratum:transparent": true,
       "stratum:water": false,
@@ -16,7 +20,8 @@
       "stratum:tall_grass": "none",
       "stratum:random_flip_x": true,
       "stratum:loot_table": "stratum:dead_bush",
-      "stratum:plant_foot_offset_px": 6
+      "stratum:plant_foot_offset_px": 6,
+      "stratum:numeric_id": 15
     }
   }
 }

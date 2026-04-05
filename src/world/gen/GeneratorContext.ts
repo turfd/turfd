@@ -1,14 +1,6 @@
-/** Seeded PRNG (mulberry32) with fork, position-keyed samples, and no cross-module deps. */
+/** Seeded PRNG (mulberry32) with fork and position-keyed samples. */
 
-export function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return (): number => {
-    let t = (a += 0x6d2b79f5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { mulberry32, mulberry32FirstFloat01 } from "../../utils/mulberry32";
 
 function mix32(seed: number, a: number, b: number): number {
   let h = seed ^ Math.imul(a | 0, 73856093) ^ Math.imul(b | 0, 19349663);
@@ -42,7 +34,7 @@ export class GeneratorContext {
    */
   nextFloatAt(x: number, y: number): number {
     const s = mix32(this.seed, x, y);
-    return mulberry32(s)();
+    return mulberry32FirstFloat01(s);
   }
 
   fork(salt: number): GeneratorContext {

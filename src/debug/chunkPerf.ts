@@ -6,11 +6,9 @@ export function chunkPerfLog(
   ms: number,
   detail?: Record<string, unknown>,
 ): void {
-  // Keep call sites intact while disabling noisy perf console output.
-  void label;
-  void ms;
-  void detail;
-  void DEV;
+  if (DEV) {
+    console.debug(`[chunkPerf] ${label}`, `${ms.toFixed(2)}ms`, detail ?? "");
+  }
 }
 
 export function chunkPerfNow(): number {

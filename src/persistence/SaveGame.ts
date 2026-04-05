@@ -53,7 +53,12 @@ export class SaveGame {
 
   async save(): Promise<void> {
     const chunks = [...this.world.getChunkManager().getLoadedChunks()];
-    await this.store.saveChunkBatch(this.worldUuid, chunks);
+    await this.store.saveChunkBatch(
+      this.worldUuid,
+      chunks,
+      (cx, cy) => this.world.getFurnaceEntitiesForChunk(cx, cy),
+      (cx, cy) => this.world.getChestEntitiesForChunk(cx, cy),
+    );
 
     const existing = await this.store.loadWorld(this.worldUuid);
     const now = Date.now();
@@ -83,6 +88,7 @@ export class SaveGame {
       previewImageDataUrl,
       moderation: moderationPatch ?? existing?.moderation,
       playerInventory: this.player.inventory.serialize(),
+      blockIdPalette: this.world.getRegistry().buildIdentifierPalette(),
     };
     await this.store.saveWorld(meta);
     this.bus.emit({ type: "game:saved" } satisfies GameEvent);

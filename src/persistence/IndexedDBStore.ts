@@ -5,8 +5,11 @@ import { openDB, type IDBPDatabase } from "idb";
 import { MOD_CACHE_STORE } from "../core/constants";
 import type { Chunk } from "../world/chunk/Chunk";
 import { chunkKey, type ChunkCoord } from "../world/chunk/ChunkCoord";
+import type { FurnacePersistedChunk } from "../world/furnace/furnacePersisted";
+import type { ChestPersistedChunk } from "../world/chest/chestPersisted";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 import type { CachedMod } from "../mods/workshopTypes";
+import type { KeybindableAction } from "../input/bindings";
 
 export const DB_NAME = "stratum";
 /** Bumped when a new object store is required so existing browsers run `upgrade` again. */
@@ -20,10 +23,17 @@ export type WorkshopModRef = {
   readonly version: string;
 };
 
+/** Persisted keyboard bindings (partial overrides merged with defaults on load). */
+export type StoredKeyBindingsV1 = Partial<
+  Record<KeybindableAction, readonly string[]>
+>;
+
 export type PlayerSettingsV1 = {
   readonly key: typeof PLAYER_SETTINGS_KEY;
   /** Global resource (texture) packs, lowest index loads first; later overrides earlier. */
   globalResourcePackRefs: WorkshopModRef[];
+  /** Optional keyboard overrides; omitted ⇒ engine defaults. */
+  keyBindings?: StoredKeyBindingsV1;
 };
 
 export type WorldMetadata = {
@@ -47,7 +57,7 @@ export type WorldMetadata = {
   /** Host-only multiplayer moderation; optional until first save with chat. */
   moderation?: WorldModerationPersisted;
   /** Serialized inventory slots; absent in worlds saved before inventory persistence. */
-  playerInventory?: ({ key: string; count: number } | null)[];
+  playerInventory?: import("../items/PlayerInventory").SerializedInventorySlot[];
   /**
    * Legacy single list; used when `workshopBehaviorMods` / `workshopResourceMods` are absent.
    */
@@ -58,6 +68,11 @@ export type WorldMetadata = {
   workshopResourceMods?: readonly WorkshopModRef[];
   /** When true, joining players should download packs first (enforcement TBD). */
   requirePacksBeforeJoin?: boolean;
+  /**
+   * Index = numeric block id at last save, value = block identifier.
+   * Used to remap chunk cells when `stratum:numeric_id` assignments change.
+   */
+  blockIdPalette?: readonly string[];
 };
 
 export type ChunkRecord = {
@@ -69,10 +84,50 @@ export type ChunkRecord = {
   metadata: Uint8Array;
   /** Present in saves after background-layer support; absent ⇒ all zeros on load. */
   background?: Uint16Array;
+  /** Furnace tile entities in this chunk; absent ⇒ none. */
+  furnaces?: FurnacePersistedChunk[];
+  /** Chest tile entities (anchor cells only); absent ⇒ none. */
+  chests?: ChestPersistedChunk[];
 };
 
 function chunkStoreKey(worldUuid: string, coord: ChunkCoord): string {
   return `${worldUuid}:${chunkKey(coord)}`;
+}
+
+function cloneStoredKeyBindings(
+  raw: StoredKeyBindingsV1,
+): StoredKeyBindingsV1 {
+  const out: Partial<Record<KeybindableAction, string[]>> = {};
+  for (const [action, keys] of Object.entries(raw)) {
+    if (!Array.isArray(keys) || keys.length === 0) {
+      continue;
+    }
+    const cleaned = keys.filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+    if (cleaned.length > 0) {
+      (out as Record<string, string[]>)[action] = [...cleaned];
+    }
+  }
+  return out;
+}
+
+function cloneStoredKeyBindingsForWrite(
+  raw: StoredKeyBindingsV1,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [action, keys] of Object.entries(raw)) {
+    if (!Array.isArray(keys)) {
+      continue;
+    }
+    const cleaned = keys.filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+    if (cleaned.length > 0) {
+      out[action] = [...cleaned];
+    }
+  }
+  return out;
 }
 
 function upgradeStratumDb(db: IDBPDatabase): void {
@@ -181,22 +236,35 @@ export class IndexedDBStore {
     return (await db.get("chunks", key)) as ChunkRecord | undefined;
   }
 
-  async saveChunkBatch(worldUuid: string, chunks: Chunk[]): Promise<void> {
+  async saveChunkBatch(
+    worldUuid: string,
+    chunks: Chunk[],
+    getFurnacesForChunk?: (cx: number, cy: number) => FurnacePersistedChunk[],
+    getChestsForChunk?: (cx: number, cy: number) => ChestPersistedChunk[],
+  ): Promise<void> {
     if (chunks.length === 0) {
       return;
     }
     const db = this.requireDb();
     const tx = db.transaction("chunks", "readwrite");
     const puts = chunks.map((chunk) => {
-      const record = this.toChunkRecord(worldUuid, chunk);
+      const { cx, cy } = chunk.coord;
+      const furnaces = getFurnacesForChunk?.(cx, cy);
+      const chests = getChestsForChunk?.(cx, cy);
+      const record = this.toChunkRecord(worldUuid, chunk, furnaces, chests);
       return tx.store.put(record);
     });
     await Promise.all([...puts, tx.done]);
   }
 
-  private toChunkRecord(worldUuid: string, chunk: Chunk): ChunkRecord {
+  private toChunkRecord(
+    worldUuid: string,
+    chunk: Chunk,
+    furnaces?: FurnacePersistedChunk[],
+    chests?: ChestPersistedChunk[],
+  ): ChunkRecord {
     const { cx, cy } = chunk.coord;
-    return {
+    const record: ChunkRecord = {
       key: chunkStoreKey(worldUuid, chunk.coord),
       worldUuid,
       cx,
@@ -205,6 +273,13 @@ export class IndexedDBStore {
       metadata: new Uint8Array(chunk.metadata),
       background: new Uint16Array(chunk.background),
     };
+    if (furnaces !== undefined && furnaces.length > 0) {
+      record.furnaces = furnaces.map((f) => ({ ...f }));
+    }
+    if (chests !== undefined && chests.length > 0) {
+      record.chests = chests.map((c) => ({ ...c }));
+    }
+    return record;
   }
 
   async getModCache(key: string): Promise<CachedMod | undefined> {
@@ -260,9 +335,13 @@ export class IndexedDBStore {
         globalResourcePackRefs: [],
       };
     }
+    const kb = row.keyBindings;
     return {
       key: PLAYER_SETTINGS_KEY,
       globalResourcePackRefs: [...(row.globalResourcePackRefs ?? [])],
+      ...(kb !== undefined && typeof kb === "object" && !Array.isArray(kb)
+        ? { keyBindings: cloneStoredKeyBindings(kb) }
+        : {}),
     };
   }
 
@@ -273,10 +352,19 @@ export class IndexedDBStore {
         'IndexedDB object store "player_settings" is missing; reload the page.',
       );
     }
-    await db.put("player_settings", {
+    const prev = await this.loadPlayerSettings();
+    const globalResourcePackRefs = [...settings.globalResourcePackRefs];
+    const keyBindings =
+      settings.keyBindings !== undefined ? settings.keyBindings : prev.keyBindings;
+
+    const payload: Record<string, unknown> = {
       key: PLAYER_SETTINGS_KEY,
-      globalResourcePackRefs: [...settings.globalResourcePackRefs],
-    });
+      globalResourcePackRefs,
+    };
+    if (keyBindings !== undefined) {
+      payload.keyBindings = cloneStoredKeyBindingsForWrite(keyBindings);
+    }
+    await db.put("player_settings", payload);
   }
 
   private requireDb(): IDBPDatabase {

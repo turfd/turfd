@@ -7,6 +7,8 @@ import {
   type BlockUpdateWirePayload,
 } from "./BinarySerializer";
 import type { WorkshopModRef } from "../../persistence/IndexedDBStore";
+import type { FurnacePersistedChunk } from "../../world/furnace/furnacePersisted";
+import type { ChestPersistedChunk } from "../../world/chest/chestPersisted";
 
 /** Message type IDs for the binary network protocol (first byte of every packet). */
 export enum MessageType {
@@ -30,6 +32,17 @@ export enum MessageType {
   PLAYER_STATE_RELAY = 0x0c,
   /** Host → client: ordered behavior + world resource pack refs (join / protocol v4). */
   PACK_STACK = 0x0d,
+  /** Host or peer: authoritative furnace tile at world cell. */
+  FURNACE_SNAPSHOT = 0x0e,
+  /** Host or peer: authoritative chest tile at anchor world cell. */
+  CHEST_SNAPSHOT = 0x0f,
+  /**
+   * Mining crack overlay: variant byte 0 = implicit subject (client→host); 1 = explicit
+   * `subjectPeerId` (host→all). `crackStageEncoded` 0 = clear, 1–10 = destroy stage 0–9.
+   */
+  BLOCK_BREAK_PROGRESS = 0x10,
+  /** Host → one client: grant items into that client’s inventory (OP /give). */
+  GIVE_ITEM_STACK = 0x11,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -50,6 +63,12 @@ export type ChunkDataMsg = {
   blocks: Uint16Array;
   /** Back-wall layer; omitted on legacy decode → treat as zeros. */
   background?: Uint16Array;
+  /** Furnace tiles in chunk; omitted when absent on wire. */
+  furnaces?: FurnacePersistedChunk[];
+  /** Chest anchors in chunk; omitted when absent on wire. */
+  chests?: ChestPersistedChunk[];
+  /** Per-cell flags (e.g. tree no-collision); v10+ wire tail; omitted → client zeros metadata. */
+  metadata?: Uint8Array;
 };
 
 export type WorldSyncMsg = {
@@ -70,6 +89,47 @@ export type PackStackMsg = {
   requirePacksBeforeJoin: boolean;
 };
 
+export type FurnaceSnapshotMsg = {
+  type: MessageType.FURNACE_SNAPSHOT;
+  wx: number;
+  wy: number;
+  data: FurnacePersistedChunk;
+};
+
+export type ChestSnapshotMsg = {
+  type: MessageType.CHEST_SNAPSHOT;
+  wx: number;
+  wy: number;
+  data: ChestPersistedChunk;
+};
+
+/** Client → host: subject is the connection’s peer id. */
+export type BlockBreakProgressImplicitMsg = {
+  type: MessageType.BLOCK_BREAK_PROGRESS;
+  mode: "implicit";
+  wx: number;
+  wy: number;
+  /** 0 = foreground, 1 = background. */
+  layer: 0 | 1;
+  /** 0 = not mining; 1–10 = destroy stage index + 1. */
+  crackStageEncoded: number;
+};
+
+/** Host → clients: which peer is mining. */
+export type BlockBreakProgressRelayMsg = {
+  type: MessageType.BLOCK_BREAK_PROGRESS;
+  mode: "relay";
+  subjectPeerId: string;
+  wx: number;
+  wy: number;
+  layer: 0 | 1;
+  crackStageEncoded: number;
+};
+
+export type BlockBreakProgressMsg =
+  | BlockBreakProgressImplicitMsg
+  | BlockBreakProgressRelayMsg;
+
 export type SessionEndedMsg = {
   type: MessageType.SESSION_ENDED;
   reason: string;
@@ -82,6 +142,10 @@ export type BlockUpdateMsg = {
   blockId: number;
   /** 0 = foreground, 1 = background. */
   layer?: number;
+  /** v9+ 14-byte wire; omitted when decoding legacy packets. */
+  previousBlockId?: number;
+  /** v11+ 15-byte wire; foreground per-cell flags (e.g. tree no-collision). */
+  cellMetadata?: number;
 };
 
 /** Player state on the wire; includes numeric player id and facing for physics sync. */
@@ -135,6 +199,12 @@ export type PingMsg = {
   timestamp: number;
 };
 
+export type GiveItemStackMsg = {
+  type: MessageType.GIVE_ITEM_STACK;
+  itemId: number;
+  count: number;
+};
+
 export type NetworkMessage =
   | HandshakeMessage
   | ChunkDataMsg
@@ -146,12 +216,20 @@ export type NetworkMessage =
   | ChatMsg
   | SystemMessageMsg
   | PingMsg
+  | GiveItemStackMsg
   | WorldSyncMsg
   | WorldTimeMsg
   | SessionEndedMsg
-  | PackStackMsg;
+  | PackStackMsg
+  | FurnaceSnapshotMsg
+  | ChestSnapshotMsg
+  | BlockBreakProgressMsg;
 
 const LE = true;
+
+const BLOCK_BREAK_MODE_IMPLICIT = 0;
+const BLOCK_BREAK_MODE_RELAY = 1;
+const BLOCK_BREAK_IMPLICIT_WIRE_BYTES = 12;
 const textEnc = new TextEncoder();
 const textDec = new TextDecoder();
 
@@ -270,8 +348,22 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       const bg =
         msg.background ??
         new Uint16Array(msg.blocks.length);
-      return BinarySerializer.serializeChunk(msg.cx, msg.cy, msg.blocks, bg);
+      return BinarySerializer.serializeChunk(
+        msg.cx,
+        msg.cy,
+        msg.blocks,
+        bg,
+        msg.furnaces,
+        msg.chests,
+        msg.metadata,
+      );
     }
+
+    case MessageType.FURNACE_SNAPSHOT:
+      return BinarySerializer.serializeFurnaceSnapshot(msg.wx, msg.wy, msg.data);
+
+    case MessageType.CHEST_SNAPSHOT:
+      return BinarySerializer.serializeChestSnapshot(msg.wx, msg.wy, msg.data);
 
     case MessageType.BLOCK_UPDATE: {
       return BinarySerializer.serializeBlockUpdate(
@@ -279,6 +371,8 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         msg.y,
         msg.blockId,
         msg.layer ?? 0,
+        msg.previousBlockId,
+        msg.cellMetadata ?? 0,
       );
     }
 
@@ -352,6 +446,15 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       const v = new DataView(buf);
       v.setUint8(0, MessageType.PING);
       v.setFloat64(1, msg.timestamp, LE);
+      return buf;
+    }
+
+    case MessageType.GIVE_ITEM_STACK: {
+      const buf = new ArrayBuffer(9);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.GIVE_ITEM_STACK);
+      v.setUint32(1, msg.itemId >>> 0, LE);
+      v.setUint32(5, msg.count >>> 0, LE);
       return buf;
     }
 
@@ -444,6 +547,40 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       view.setUint8(o, msg.facingRight ? 1 : 0);
       return buf;
     }
+
+    case MessageType.BLOCK_BREAK_PROGRESS: {
+      if (msg.mode === "implicit") {
+        const buf = new ArrayBuffer(BLOCK_BREAK_IMPLICIT_WIRE_BYTES);
+        const view = new DataView(buf);
+        view.setUint8(0, MessageType.BLOCK_BREAK_PROGRESS);
+        view.setUint8(1, BLOCK_BREAK_MODE_IMPLICIT);
+        view.setInt32(2, msg.wx, LE);
+        view.setInt32(6, msg.wy, LE);
+        view.setUint8(10, msg.layer);
+        view.setUint8(11, msg.crackStageEncoded);
+        return buf;
+      }
+      const sid = textEnc.encode(msg.subjectPeerId);
+      if (sid.byteLength > CHAT_PEER_ID_MAX) {
+        throw new Error("BLOCK_BREAK_PROGRESS: subjectPeerId too long");
+      }
+      const buf = new ArrayBuffer(2 + 2 + sid.byteLength + 4 + 4 + 1 + 1);
+      const view = new DataView(buf);
+      let o = 0;
+      view.setUint8(o++, MessageType.BLOCK_BREAK_PROGRESS);
+      view.setUint8(o++, BLOCK_BREAK_MODE_RELAY);
+      view.setUint16(o, sid.byteLength, LE);
+      o += 2;
+      new Uint8Array(buf, o, sid.byteLength).set(sid);
+      o += sid.byteLength;
+      view.setInt32(o, msg.wx, LE);
+      o += 4;
+      view.setInt32(o, msg.wy, LE);
+      o += 4;
+      view.setUint8(o++, msg.layer);
+      view.setUint8(o, msg.crackStageEncoded);
+      return buf;
+    }
   }
 }
 
@@ -474,7 +611,36 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       if (payload.background !== undefined) {
         out.background = payload.background;
       }
+      if (payload.furnaces !== undefined) {
+        out.furnaces = payload.furnaces;
+      }
+      if (payload.chests !== undefined) {
+        out.chests = payload.chests;
+      }
+      if (payload.metadata !== undefined) {
+        out.metadata = payload.metadata;
+      }
       return out;
+    }
+
+    case MessageType.FURNACE_SNAPSHOT: {
+      const p = BinarySerializer.deserializeFurnaceSnapshot(buf);
+      return {
+        type: MessageType.FURNACE_SNAPSHOT,
+        wx: p.wx,
+        wy: p.wy,
+        data: p.data,
+      };
+    }
+
+    case MessageType.CHEST_SNAPSHOT: {
+      const p = BinarySerializer.deserializeChestSnapshot(buf);
+      return {
+        type: MessageType.CHEST_SNAPSHOT,
+        wx: p.wx,
+        wy: p.wy,
+        data: p.data,
+      };
     }
 
     case MessageType.BLOCK_UPDATE: {
@@ -486,6 +652,8 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         y: payload.y,
         blockId: payload.blockId,
         layer: payload.layer,
+        previousBlockId: payload.previousBlockId,
+        cellMetadata: payload.cellMetadata,
       };
     }
 
@@ -557,6 +725,17 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         type: MessageType.PING,
         timestamp: v.getFloat64(1, LE),
       };
+
+    case MessageType.GIVE_ITEM_STACK: {
+      if (v.byteLength < 9) {
+        throw new Error("GIVE_ITEM_STACK: buffer too short");
+      }
+      return {
+        type: MessageType.GIVE_ITEM_STACK,
+        itemId: v.getUint32(1, LE),
+        count: v.getUint32(5, LE),
+      };
+    }
 
     case MessageType.WORLD_SYNC: {
       const payload: WorldSyncWirePayload = BinarySerializer.deserializeWorldSync(
@@ -645,6 +824,53 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         vx,
         vy,
         facingRight,
+      };
+    }
+
+    case MessageType.BLOCK_BREAK_PROGRESS: {
+      if (v.byteLength < 2) {
+        throw new Error("BLOCK_BREAK_PROGRESS: buffer too short");
+      }
+      const breakMode = v.getUint8(1);
+      if (breakMode === BLOCK_BREAK_MODE_IMPLICIT) {
+        if (v.byteLength < BLOCK_BREAK_IMPLICIT_WIRE_BYTES) {
+          throw new Error("BLOCK_BREAK_PROGRESS: implicit truncated");
+        }
+        return {
+          type: MessageType.BLOCK_BREAK_PROGRESS,
+          mode: "implicit",
+          wx: v.getInt32(2, LE),
+          wy: v.getInt32(6, LE),
+          layer: v.getUint8(10) === 1 ? 1 : 0,
+          crackStageEncoded: v.getUint8(11),
+        };
+      }
+      if (breakMode !== BLOCK_BREAK_MODE_RELAY) {
+        throw new Error("BLOCK_BREAK_PROGRESS: unknown mode");
+      }
+      if (v.byteLength < 4) {
+        throw new Error("BLOCK_BREAK_PROGRESS: relay truncated");
+      }
+      const rlen = v.getUint16(2, LE);
+      if (rlen > CHAT_PEER_ID_MAX || v.byteLength < 4 + rlen + 4 + 4 + 1 + 1) {
+        throw new Error("BLOCK_BREAK_PROGRESS: relay invalid layout");
+      }
+      const subjectPeerId = textDec.decode(new Uint8Array(buf, 4, rlen));
+      let bo = 4 + rlen;
+      const wx = v.getInt32(bo, LE);
+      bo += 4;
+      const wy = v.getInt32(bo, LE);
+      bo += 4;
+      const layer = v.getUint8(bo++) === 1 ? 1 : 0;
+      const crackStageEncoded = v.getUint8(bo);
+      return {
+        type: MessageType.BLOCK_BREAK_PROGRESS,
+        mode: "relay",
+        subjectPeerId,
+        wx,
+        wy,
+        layer,
+        crackStageEncoded,
       };
     }
 

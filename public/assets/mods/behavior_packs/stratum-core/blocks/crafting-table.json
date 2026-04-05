@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:crafting_table" },
+    "description": {
+      "identifier": "stratum:crafting_table"
+    },
     "components": {
       "stratum:display_name": "Crafting Table",
-      "stratum:texture": { "all": "crafting_table" },
+      "stratum:texture": {
+        "all": "crafting_table"
+      },
       "stratum:solid": true,
       "stratum:collision": false,
       "stratum:transparent": false,
@@ -14,7 +18,8 @@
       "stratum:light_emission": 0,
       "stratum:light_absorption": 15,
       "stratum:material": "wood",
-      "stratum:loot_table": "stratum:crafting_table"
+      "stratum:loot_table": "stratum:crafting_table",
+      "stratum:numeric_id": 41
     }
   }
 }

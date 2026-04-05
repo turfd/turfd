@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:bucket"
+    },
+    "components": {
+      "stratum:display_name": "Bucket",
+      "stratum:texture_key": "bucket",
+      "stratum:max_stack": 16,
+      "stratum:numeric_id": 50
+    }
+  }
+}

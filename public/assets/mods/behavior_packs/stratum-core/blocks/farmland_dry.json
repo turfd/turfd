@@ -1,0 +1,25 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": {
+      "identifier": "stratum:farmland_dry"
+    },
+    "components": {
+      "stratum:display_name": "Farmland",
+      "stratum:texture": {
+        "all": "farmland_dry"
+      },
+      "stratum:random_flip_x": true,
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 0.5,
+      "stratum:harvest_tool": "shovel",
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:material": "dirt",
+      "stratum:loot_table": "stratum:dirt",
+      "stratum:numeric_id": 3
+    }
+  }
+}

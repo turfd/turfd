@@ -36,20 +36,69 @@ export interface ItemDefinition {
    */
   readonly placesBlockId?: number;
 
-  /** Tool category (axe, pickaxe, shovel). Undefined for non-tool items. */
-  readonly toolType?: "axe" | "pickaxe" | "shovel";
+  /** Tool category (axe, pickaxe, shovel, hoe). Undefined for non-tool items. */
+  readonly toolType?: "axe" | "pickaxe" | "shovel" | "hoe";
   /** Tool tier: 0=wood, 1=stone, 2=iron, 3=diamond. */
   readonly toolTier?: number;
   /** Mining speed multiplier when this tool matches the block's harvest tool type. */
   readonly toolSpeed?: number;
   /** Crafting tags this item belongs to (e.g. `"stratum:logs"`). */
   readonly tags?: readonly string[];
+
+  /**
+   * Furnace fuel: seconds of burn time per item when placed in the fuel slot.
+   * Set via `stratum:fuel` on item or block JSON; `furnace_fuel.json` can still add or raise values.
+   */
+  readonly fuelBurnSeconds?: number;
+
+  /**
+   * When set, stacks of this item track `damage` (uses consumed). Item breaks when
+   * `damage >= maxDurability` (Minecraft-style).
+   */
+  readonly maxDurability?: number;
+
+  /**
+   * HP restored when the item is consumed (right-click / use in world).
+   * Heart icons use 2 HP each (`PLAYER_MAX_HEALTH`); e.g. `1` restores half a heart.
+   */
+  readonly eatRestoreHealth?: number;
+
+  /** Optional second line under the display name in inventory slot tooltips. */
+  readonly inventoryTooltip?: string;
 }
 
 /** A counted quantity of one item type. */
 export type ItemStack = {
   itemId: ItemId;
   count: number;
+  /** Uses consumed for damageable items; omit or 0 when full / non-damageable. */
+  damage?: number;
 };
 
 export const MAX_STACK_DEFAULT = 64;
+
+/** Normalize damage for a stack of `def`; non-damageable items always return 0. */
+export function clampDamageForDefinition(
+  def: ItemDefinition | undefined,
+  damage: number | undefined,
+): number {
+  const max = def?.maxDurability;
+  if (max === undefined) {
+    return 0;
+  }
+  const d = damage ?? 0;
+  if (!Number.isFinite(d)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(max - 1, Math.floor(d)));
+}
+
+/** True if stack is broken (should be removed). */
+export function isStackBroken(def: ItemDefinition | undefined, damage: number | undefined): boolean {
+  const max = def?.maxDurability;
+  if (max === undefined) {
+    return false;
+  }
+  const d = damage ?? 0;
+  return d >= max;
+}

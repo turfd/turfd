@@ -31,9 +31,25 @@ body {
   display: block;
 }
 
-/* During world load, hide canvas + in-game DOM so nothing shows through the overlay. */
-#app.stratum-game-loading > *:not(.stratum-loading-overlay) {
+/*
+ * During world load, hide everything except the loading overlay and the menu-style
+ * Pixi background (same stack as the main menu — see MenuBackground).
+ */
+#app.stratum-game-loading
+  > *:not(.stratum-loading-overlay):not(.stratum-menu-backdrop):not(
+    .stratum-game-entry-fade
+  ) {
   visibility: hidden !important;
+}
+
+/* Covers loading UI + backdrop while fading to/from black before `game.start()` */
+.stratum-game-entry-fade {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: #000;
+  pointer-events: none;
+  opacity: 0;
 }
 
 /* Multiplayer / session-ended overlay (UIShell) — fade + slide, matches pause/inventory */

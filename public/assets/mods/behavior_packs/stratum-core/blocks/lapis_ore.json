@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:lapis_ore" },
+    "description": {
+      "identifier": "stratum:lapis_ore"
+    },
     "components": {
       "stratum:display_name": "Lapis Lazuli Ore",
-      "stratum:texture": { "all": "lapis_ore" },
+      "stratum:texture": {
+        "all": "lapis_ore"
+      },
       "stratum:solid": true,
       "stratum:transparent": false,
       "stratum:water": false,
@@ -15,7 +19,8 @@
       "stratum:light_emission": 0,
       "stratum:light_absorption": 15,
       "stratum:material": "stone",
-      "stratum:loot_table": "stratum:lapis_ore"
+      "stratum:loot_table": "stratum:lapis_ore",
+      "stratum:numeric_id": 38
     }
   }
 }

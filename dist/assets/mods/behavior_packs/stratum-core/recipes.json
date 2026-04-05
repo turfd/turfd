@@ -2,6 +2,16 @@
   "format_version": "1.0.0",
   "recipes": [
     {
+      "id": "stratum:torch_from_fuel_and_stick",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [
+        { "tag": "stratum:torch_fuel", "count": 1 },
+        { "itemId": "stratum:stick", "count": 1 }
+      ],
+      "output": { "itemId": "stratum:torch", "count": 4 }
+    },
+    {
       "id": "stratum:oak_planks_from_log",
       "category": "Basic",
       "station": null,
@@ -28,6 +38,20 @@
       "station": null,
       "ingredients": [{ "tag": "stratum:planks", "count": 4 }],
       "output": { "itemId": "stratum:crafting_table", "count": 1 }
+    },
+    {
+      "id": "stratum:furnace_from_stone",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "tag": "stratum:furnace_material", "count": 8 }],
+      "output": { "itemId": "stratum:furnace", "count": 1 }
+    },
+    {
+      "id": "stratum:chest_from_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "tag": "stratum:planks", "count": 8 }],
+      "output": { "itemId": "stratum:chest", "count": 1 }
     },
     {
       "id": "stratum:sandstone_from_sand",
@@ -72,6 +96,190 @@
         { "itemId": "stratum:stick", "count": 2 }
       ],
       "output": { "itemId": "stratum:wooden_shovel", "count": 1 }
+    },
+    {
+      "id": "stratum:bucket_from_iron_ingots",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [{ "itemId": "stratum:iron_ingot", "count": 3 }],
+      "output": { "itemId": "stratum:bucket", "count": 1 }
+    },
+    {
+      "id": "stratum:bread_from_wheat",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [{ "itemId": "stratum:wheat", "count": 3 }],
+      "output": { "itemId": "stratum:bread", "count": 2 }
+    },
+    {
+      "id": "stratum:wooden_hoe_from_planks_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "tag": "stratum:planks", "count": 2 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:wooden_hoe", "count": 1 }
+    },
+    {
+      "id": "stratum:stone_pickaxe_from_cobble_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:cobblestone", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:stone_pickaxe", "count": 1 }
+    },
+    {
+      "id": "stratum:stone_axe_from_cobble_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:cobblestone", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:stone_axe", "count": 1 }
+    },
+    {
+      "id": "stratum:stone_shovel_from_cobble_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:cobblestone", "count": 1 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:stone_shovel", "count": 1 }
+    },
+    {
+      "id": "stratum:stone_hoe_from_cobble_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:cobblestone", "count": 2 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:stone_hoe", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_pickaxe_from_ingots_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:iron_ingot", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:iron_pickaxe", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_axe_from_ingots_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:iron_ingot", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:iron_axe", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_shovel_from_ingot_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:iron_ingot", "count": 1 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:iron_shovel", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_hoe_from_ingots_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:iron_ingot", "count": 2 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:iron_hoe", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_pickaxe_from_ingots_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:gold_ingot", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:gold_pickaxe", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_axe_from_ingots_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:gold_ingot", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:gold_axe", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_shovel_from_ingot_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:gold_ingot", "count": 1 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:gold_shovel", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_hoe_from_ingots_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:gold_ingot", "count": 2 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:gold_hoe", "count": 1 }
+    },
+    {
+      "id": "stratum:diamond_pickaxe_from_diamonds_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:diamond", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:diamond_pickaxe", "count": 1 }
+    },
+    {
+      "id": "stratum:diamond_axe_from_diamonds_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:diamond", "count": 3 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:diamond_axe", "count": 1 }
+    },
+    {
+      "id": "stratum:diamond_shovel_from_diamond_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:diamond", "count": 1 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:diamond_shovel", "count": 1 }
+    },
+    {
+      "id": "stratum:diamond_hoe_from_diamonds_and_sticks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:diamond", "count": 2 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:diamond_hoe", "count": 1 }
     }
   ]
 }

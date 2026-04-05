@@ -2,8 +2,8 @@
  * Standalone PixiJS world renderer for the main menu background.
  *
  * Layers (back to front):
- *  1. CSS canvas  — sky gradient + tiled bg.png terrain backdrop
- *  2. PixiJS canvas (transparent BG) — tiles + composite lighting pass
+ *  1. CSS canvas — sky gradient (+ sun)
+ *  2. PixiJS — blurred procedural parallax tile strip, then lit foreground terrain + composite
  *  3. DOM overlay (MainMenu)
  *
  * Zoom matches the game's adaptive formula (max 20 blocks visible horizontally).
@@ -11,20 +11,20 @@
  */
 import { Application, Container, RenderTexture } from "pixi.js";
 import {
+  BACKGROUND_PARALLAX_X,
   BLOCK_SIZE,
   CHUNK_SIZE,
   SKY_LIGHT_MAX,
 } from "../../core/constants";
+import { unixRandom01 } from "../../core/unixRandom";
 import { STRATUM_CORE_BEHAVIOR_PACK_PATH } from "../../mods/internalPackManifest";
 import {
   fetchBehaviorPackManifest,
   loadBehaviorPackBlocks,
 } from "../../mods/loadInternalBehaviorPack";
-import {
-  BLOCK_TEXTURE_MANIFEST_PATH,
-  stratumCoreTextureAssetUrl,
-} from "../../core/textureManifest";
+import { BLOCK_TEXTURE_MANIFEST_PATH } from "../../core/textureManifest";
 import { AtlasLoader } from "../../renderer/AtlasLoader";
+import { ParallaxTileStripRenderer } from "../../renderer/ParallaxTileStripRenderer";
 import { OcclusionTexture } from "../../renderer/lighting/OcclusionTexture";
 import { IndirectLightTexture } from "../../renderer/lighting/IndirectLightTexture";
 import { CompositePass } from "../../renderer/lighting/CompositePass";
@@ -32,7 +32,9 @@ import { buildMesh, buildBackgroundMesh } from "../../renderer/chunk/TileDrawBat
 import { BlockRegistry } from "../../world/blocks/BlockRegistry";
 import { WorldGenerator } from "../../world/gen/WorldGenerator";
 import type { Chunk } from "../../world/chunk/Chunk";
+import { chunkKey, chunkToWorldOrigin } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
+import { paintMenuSky } from "./menuSkyPaint";
 
 // ---------------------------------------------------------------------------
 // Layout / world constants
@@ -41,6 +43,9 @@ import type { World } from "../../world/World";
 const CHUNKS_X    = 10;  // 320 blocks wide
 const CY_START    = -3;  // underground
 const CY_END      = 2;   // surface + canopy
+
+/** World +X pan of the menu view (blocks). Safe while center ± {@link PAN_RANGE_X_BLOCKS} stays in [0, CHUNKS_X * CHUNK_SIZE). */
+const MENU_VIEW_OFFSET_X_BLOCKS = 100;
 
 /**
  * Adaptive zoom: same formula as Camera.getEffectiveZoom().
@@ -63,18 +68,6 @@ const PAN_RANGE_Y_PX    = 24;     // ±screen-pixels (vertical bob)
 // Sky / background constants (mirror values from WorldTime.ts / RenderPipeline.ts)
 // ---------------------------------------------------------------------------
 
-/** Daytime sky colours at peak noon (0xRRGGBB). */
-const SKY_TOP     = 0x74b3ff;
-const SKY_HORIZON = 0xa8d8ff;
-const SKY_BOTTOM  = 0x6a8a9a;
-const SKY_WHITE   = 0xffffff;
-
-const BG_PARALLAX_X          = 0.15;
-const BG_PARALLAX_Y          = 0.48;
-const BG_HEIGHT_FRAC         = 0.80;
-const BG_VERTICAL_OFFSET_FRAC = 0.03;
-const BG_BASE_DARKNESS       = 0.28;
-
 /** Daytime lighting params passed to the composite shader. */
 const DAYTIME_LIGHTING = {
   sunDir:       [0.45,  0.89]          as [number, number],
@@ -88,27 +81,6 @@ const DAYTIME_LIGHTING = {
   moonTint:     [0.6, 0.7, 1.0]       as [number, number, number],
   heldTorch:    null,
 } as const;
-
-// ---------------------------------------------------------------------------
-// Colour helpers (mirror RenderPipeline.ts helpers)
-// ---------------------------------------------------------------------------
-
-function lerpColor(a: number, b: number, t: number): number {
-  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
-  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
-  return (Math.round(ar + (br - ar) * t) << 16) |
-         (Math.round(ag + (bg - ag) * t) << 8)  |
-          Math.round(ab + (bb - ab) * t);
-}
-
-function hexToCss(hex: number): string {
-  return `#${(hex & 0xffffff).toString(16).padStart(6, "0")}`;
-}
-
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
 
 // ---------------------------------------------------------------------------
 // Minimal World adapter
@@ -263,10 +235,20 @@ function propagateSkyLight(chunkMap: ChunkMap, _registry: BlockRegistry): void {
 // ---------------------------------------------------------------------------
 
 export class MenuBackground {
+  /** Fulfills when {@link init} finishes (success, early exit, or throw). */
+  readonly initFinished: Promise<void>;
+  private resolveInitFinished!: () => void;
+
   private app: Application | null = null;
   private rafId: number | null = null;
   private startTime = 0;
   private destroyed = false;
+
+  constructor() {
+    this.initFinished = new Promise<void>((resolve) => {
+      this.resolveInitFinished = resolve;
+    });
+  }
 
   // World rendering
   private worldContainer: Container | null = null;
@@ -276,10 +258,16 @@ export class MenuBackground {
   private composite: CompositePass | null = null;
   private chunkMap: ChunkMap | null = null;
 
+  /** Wraps sky + Pixi canvases so loading-screen CSS can keep this visible behind the overlay. */
+  private backdropRoot: HTMLDivElement | null = null;
+
   // Sky canvas
   private skyCanvas: HTMLCanvasElement | null = null;
   private skyCtx: CanvasRenderingContext2D | null = null;
-  private bgImage: HTMLImageElement | null = null;
+
+  private parallaxStrip: ParallaxTileStripRenderer | null = null;
+  private atlasLoader: AtlasLoader | null = null;
+  private menuSeed = 0;
 
   private baseX = 0;
   private baseY = 0;
@@ -296,24 +284,47 @@ export class MenuBackground {
   private lastCenterCX = -9999;
   private lastCenterCY = -9999;
 
+  /** Remove sky/backdrop and destroy Pixi when bailing out of {@link init} mid-flight. */
+  private tearDownPartialInit(app: Application | null): void {
+    if (app !== null) {
+      app.destroy();
+    }
+    this.app = null;
+    if (this.backdropRoot !== null) {
+      this.backdropRoot.remove();
+      this.backdropRoot = null;
+    }
+    this.skyCanvas = null;
+    this.skyCtx = null;
+  }
+
   async init(mount: HTMLElement): Promise<void> {
+    try {
+      await this.initImpl(mount);
+    } finally {
+      this.resolveInitFinished();
+    }
+  }
+
+  private async initImpl(mount: HTMLElement): Promise<void> {
+    const backdropRoot = document.createElement("div");
+    backdropRoot.className = "stratum-menu-backdrop";
+    backdropRoot.style.cssText =
+      "position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;";
+    this.backdropRoot = backdropRoot;
+    if (mount.firstChild) {
+      mount.insertBefore(backdropRoot, mount.firstChild);
+    } else {
+      mount.appendChild(backdropRoot);
+    }
+
     // -- Sky Canvas (inserted first = lowest z-order) -----------------------
     const skyCanvas = document.createElement("canvas");
     skyCanvas.style.cssText =
       "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
-    if (mount.firstChild) {
-      mount.insertBefore(skyCanvas, mount.firstChild);
-    } else {
-      mount.appendChild(skyCanvas);
-    }
+    backdropRoot.appendChild(skyCanvas);
     this.skyCanvas = skyCanvas;
     this.skyCtx = skyCanvas.getContext("2d");
-
-    // Start loading bg.png in parallel with PixiJS init (.catch so a later throw
-    // in init() does not leave an unhandled rejection if the image errors first)
-    const bgPromise = this.loadBgImage(
-      stratumCoreTextureAssetUrl("bg.png"),
-    ).catch(() => null);
 
     // -- PixiJS init --------------------------------------------------------
     const app = new Application();
@@ -327,14 +338,16 @@ export class MenuBackground {
       autoDensity: true,
     });
 
-    if (this.destroyed) { app.destroy(); return; }
+    if (this.destroyed) {
+      this.tearDownPartialInit(app);
+      return;
+    }
 
     const pixiCanvas = app.canvas;
     pixiCanvas.style.cssText =
       "position:absolute;inset:0;width:100%;height:100%;" +
       "image-rendering:pixelated;z-index:1;pointer-events:none;";
-    // Insert after skyCanvas but before any overlay DOM
-    skyCanvas.insertAdjacentElement("afterend", pixiCanvas);
+    backdropRoot.appendChild(pixiCanvas);
     this.app = app;
 
     // -- Atlas + registry ---------------------------------------------------
@@ -342,15 +355,21 @@ export class MenuBackground {
     await atlas.load();
     if (this.destroyed) { app.destroy(); return; }
 
+    this.atlasLoader = atlas;
+
     const registry = new BlockRegistry();
     const base = import.meta.env.BASE_URL;
     const behBase = `${base}${STRATUM_CORE_BEHAVIOR_PACK_PATH}`;
     const behManifest = await fetchBehaviorPackManifest(behBase);
     await loadBehaviorPackBlocks(registry, behBase, behManifest);
-    if (this.destroyed) { app.destroy(); return; }
+    if (this.destroyed) {
+      this.tearDownPartialInit(app);
+      return;
+    }
 
     // -- World generation ---------------------------------------------------
-    const seed       = Math.floor(Math.random() * 2_147_483_647);
+    const seed       = Math.floor(unixRandom01() * 2_147_483_647);
+    this.menuSeed = seed;
     const generator  = new WorldGenerator(seed, registry);
     const chunkMap   = new ChunkMap(
       registry,
@@ -368,18 +387,47 @@ export class MenuBackground {
     worldContainer.scale.set(zoom);
     this.worldContainer = worldContainer;
 
+    const chestBlockId = registry.isRegistered("stratum:chest")
+      ? registry.getByIdentifier("stratum:chest").id
+      : null;
+    const parallaxStrip = new ParallaxTileStripRenderer(app, () => this.zoom);
+    parallaxStrip.regenerate({
+      seed,
+      registry,
+      atlas,
+      chestBlockId,
+    });
+    this.parallaxStrip = parallaxStrip;
+
+    const menuGenMap = new Map<string, Chunk>();
     for (let cy = CY_START; cy <= CY_END; cy++) {
       for (let cx = 0; cx < CHUNKS_X; cx++) {
-        const chunk = generator.generateChunk({ cx, cy });
+        const coord = { cx, cy };
+        const chunk = generator.generateChunkTerrainOnly(coord);
+        menuGenMap.set(chunkKey(coord), chunk);
+      }
+    }
+    generator.applySeaLevelFloodToChunkRegion(menuGenMap, {
+      minCx: 0,
+      maxCx: CHUNKS_X - 1,
+      minCy: CY_START,
+      maxCy: CY_END,
+    });
+    for (let cy = CY_START; cy <= CY_END; cy++) {
+      for (let cx = 0; cx < CHUNKS_X; cx++) {
+        const coord = { cx, cy };
+        const chunk = menuGenMap.get(chunkKey(coord))!;
+        const o = chunkToWorldOrigin(coord);
+        generator.decorateChunkSurface(chunk, o.wx, o.wy);
         chunkMap.add(chunk);
         const pos = {
-          x: cx  * CHUNK_SIZE * BLOCK_SIZE,
+          x: cx * CHUNK_SIZE * BLOCK_SIZE,
           y: -cy * CHUNK_SIZE * BLOCK_SIZE,
         };
         const bgMesh = buildBackgroundMesh(chunk, registry, atlas);
         bgMesh.position.set(pos.x, pos.y);
         worldContainer.addChild(bgMesh);
-        const mesh = buildMesh(chunk, registry, atlas);
+        const { mesh } = buildMesh(chunk, registry, atlas);
         mesh.position.set(pos.x, pos.y);
         worldContainer.addChild(mesh);
       }
@@ -403,15 +451,26 @@ export class MenuBackground {
     this.indirect  = indirect;
     this.composite = composite;
 
+    app.stage.addChild(parallaxStrip.displayRoot);
     app.stage.addChild(worldContainer);
     app.stage.addChild(composite.displayObject);
 
     // -- Camera baseline (surface at 55% down screen) -----------------------
-    const midWX    = Math.floor((CHUNKS_X * CHUNK_SIZE) / 2);
+    const stripWBlocks = CHUNKS_X * CHUNK_SIZE;
+    const midWX = Math.max(
+      0,
+      Math.min(
+        stripWBlocks - 1,
+        Math.floor(stripWBlocks / 2) + MENU_VIEW_OFFSET_X_BLOCKS,
+      ),
+    );
     const surfaceY = generator.getSurfaceHeight(midWX);
     this.surfaceYForLayout = surfaceY;
 
-    this.baseX = screenW / 2 - (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2;
+    this.baseX =
+      screenW / 2 -
+      (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2 -
+      MENU_VIEW_OFFSET_X_BLOCKS * BLOCK_SIZE * zoom;
     this.baseY = screenH * 0.55 + (surfaceY + 1) * BLOCK_SIZE * zoom;
     this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
 
@@ -419,9 +478,6 @@ export class MenuBackground {
 
     this.lastRendererW = app.renderer.width;
     this.lastRendererH = app.renderer.height;
-
-    // Await bg image (null if load failed)
-    this.bgImage = await bgPromise;
 
     this.startTime = performance.now();
     this.rafId = requestAnimationFrame((t) => this.animate(t));
@@ -458,7 +514,23 @@ export class MenuBackground {
     this.zoom = zoom;
     worldContainer.scale.set(zoom);
 
-    this.baseX = screenW / 2 - (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2;
+    if (this.parallaxStrip !== null && this.atlasLoader !== null && this.chunkMap !== null) {
+      const reg = this.chunkMap.getRegistry();
+      const cid = reg.isRegistered("stratum:chest")
+        ? reg.getByIdentifier("stratum:chest").id
+        : null;
+      this.parallaxStrip.regenerate({
+        seed: this.menuSeed,
+        registry: reg,
+        atlas: this.atlasLoader,
+        chestBlockId: cid,
+      });
+    }
+
+    this.baseX =
+      screenW / 2 -
+      (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2 -
+      MENU_VIEW_OFFSET_X_BLOCKS * BLOCK_SIZE * zoom;
     this.baseY =
       screenH * 0.55 +
       (this.surfaceYForLayout + 1) * BLOCK_SIZE * zoom;
@@ -473,93 +545,21 @@ export class MenuBackground {
   // ---------------------------------------------------------------------------
 
   private paintSky(worldContainerX: number, worldContainerY: number): void {
+    void worldContainerX;
+    void worldContainerY;
     const cvs = this.skyCanvas;
     const ctx = this.skyCtx;
     if (!cvs || !ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const cw  = Math.max(1, Math.round(cvs.clientWidth  * dpr));
-    const ch  = Math.max(1, Math.round(cvs.clientHeight * dpr));
+    const cw = Math.max(1, Math.round(cvs.clientWidth * dpr));
+    const ch = Math.max(1, Math.round(cvs.clientHeight * dpr));
     if (cvs.width !== cw || cvs.height !== ch) {
-      cvs.width  = cw;
+      cvs.width = cw;
       cvs.height = ch;
     }
 
-    // -- Sky gradient (daytime with horizon haze) ---------------------------
-    const sunIntensity = DAYTIME_LIGHTING.sunIntensity;
-    const haze = smoothstep(0.34, 0.72, sunIntensity);
-    const towardWhite = (c: number, amt: number): number =>
-      lerpColor(c, SKY_WHITE, amt * haze);
-
-    const midHigh = lerpColor(SKY_TOP,     SKY_HORIZON, 0.35);
-    const midLow  = lerpColor(SKY_HORIZON, SKY_BOTTOM,  0.45);
-
-    const grd = ctx.createLinearGradient(0, 0, 0, ch);
-    grd.addColorStop(0.00, hexToCss(SKY_TOP));
-    grd.addColorStop(0.14, hexToCss(lerpColor(SKY_TOP, midHigh, 0.55)));
-    grd.addColorStop(0.30, hexToCss(midHigh));
-    grd.addColorStop(0.44, hexToCss(towardWhite(midHigh,    0.14)));
-    grd.addColorStop(0.52, hexToCss(towardWhite(SKY_HORIZON, 0.36)));
-    grd.addColorStop(0.58, hexToCss(towardWhite(SKY_HORIZON, 0.58)));
-    grd.addColorStop(0.65, hexToCss(towardWhite(SKY_HORIZON, 0.40)));
-    grd.addColorStop(0.75, hexToCss(towardWhite(midLow,      0.22)));
-    grd.addColorStop(0.88, hexToCss(midLow));
-    grd.addColorStop(1.00, hexToCss(SKY_BOTTOM));
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, cw, ch);
-
-    // -- bg.png tiled background --------------------------------------------
-    const img = this.bgImage;
-    if (img && img.height > 0) {
-      // camX in un-zoomed world pixels (mirrors camera.getPosition().x)
-      const camX   = (cw / (2 * dpr) - worldContainerX) / this.zoom;
-      const drawH  = Math.max(1, Math.round(ch * BG_HEIGHT_FRAC));
-      const drawW  = Math.max(1, Math.round((img.width / img.height) * drawH));
-      if (drawW > 0) {
-        const offsetX   = Math.round(camX * BG_PARALLAX_X);
-        const yOffset   = Math.round(ch * BG_VERTICAL_OFFSET_FRAC +
-                          worldContainerY * BG_PARALLAX_Y);
-        const startTile = Math.floor(offsetX / drawW) - 1;
-        const endTile   = Math.floor((offsetX + cw) / drawW) + 1;
-
-        const prevSmoothing   = ctx.imageSmoothingEnabled;
-        const prevAlpha       = ctx.globalAlpha;
-        ctx.imageSmoothingEnabled = false;
-        ctx.globalAlpha = 1 - BG_BASE_DARKNESS;  // daytime tint
-
-        for (let tile = startTile; tile <= endTile; tile++) {
-          const sx = tile * drawW - offsetX;
-          if ((tile & 1) === 0) {
-            ctx.drawImage(img, sx, yOffset, drawW, drawH);
-          } else {
-            ctx.save();
-            ctx.translate(sx + drawW, yOffset);
-            ctx.scale(-1, 1);
-            ctx.drawImage(img, 0, 0, drawW, drawH);
-            ctx.restore();
-          }
-        }
-
-        ctx.imageSmoothingEnabled = prevSmoothing;
-        ctx.globalAlpha = prevAlpha;
-      }
-    }
-
-    // -- Sun disc -----------------------------------------------------------
-    const sunAlpha = Math.min(1, sunIntensity / 0.65);
-    if (sunAlpha > 0.04) {
-      const [sx, sy] = DAYTIME_LIGHTING.sunDir;
-      const spread = cw * 0.38;
-      const baseY  = ch * 0.16;
-      ctx.beginPath();
-      ctx.arc(
-        cw * 0.5 + sx * spread,
-        baseY - sy * ch * 0.2,
-        Math.round(16 * dpr), 0, Math.PI * 2,
-      );
-      ctx.fillStyle = `rgba(255,243,176,${sunAlpha})`;
-      ctx.fill();
-    }
+    paintMenuSky(ctx, cw, ch, dpr);
   }
 
   // ---------------------------------------------------------------------------
@@ -583,17 +583,18 @@ export class MenuBackground {
     worldContainer.x = this.baseX + Math.sin(t * PAN_SPEED_X) * this.panRangeXPx;
     worldContainer.y = this.baseY + Math.sin(t * PAN_SPEED_Y) * PAN_RANGE_Y_PX;
 
-    // -- Sky / background (CSS canvas) --------------------------------------
+    // -- Sky (CSS canvas) ---------------------------------------------------
     this.paintSky(worldContainer.x, worldContainer.y);
+
+    const dpr = app.renderer.resolution;
+    const sw = app.renderer.width / dpr;
+    const sh = app.renderer.height / dpr;
+    const localCX = (sw / 2 - worldContainer.x) / this.zoom;
+    this.parallaxStrip?.updateParallax(localCX, BACKGROUND_PARALLAX_X);
 
     // -- Lighting uniforms --------------------------------------------------
     if (occlusion && indirect && composite && chunkMap) {
-      const dpr = app.renderer.resolution;
-      const sw  = app.renderer.width  / dpr;
-      const sh  = app.renderer.height / dpr;
-
-      const localCX     = (sw / 2 - worldContainer.x) / this.zoom;
-      const localCY     = (sh / 2 - worldContainer.y) / this.zoom;
+      const localCY = (sh / 2 - worldContainer.y) / this.zoom;
       const centerChunkX = Math.floor(localCX / (BLOCK_SIZE * CHUNK_SIZE));
       const centerChunkY = Math.floor(-localCY / (BLOCK_SIZE * CHUNK_SIZE));
 
@@ -636,19 +637,13 @@ export class MenuBackground {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  private loadBgImage(url: string): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.decoding = "async";
-      img.onload  = () => resolve(img);
-      img.onerror = () => reject(new Error(`Failed to load bg: ${url}`));
-      img.src = url;
-    });
+  /**
+   * True when Pixi init finished successfully and {@link destroy} has not run.
+   * Lets the app keep the same procedural backdrop when transitioning to the world loading overlay.
+   */
+  isLive(): boolean {
+    return !this.destroyed && this.app !== null;
   }
-
-  // ---------------------------------------------------------------------------
-  // Cleanup
-  // ---------------------------------------------------------------------------
 
   destroy(): void {
     this.destroyed = true;
@@ -666,17 +661,19 @@ export class MenuBackground {
     this.albedoRT      = null;
     this.worldContainer = null;
     this.chunkMap      = null;
+    this.parallaxStrip?.dispose();
+    this.parallaxStrip = null;
+    this.atlasLoader = null;
 
     if (this.app) {
-      this.app.canvas.parentNode?.removeChild(this.app.canvas);
       this.app.destroy();
       this.app = null;
     }
-    if (this.skyCanvas) {
-      this.skyCanvas.parentNode?.removeChild(this.skyCanvas);
-      this.skyCanvas = null;
-      this.skyCtx    = null;
+    if (this.backdropRoot) {
+      this.backdropRoot.remove();
+      this.backdropRoot = null;
     }
-    this.bgImage = null;
+    this.skyCanvas = null;
+    this.skyCtx = null;
   }
 }

@@ -3,6 +3,8 @@
  * Phase 1: no SFX assets loaded; playSfx no-ops until mod audio (Phase 3).
  */
 
+import { unixRandom01 } from "../core/unixRandom";
+
 export type SfxOptions = {
   volume?: number;
   pitchVariance?: number;
@@ -97,7 +99,7 @@ export class AudioEngine {
     const src = ctx.createBufferSource();
     src.buffer = buf;
     const variance = options?.pitchVariance ?? 0;
-    src.detune.value = (Math.random() * 2 - 1) * variance;
+    src.detune.value = (unixRandom01() * 2 - 1) * variance;
     const playGain = ctx.createGain();
     playGain.gain.value = options?.volume ?? 1;
     src.connect(playGain);

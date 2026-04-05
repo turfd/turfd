@@ -1,0 +1,20 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:charcoal"
+    },
+    "components": {
+      "stratum:display_name": "Charcoal",
+      "stratum:texture_key": "charcoal",
+      "stratum:max_stack": 64,
+      "stratum:tags": [
+        "stratum:torch_fuel"
+      ],
+      "stratum:fuel": {
+        "burn_seconds": 8
+      },
+      "stratum:numeric_id": 54
+    }
+  }
+}

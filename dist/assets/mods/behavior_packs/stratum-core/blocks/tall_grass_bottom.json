@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:tall_grass_bottom" },
+    "description": {
+      "identifier": "stratum:tall_grass_bottom"
+    },
     "components": {
       "stratum:display_name": "Tall Grass",
-      "stratum:texture": { "all": "tall_grass_bottom" },
+      "stratum:texture": {
+        "all": "tall_grass_bottom"
+      },
       "stratum:solid": false,
       "stratum:transparent": true,
       "stratum:water": false,
@@ -15,7 +19,9 @@
       "stratum:replaceable": true,
       "stratum:tall_grass": "bottom",
       "stratum:loot_table": "stratum:tall_grass_bottom",
-      "stratum:plant_foot_offset_px": 0
+      "stratum:plant_foot_offset_px": 0,
+      "stratum:wind_sway_max_px": 2,
+      "stratum:numeric_id": 6
     }
   }
 }

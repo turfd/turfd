@@ -1,11 +1,14 @@
+import type { ItemId } from "../core/itemDefinition";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { RecipeRegistry } from "../world/RecipeRegistry";
 import type { LootResolver } from "../items/LootResolver";
-import { parseBlockJson } from "./parseBlockJson";
-import { parseItemJson } from "./parseItemJson";
+import { parseBlockJson, type ParsedBlockDefinition } from "./parseBlockJson";
+import { parseItemJson, type ParsedItemDefinition } from "./parseItemJson";
 import { parseRecipeJson } from "./parseRecipeJson";
 import { parseLootTablesJson, registerLootTablesForBlocks } from "./parseLootTablesJson";
+import { parseFurnaceFuelJson, parseSmeltingRecipesJson } from "./parseSmeltingJson";
+import type { SmeltingRegistry } from "../world/SmeltingRegistry";
 import {
   BehaviorPackManifestSchema,
   type BehaviorPackManifest,
@@ -31,13 +34,58 @@ export async function loadBehaviorPackBlocks(
   progress?: (loaded: number, total: number, file: string) => void,
 ): Promise<void> {
   const total = manifest.blocks.length;
-  let loaded = 0;
+  const parsed: { file: string; def: ParsedBlockDefinition }[] = [];
   for (const file of manifest.blocks) {
     const raw = await fetchJson(`${packBaseUrl}blocks/${file}`);
-    const def = parseBlockJson(raw);
-    registry.register(def);
+    parsed.push({ file, def: parseBlockJson(raw) });
+  }
+  parsed.sort((a, b) => a.def.numericId - b.def.numericId);
+  let loaded = 0;
+  for (const { file, def } of parsed) {
+    registry.registerInOrder(def);
     loaded++;
     progress?.(loaded, total, file);
+  }
+}
+
+/**
+ * Register standalone items from JSON with explicit `stratum:numeric_id`, contiguous after existing ids
+ * (e.g. block-items using the same ids as their blocks).
+ */
+export function registerParsedItemsInOrder(
+  registry: BlockRegistry,
+  itemRegistry: ItemRegistry,
+  parsed: readonly ParsedItemDefinition[],
+): void {
+  const sorted = [...parsed].sort((a, b) => a.numericId - b.numericId);
+  let expected = itemRegistry.maxRegisteredNumericId() + 1;
+  for (const def of sorted) {
+    if (def.numericId !== expected) {
+      throw new Error(
+        `Item '${def.identifier}': stratum:numeric_id is ${def.numericId}, expected ${expected} (must extend contiguously after block-items).`,
+      );
+    }
+    let placesBlockId: number | undefined;
+    if (def.placesBlockIdentifier !== undefined) {
+      placesBlockId = registry.getByIdentifier(def.placesBlockIdentifier).id;
+    }
+    itemRegistry.register({
+      key: def.identifier,
+      id: def.numericId as ItemId,
+      textureName: def.textureKey,
+      displayName: def.displayName,
+      maxStack: def.maxStack,
+      placesBlockId,
+      toolType: def.toolType,
+      toolTier: def.toolTier,
+      toolSpeed: def.toolSpeed,
+      maxDurability: def.maxDurability,
+      fuelBurnSeconds: def.fuelBurnSeconds,
+      tags: def.tags,
+      eatRestoreHealth: def.eatRestoreHealth,
+      inventoryTooltip: def.inventoryTooltip,
+    });
+    expected += 1;
   }
 }
 
@@ -49,33 +97,15 @@ export async function loadBehaviorPackItems(
   progress?: (loaded: number, total: number, file: string) => void,
 ): Promise<void> {
   const total = manifest.items.length;
+  const parsed: ParsedItemDefinition[] = [];
   let loaded = 0;
   for (const file of manifest.items) {
     const raw = await fetchJson(`${packBaseUrl}items/${file}`);
-    const def = parseItemJson(raw);
-    let placesBlockId: number | undefined;
-    if (def.placesBlockIdentifier !== undefined) {
-      const b = registry.getByIdentifier(def.placesBlockIdentifier);
-      if (b === undefined) {
-        throw new Error(
-          `Item ${def.identifier}: unknown places_block "${def.placesBlockIdentifier}"`,
-        );
-      }
-      placesBlockId = b.id;
-    }
-    itemRegistry.register({
-      key: def.identifier,
-      textureName: def.textureKey,
-      displayName: def.displayName,
-      maxStack: def.maxStack,
-      placesBlockId,
-      toolType: def.toolType,
-      toolTier: def.toolTier,
-      toolSpeed: def.toolSpeed,
-    });
+    parsed.push(parseItemJson(raw));
     loaded++;
     progress?.(loaded, total, file);
   }
+  registerParsedItemsInOrder(registry, itemRegistry, parsed);
 }
 
 export async function loadBehaviorPackRecipes(
@@ -123,5 +153,43 @@ export async function loadBehaviorPackLoot(
     const raw = await fetchJson(`${packBaseUrl}${rel}`);
     const data = parseLootTablesJson(raw);
     registerLootTablesForBlocks(registry, resolver, data);
+  }
+}
+
+export async function loadBehaviorPackSmelting(
+  itemRegistry: ItemRegistry,
+  smelting: SmeltingRegistry,
+  packBaseUrl: string,
+  manifest: BehaviorPackManifest,
+): Promise<void> {
+  for (const rel of manifest.smelting) {
+    const raw = await fetchJson(`${packBaseUrl}${rel}`);
+    const recipes = parseSmeltingRecipesJson(raw);
+    for (const r of recipes) {
+      if (itemRegistry.getByKey(r.outputItemKey) === undefined) {
+        throw new Error(
+          `Smelting '${r.id}' references unknown output '${r.outputItemKey}'.`,
+        );
+      }
+      if (r.inputItemKey !== undefined && itemRegistry.getByKey(r.inputItemKey) === undefined) {
+        throw new Error(
+          `Smelting '${r.id}' references unknown input '${r.inputItemKey}'.`,
+        );
+      }
+      if (
+        r.inputTag !== undefined &&
+        itemRegistry.getByTag(r.inputTag).length === 0
+      ) {
+        throw new Error(
+          `Smelting '${r.id}' references tag '${r.inputTag}' with no items.`,
+        );
+      }
+    }
+    smelting.registerRecipes(recipes);
+  }
+  for (const rel of manifest.furnace_fuel) {
+    const raw = await fetchJson(`${packBaseUrl}${rel}`);
+    const entries = parseFurnaceFuelJson(raw);
+    smelting.registerFuelEntries(entries, itemRegistry);
   }
 }

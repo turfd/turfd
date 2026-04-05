@@ -76,6 +76,8 @@ export type ChatHostControllerDeps = {
   getLocalDisplayName: () => string;
   schedulePersistModeration: () => void;
   sendSystemTo: (peerId: PeerId, text: string) => void;
+  /** Host-only: parse `/give` tail and grant items (local or remote client). */
+  executeGive: (issuerPeerId: string, rest: string) => void;
 };
 
 export class ChatHostController {
@@ -145,6 +147,18 @@ export class ChatHostController {
         fromPeerId as PeerId,
         "Ping is handled by your client (network round-trip to the host).",
       );
+      return true;
+    }
+
+    if (cmd === "give") {
+      if (!this.canModerate(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          "You do not have permission to use this command.",
+        );
+        return true;
+      }
+      this.d.executeGive(fromPeerId, rest);
       return true;
     }
 

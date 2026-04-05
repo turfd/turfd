@@ -5,6 +5,7 @@ import type { IAuthProvider } from "./auth/IAuthProvider";
 import { createAuthProvider } from "./auth/createAuthProvider";
 import { loadLocalSecretsFile } from "./config/secretsLoader";
 import { EventBus } from "./core/EventBus";
+import { unixRandom01 } from "./core/unixRandom";
 import {
   Game,
   type MultiplayerHostFromMenuSpec,
@@ -23,17 +24,25 @@ import { createSupabaseSignalRelay } from "./network/SupabaseSignalAdapter";
 import { IndexedDBStore } from "./persistence/IndexedDBStore";
 import { pinWorkshopModToWorld } from "./persistence/pinWorkshopModToWorld";
 import { MainMenu } from "./ui/screens/MainMenu";
+import { MenuBackground } from "./ui/screens/MenuBackground";
+import { runGameEntryBlackTransition } from "./ui/screens/gameEntryTransition";
 import { WorldLoadingScreen } from "./ui/screens/WorldLoadingScreen";
+import "@fortawesome/fontawesome-free/css/fontawesome.min.css";
+import "@fortawesome/fontawesome-free/css/solid.min.css";
 import "./styles/global.css";
 
 /** Minimum time the loading overlay stays up (ms), so the bar and tips feel intentional. */
 function randomLoadingHoldMs(): number {
-  return 3000 + Math.floor(Math.random() * 1000);
+  return 3000 + Math.floor(unixRandom01() * 1000);
 }
 
 function loadingErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message.trim() !== "") {
-    return err.message;
+    const m = err.message;
+    if (m.includes("PeerJSAdapter.join: connection timeout")) {
+      return `${m} The host may have left, or the room listing may be out of date — try again in a minute or join with a fresh code.`;
+    }
+    return m;
   }
   return "An unknown error occurred while preparing the world.";
 }
@@ -305,9 +314,15 @@ async function main(): Promise<void> {
     const workshopDeps = auth.isConfigured
       ? { bus: menuBus, modRepository }
       : undefined;
-    const result = await MainMenu.show(mount, store, auth, workshopDeps);
-    const loadingUi = new WorldLoadingScreen(mount);
+    const { result, menuBackground } = await MainMenu.show(
+      mount,
+      store,
+      auth,
+      workshopDeps,
+    );
+    await menuBackground.initFinished;
     mount.classList.add("stratum-game-loading");
+    const loadingUi = new WorldLoadingScreen(mount);
     loadingUi.update({
       stage: "Preparing session",
       detail: "Loading world metadata...",
@@ -322,6 +337,7 @@ async function main(): Promise<void> {
     let multiplayerHostFromMenu: MultiplayerHostFromMenuSpec | undefined;
     let initialWorldTimeMs: number | undefined;
     let game: Game | null = null;
+    let loadingBackdrop: MenuBackground | null = null;
     try {
       if (result.action === "new") {
         worldUuid = crypto.randomUUID();
@@ -387,6 +403,13 @@ async function main(): Promise<void> {
         multiplayerJoinPassword = result.password;
       }
 
+      if (menuBackground.isLive()) {
+        loadingBackdrop = menuBackground;
+      } else {
+        loadingBackdrop = new MenuBackground();
+        await loadingBackdrop.init(mount);
+      }
+
       const session = auth.getSession();
       game = new Game({
         mount,
@@ -416,15 +439,26 @@ async function main(): Promise<void> {
         });
       }
       await loadingUi.finishAndHold();
-      loadingUi.destroy();
-      mount.classList.remove("stratum-game-loading");
-      game.start();
+      if (loadingBackdrop === null || game === null) {
+        throw new Error("Internal error: world load finished without backdrop or game.");
+      }
+      const fadeBackdrop = loadingBackdrop;
+      const gameToStart = game;
+      await runGameEntryBlackTransition(mount, async () => {
+        fadeBackdrop.destroy();
+        loadingBackdrop = null;
+        loadingUi.destroy();
+        mount.classList.remove("stratum-game-loading");
+        gameToStart.start();
+      });
 
       await game.waitForStop();
 
       await game.destroy();
     } catch (err: unknown) {
       console.error(err);
+      loadingBackdrop?.destroy();
+      loadingBackdrop = null;
       loadingUi.setError(loadingErrorMessage(err));
       if (game !== null) {
         await game.destroy();

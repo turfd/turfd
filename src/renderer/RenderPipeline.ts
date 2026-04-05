@@ -1,14 +1,19 @@
 import {
   Application,
   Container,
+  Culler,
   RenderTexture,
 } from "pixi.js";
 import type { EventBus } from "../core/EventBus";
-import { MAX_RENDER_DEVICE_PIXEL_RATIO } from "../core/constants";
-import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
+import {
+  BACKGROUND_PARALLAX_X,
+  MAX_RENDER_DEVICE_PIXEL_RATIO,
+} from "../core/constants";
 
 import type { World } from "../world/World";
 import type { WorldLightingParams } from "../world/lighting/WorldTime";
+import type { AtlasLoader } from "./AtlasLoader";
+import { BackgroundLayerRenderer } from "./BackgroundLayerRenderer";
 import { Camera } from "./Camera";
 import { LightingComposer } from "./lighting/LightingComposer";
 
@@ -48,18 +53,6 @@ function lerpColor(a: number, b: number, t: number): number {
 }
 
 const SKY_WHITE = 0xffffff;
-const BG_PARALLAX_X = 0.15;
-const BG_PARALLAX_Y = 0.48;
-const BG_HEIGHT_FRAC = 0.8;
-const BG_BASE_DARKNESS = 0.28;
-const BG_NIGHT_DARKNESS_EXTRA = 0.36;
-/**
- * Night backdrop dim strength (0 = none, ~0.42 ≈ strong). Applied via per-draw {@link CanvasRenderingContext2D.filter}
- * brightness on the scratch buffer — avoids a rectangular overlay on the sky canvas (hard edge at yOffset).
- */
-const BG_TERRAIN_NIGHT_EXTRA = 0.42;
-const BG_UNDERGROUND_FADE_START = 64;
-const BG_UNDERGROUND_FADE_RANGE = 224;
 
 function clamp01(t: number): number {
   return Math.min(1, Math.max(0, t));
@@ -88,17 +81,20 @@ export class RenderPipeline implements RenderPipelineLayers {
   private app: Application | null = null;
   private readonly camera: Camera;
   private _lastSkyLighting: WorldLightingParams | null = null;
+  /** Last `worldTimeMs` passed to {@link updateSky}; drives sky CSS invalidation. */
+  private _skyClockMs = 0;
+  /** Last sky canvas paint fingerprint (avoids redundant 2D gradient work between fixed ticks). */
+  private _lastSkyCanvasPaintMs = -1;
+  private _lastSkyCanvasPaintCw = -1;
+  private _lastSkyCanvasPaintCh = -1;
+  /** Last world ms applied to parallax background tint. */
+  private _lastBackgroundLightingMs = -1;
 
   /** Dedicated DOM canvas behind the WebGL canvas — never touched by Pixi. */
   private _skyCssCanvas: HTMLCanvasElement | null = null;
   private _skyCssCtx: CanvasRenderingContext2D | null = null;
   private _skyCssW = 0;
   private _skyCssH = 0;
-  private _bgImage: HTMLImageElement | null = null;
-  private _bgImageLoaded = false;
-  /** Off-DOM buffer: tiles + night multiply; transparent where `bg.png` is transparent so sky shows through. */
-  private _bgScratchCanvas: HTMLCanvasElement | null = null;
-  private _bgScratchCtx: CanvasRenderingContext2D | null = null;
 
   private lastScreenW = 0;
   private lastScreenH = 0;
@@ -113,6 +109,10 @@ export class RenderPipeline implements RenderPipelineLayers {
 
   private _lightingComposer: LightingComposer | null = null;
   private _albedoRT: RenderTexture | null = null;
+
+  private _backgroundLayer: BackgroundLayerRenderer | null = null;
+  private _backgroundWorld: World | null = null;
+  private readonly _backgroundBusUnsubs: (() => void)[] = [];
 
   private readonly onWindowResize = (): void => {
     this.syncSizeFromRenderer();
@@ -159,11 +159,31 @@ export class RenderPipeline implements RenderPipelineLayers {
     return this._lightingComposer;
   }
 
-  /** Call after {@link init} with the game World and bus so light events can be handled. */
-  initLighting(world: World, bus: EventBus): void {
+  /** Call after {@link init} with the game World, bus, and block atlas (same as {@link ChunkRenderer}). */
+  initLighting(world: World, bus: EventBus, blockAtlas: AtlasLoader): void {
     if (this.app === null || this._albedoRT === null) {
       throw new Error("RenderPipeline.init() must complete before initLighting()");
     }
+    this._backgroundWorld = world;
+    const bgRenderer = new BackgroundLayerRenderer(this.app, this.camera);
+    bgRenderer.setWorldAndAtlas(world, blockAtlas);
+    this._backgroundLayer = bgRenderer;
+    const worldRootIndex = this.app.stage.getChildIndex(this.camera.worldRoot);
+    this.app.stage.addChildAt(bgRenderer.displayRoot, worldRootIndex);
+
+    const regenBackground = (): void => {
+      if (this._backgroundLayer === null || this._backgroundWorld === null || this.app === null) {
+        return;
+      }
+      this.syncSizeFromRenderer();
+      this._backgroundLayer.regenerate();
+    };
+
+    this._backgroundBusUnsubs.push(
+      bus.on("world:loaded", regenBackground),
+      bus.on("window:resized", regenBackground),
+    );
+
     this._lightingComposer = new LightingComposer(world, bus, this.app.stage);
     this._lightingComposer.initComposite(this._albedoRT, this.camera);
     this._lightingComposer.resize(
@@ -209,7 +229,6 @@ export class RenderPipeline implements RenderPipelineLayers {
     this._skyCssCanvas = skyCanvas;
     this._skyCssCtx = skyCanvas.getContext("2d");
     this.mount.appendChild(skyCanvas);
-    await this.tryLoadBackgroundImage();
 
     const canvas = application.canvas;
     canvas.style.position = "absolute";
@@ -246,17 +265,20 @@ export class RenderPipeline implements RenderPipelineLayers {
   }
 
   /**
-   * Store latest lighting for {@link render}; sky is painted once per frame there.
+   * Store latest lighting for {@link render}; sky is painted once per frame there (when clock or
+   * canvas size changes). Parallax background tint only updates when `worldTimeMs` changes.
    */
-  updateSky(lighting: WorldLightingParams): void {
+  updateSky(lighting: WorldLightingParams, worldTimeMs: number): void {
     this._lastSkyLighting = lighting;
+    this._skyClockMs = worldTimeMs;
+    if (worldTimeMs !== this._lastBackgroundLightingMs) {
+      this._backgroundLayer?.applyWorldLighting(lighting);
+      this._lastBackgroundLightingMs = worldTimeMs;
+    }
   }
 
   /**
    * Paint the sky gradient + celestial bodies on the 2D canvas under Pixi.
-   *
-   * PERF: Full redraw each rAF; parallax needs camera. Skipping sun/moon when only world time
-   * changes would need a camera/lighting hash (not implemented).
    */
   private paintSkyCss(lighting: WorldLightingParams): void {
     const ctx = this._skyCssCtx;
@@ -304,8 +326,6 @@ export class RenderPipeline implements RenderPipelineLayers {
     ctx.fillStyle = grd;
     ctx.fillRect(0, 0, cw, ch);
 
-    this.paintBackgroundTiled(cw, ch, lighting);
-
     const { sunDir, moonDir, sunIntensity, moonIntensity } = lighting;
     const spread = cw * 0.38;
     const baseY = ch * 0.16;
@@ -338,134 +358,26 @@ export class RenderPipeline implements RenderPipelineLayers {
     }
   }
 
-  private paintBackgroundTiled(cw: number, ch: number, lighting: WorldLightingParams): void {
-    const ctx = this._skyCssCtx;
-    const img = this._bgImage;
-    if (ctx === null || img === null || !this._bgImageLoaded || img.height <= 0) {
+  /** Skip {@link paintSkyCss} when world time and backing size match the last paint. */
+  private maybePaintSkyCss(): void {
+    const lighting = this._lastSkyLighting;
+    if (lighting === null) {
       return;
     }
-
-    const camX = this.camera.getPosition().x;
-    const worldRootY = this.camera.worldRoot.y;
-    const drawH = Math.max(1, Math.round(ch * BG_HEIGHT_FRAC));
-    const drawW = Math.max(1, Math.round((img.width / img.height) * drawH));
-    if (drawW <= 0) {
+    const dpr = effectiveDevicePixelRatio();
+    const cw = Math.max(1, Math.round(this.mount.clientWidth * dpr));
+    const ch = Math.max(1, Math.round(this.mount.clientHeight * dpr));
+    if (
+      this._skyClockMs === this._lastSkyCanvasPaintMs &&
+      cw === this._lastSkyCanvasPaintCw &&
+      ch === this._lastSkyCanvasPaintCh
+    ) {
       return;
     }
-
-    // Pixel-snap parallax offset to prevent sub-pixel filtering seams between tiles.
-    const offsetX = Math.round(camX * BG_PARALLAX_X);
-    const startTile = Math.floor(offsetX / drawW) - 1;
-    const endTile = Math.floor((offsetX + cw) / drawW) + 1;
-    const prevSmoothing = ctx.imageSmoothingEnabled;
-    const zoomY = this.camera.worldRoot.scale.y;
-    const worldCenterY = zoomY !== 0 ? (ch * 0.5 - worldRootY) / zoomY : 0;
-    // Backdrop is centred at world y=0; follows the player underground but locks in place above.
-    const clampedCenterY = Math.max(0, worldCenterY);
-    const yOffset = Math.round(
-      (ch - drawH) * 0.5 - clampedCenterY * zoomY * BG_PARALLAX_Y,
-    );
-    const undergroundDepth = Math.max(0, worldCenterY - BG_UNDERGROUND_FADE_START);
-    const undergroundFade = clamp01(undergroundDepth / BG_UNDERGROUND_FADE_RANGE);
-    const bgAlpha = 1 - undergroundFade;
-    if (bgAlpha <= 0.001) {
-      return;
-    }
-
-    let sctx = this._bgScratchCtx;
-    let scvs = this._bgScratchCanvas;
-    if (scvs === null || sctx === null) {
-      const c = document.createElement("canvas");
-      const x = c.getContext("2d", { alpha: true });
-      if (x === null) {
-        return;
-      }
-      this._bgScratchCanvas = c;
-      this._bgScratchCtx = x;
-      scvs = c;
-      sctx = x;
-    }
-    if (scvs.width !== cw || scvs.height !== ch) {
-      scvs.width = cw;
-      scvs.height = ch;
-    }
-
-    const dayFactor = clamp01(lighting.sunIntensity / 0.65);
-    const nightTerrainT = smoothstep(0.12, 0.88, 1 - dayFactor);
-    const terrainNightStrength = nightTerrainT * BG_TERRAIN_NIGHT_EXTRA;
-
-    sctx.setTransform(1, 0, 0, 1, 0, 0);
-    sctx.globalAlpha = 1;
-    sctx.globalCompositeOperation = "source-over";
-    sctx.clearRect(0, 0, cw, ch);
-    sctx.imageSmoothingEnabled = false;
-    sctx.globalAlpha = bgAlpha;
-
-    const useCanvasFilter = typeof sctx.filter === "string";
-    if (terrainNightStrength > 0.001 && useCanvasFilter) {
-      const b = Math.max(
-        0.34,
-        Math.min(1, 1 - terrainNightStrength * 1.02),
-      );
-      sctx.filter = `brightness(${b})`;
-    }
-
-    for (let tile = startTile; tile <= endTile; tile++) {
-      const screenX = tile * drawW - offsetX;
-      if ((tile & 1) === 0) {
-        sctx.drawImage(img, screenX, yOffset, drawW, drawH);
-        continue;
-      }
-      sctx.save();
-      sctx.translate(screenX + drawW, yOffset);
-      sctx.scale(-1, 1);
-      sctx.drawImage(img, 0, 0, drawW, drawH);
-      sctx.restore();
-    }
-
-    sctx.filter = "none";
-    sctx.globalAlpha = 1;
-
-    if (terrainNightStrength > 0.001 && !useCanvasFilter) {
-      const m = Math.round(255 * (1 - terrainNightStrength));
-      if (m < 255) {
-        sctx.globalCompositeOperation = "multiply";
-        sctx.fillStyle = `rgb(${m},${m},${m})`;
-        sctx.fillRect(0, 0, cw, ch);
-        sctx.globalCompositeOperation = "source-over";
-      }
-    }
-
-    ctx.globalAlpha = 1;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(scvs, 0, 0);
-
-    // Time-of-day tint: always a bit darker, with stronger darkening at night.
-    const moonLift = clamp01(lighting.moonIntensity / 0.22) * 0.15;
-    const darkness = clamp01(
-      BG_BASE_DARKNESS + (1 - dayFactor) * BG_NIGHT_DARKNESS_EXTRA - moonLift,
-    );
-    if (darkness > 0.001) {
-      ctx.fillStyle = `rgba(0,0,0,${darkness})`;
-      ctx.fillRect(0, 0, cw, ch);
-    }
-
-    ctx.imageSmoothingEnabled = prevSmoothing;
-  }
-
-  private async tryLoadBackgroundImage(): Promise<void> {
-    const imageUrl = stratumCoreTextureAssetUrl("bg.png");
-    const image = new Image();
-    image.decoding = "async";
-    image.src = imageUrl;
-    try {
-      await image.decode();
-      this._bgImage = image;
-      this._bgImageLoaded = true;
-    } catch {
-      this._bgImage = null;
-      this._bgImageLoaded = false;
-    }
+    this.paintSkyCss(lighting);
+    this._lastSkyCanvasPaintMs = this._skyClockMs;
+    this._lastSkyCanvasPaintCw = cw;
+    this._lastSkyCanvasPaintCh = ch;
   }
 
   /**
@@ -477,18 +389,27 @@ export class RenderPipeline implements RenderPipelineLayers {
     }
 
     this.syncSizeFromRenderer();
-    if (this._lastSkyLighting !== null) {
-      this.paintSkyCss(this._lastSkyLighting);
-    }
+    this._backgroundLayer?.updateParallax(
+      this.camera.getPosition().x,
+      BACKGROUND_PARALLAX_X,
+    );
+    this.maybePaintSkyCss();
 
     if (this._albedoRT !== null && this._lightingComposer !== null) {
+      // If a prior frame threw during composite (e.g. WebGL shader error), this can stay false
+      // and nothing draws into the albedo RT — terrain/entities look gone until refresh.
+      this.camera.worldRoot.visible = true;
+      Culler.shared.cull(this.camera.worldRoot, this.app.renderer.screen, true);
       this.app.renderer.render({
         container: this.camera.worldRoot,
         target: this._albedoRT,
       });
-      this.camera.worldRoot.visible = false;
-      this.app.render();
-      this.camera.worldRoot.visible = true;
+      try {
+        this.camera.worldRoot.visible = false;
+        this.app.render();
+      } finally {
+        this.camera.worldRoot.visible = true;
+      }
     } else {
       this.app.render();
     }
@@ -609,13 +530,17 @@ export class RenderPipeline implements RenderPipelineLayers {
             pos.y,
             null,
           );
+          cam.worldRoot.visible = true;
           renderer.render({
             container: cam.worldRoot,
             target: this._albedoRT,
           });
-          cam.worldRoot.visible = false;
-          this.app.render();
-          cam.worldRoot.visible = true;
+          try {
+            cam.worldRoot.visible = false;
+            this.app.render();
+          } finally {
+            cam.worldRoot.visible = true;
+          }
         } else {
           this.app.render();
         }
@@ -733,10 +658,14 @@ export class RenderPipeline implements RenderPipelineLayers {
       this._skyCssCanvas?.remove();
       this._skyCssCanvas = null;
       this._skyCssCtx = null;
-      this._bgScratchCanvas = null;
-      this._bgScratchCtx = null;
-      this._bgImage = null;
-      this._bgImageLoaded = false;
+      for (const u of this._backgroundBusUnsubs) {
+        u();
+      }
+      this._backgroundBusUnsubs.length = 0;
+      this._backgroundLayer?.displayRoot.removeFromParent();
+      this._backgroundLayer?.dispose();
+      this._backgroundLayer = null;
+      this._backgroundWorld = null;
       this.layerSky.removeChildren();
       this.app.stage.removeChildren();
       this.camera.worldRoot.removeChildren();

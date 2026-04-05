@@ -1,11 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:item": {
-    "description": { "identifier": "stratum:tall_grass" },
+    "description": {
+      "identifier": "stratum:tall_grass"
+    },
     "components": {
       "stratum:display_name": "Tall Grass",
       "stratum:texture_key": "tall_grass",
-      "stratum:places_block": "stratum:tall_grass_bottom"
+      "stratum:places_block": "stratum:tall_grass_bottom",
+      "stratum:numeric_id": 69
     }
   }
 }

@@ -76,6 +76,36 @@ type PackedEntry = {
   readonly h: number;
 };
 
+const HSL_SAMPLE_ALPHA_MIN = 10;
+const HSL_MIN_SAT_FOR_VECTOR = 0.12;
+
+function rgbToHsl01(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) {
+    return { h: 0, s: 0, l };
+  }
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  switch (max) {
+    case r:
+      h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+      break;
+    case g:
+      h = ((b - r) / d + 2) / 6;
+      break;
+    default:
+      h = ((r - g) / d + 4) / 6;
+  }
+  return { h, s, l };
+}
+
+function hueDegreesFromHsl01(h: number): number {
+  return ((h % 1) + 1) % 1 * 360;
+}
+
 function shelfPack(
   sizes: ReadonlyArray<{ name: string; w: number; h: number }>,
 ): { width: number; height: number; placements: PackedEntry[] } {
@@ -179,7 +209,7 @@ export class AtlasLoader {
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (ctx === null) {
       throw new Error("Canvas 2D context unavailable for texture pack");
     }
@@ -261,7 +291,7 @@ export class AtlasLoader {
       const nextCanvas = document.createElement("canvas");
       nextCanvas.width = totalW;
       nextCanvas.height = totalH;
-      const ctx = nextCanvas.getContext("2d");
+      const ctx = nextCanvas.getContext("2d", { willReadFrequently: true });
       if (ctx === null) {
         throw new Error("Canvas 2D context unavailable for workshop atlas append");
       }
@@ -353,6 +383,141 @@ export class AtlasLoader {
     const tex = resolveTextureMapKey(this.textureMap, frameName);
     if (tex) return [tex];
     throw new Error(`Unknown texture: "${frameName}"`);
+  }
+
+  /**
+   * Packed RGBA atlas canvas after {@link load}; used for CPU sampling / leaf particle baking.
+   */
+  getAtlasCanvas(): HTMLCanvasElement | null {
+    return this.atlasCanvas;
+  }
+
+  /**
+   * Dominant hue in degrees [0, 360) from opaque pixels in a frame (saturation-weighted circular mean).
+   * Returns null if the frame is missing or unreadable.
+   */
+  sampleAverageHueDegrees(frameName: string): number | null {
+    if (this.atlasCanvas === null) {
+      return null;
+    }
+    const tex = resolveTextureMapKey(this.textureMap, frameName);
+    if (!tex) {
+      return null;
+    }
+    const fr = tex.frame;
+    const x = Math.floor(fr.x);
+    const y = Math.floor(fr.y);
+    const w = Math.floor(fr.width);
+    const h = Math.floor(fr.height);
+    if (w < 1 || h < 1) {
+      return null;
+    }
+    const ctx = this.atlasCanvas.getContext("2d", { willReadFrequently: true });
+    if (ctx === null) {
+      return null;
+    }
+    let data: ImageData;
+    try {
+      data = ctx.getImageData(x, y, w, h);
+    } catch {
+      return null;
+    }
+    const px = data.data;
+    let sumXw = 0;
+    let sumYw = 0;
+    let wHue = 0;
+    let ar = 0;
+    let ag = 0;
+    let ab = 0;
+    let nGray = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const a = px[i + 3]!;
+      if (a < HSL_SAMPLE_ALPHA_MIN) {
+        continue;
+      }
+      const r = px[i]! / 255;
+      const g = px[i + 1]! / 255;
+      const b = px[i + 2]! / 255;
+      const hsl = rgbToHsl01(r, g, b);
+      if (hsl.s < HSL_MIN_SAT_FOR_VECTOR) {
+        ar += r;
+        ag += g;
+        ab += b;
+        nGray += 1;
+        continue;
+      }
+      const rad = hsl.h * Math.PI * 2;
+      const wt = hsl.s * (a / 255);
+      sumXw += Math.cos(rad) * wt;
+      sumYw += Math.sin(rad) * wt;
+      wHue += wt;
+    }
+    if (wHue > 1e-4) {
+      const ang = Math.atan2(sumYw, sumXw);
+      return ((ang * (180 / Math.PI)) % 360 + 360) % 360;
+    }
+    if (nGray > 0) {
+      ar /= nGray;
+      ag /= nGray;
+      ab /= nGray;
+      const hsl = rgbToHsl01(ar, ag, ab);
+      return hueDegreesFromHsl01(hsl.h);
+    }
+    return null;
+  }
+
+  /**
+   * Mean RGB of opaque pixels in a frame (components 0–1). Used for leaf particle recoloring.
+   */
+  sampleAverageRgb01(frameName: string): { r: number; g: number; b: number } | null {
+    if (this.atlasCanvas === null) {
+      return null;
+    }
+    const tex = resolveTextureMapKey(this.textureMap, frameName);
+    if (!tex) {
+      return null;
+    }
+    const fr = tex.frame;
+    const x = Math.floor(fr.x);
+    const y = Math.floor(fr.y);
+    const w = Math.floor(fr.width);
+    const h = Math.floor(fr.height);
+    if (w < 1 || h < 1) {
+      return null;
+    }
+    const ctx = this.atlasCanvas.getContext("2d", { willReadFrequently: true });
+    if (ctx === null) {
+      return null;
+    }
+    let data: ImageData;
+    try {
+      data = ctx.getImageData(x, y, w, h);
+    } catch {
+      return null;
+    }
+    const px = data.data;
+    let sr = 0;
+    let sg = 0;
+    let sb = 0;
+    let n = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const a = px[i + 3]!;
+      if (a < HSL_SAMPLE_ALPHA_MIN) {
+        continue;
+      }
+      sr += px[i]!;
+      sg += px[i + 1]!;
+      sb += px[i + 2]!;
+      n += 1;
+    }
+    if (n < 1) {
+      return null;
+    }
+    return {
+      r: sr / (255 * n),
+      g: sg / (255 * n),
+      b: sb / (255 * n),
+    };
   }
 
   private buildVariantMap(): void {

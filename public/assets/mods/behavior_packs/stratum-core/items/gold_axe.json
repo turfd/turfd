@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:gold_axe"
+    },
+    "components": {
+      "stratum:display_name": "Golden Axe",
+      "stratum:texture_key": "gold_axe",
+      "stratum:max_stack": 1,
+      "stratum:tool_type": "axe",
+      "stratum:tool_tier": 2,
+      "stratum:tool_speed": 12,
+      "stratum:max_durability": 32,
+      "stratum:numeric_id": 60
+    }
+  }
+}

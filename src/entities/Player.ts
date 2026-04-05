@@ -12,11 +12,19 @@ import {
   ITEM_THROW_SPEED_PX,
   PLAYER_HEIGHT,
   PLAYER_MAX_HEALTH,
+  PLAYER_MOVE_ANIM_VEL_THRESHOLD,
+  PLAYER_WATER_GRAVITY_MULT,
+  PLAYER_WATER_MAX_SINK_SPEED_PX,
+  PLAYER_WATER_SPEED_MULT,
+  PLAYER_WATER_SWIM_HOLD_MAX_UP_SPEED,
+  PLAYER_WATER_SWIM_HOLD_UP_ACCEL,
   PLAYER_WIDTH,
+  PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT,
   REACH_BLOCKS,
   STEP_INTERVAL,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
+  playerFallDamageFromDistance,
 } from "../core/constants";
 import { getBreakTimeSeconds, canHarvestDrops } from "../core/mining";
 import type { InputAction } from "../input/bindings";
@@ -28,11 +36,26 @@ import { PlayerInventory } from "../items/PlayerInventory";
 import type { BlockDefinition } from "../world/blocks/BlockDefinition";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { World } from "../world/World";
+import {
+  isWaterSourceMetadata,
+  withWaterFlowLevel,
+} from "../world/water/waterMetadata";
 import { getSolidAABBs } from "./physics/Collision";
 import { createAABB, overlaps, sweepAABB, type AABB } from "./physics/AABB";
 
-const WALK_SPEED = 120;
-const SPRINT_SPEED = 190;
+/**
+ * Horizontal caps in blocks/s (1 block ≈ 1 m). Sprint is ~30% over walk (5.612 / 4.317 ≈ 1.3).
+ * While sprinting in the air with a move input, use the sprint-jump reference horizontal speed
+ * (vanilla-style average over hop cycles ≈ 7.127 m/s).
+ */
+const WALK_SPEED_BLOCKS_PER_SEC = 4.317;
+const SPRINT_SPEED_BLOCKS_PER_SEC = 5.612;
+const SPRINT_JUMP_HORIZONTAL_BLOCKS_PER_SEC = 7.127;
+
+const WALK_SPEED = WALK_SPEED_BLOCKS_PER_SEC * BLOCK_SIZE;
+const SPRINT_SPEED = SPRINT_SPEED_BLOCKS_PER_SEC * BLOCK_SIZE;
+/** Sprint + airborne + strafe: higher horizontal cap so repeated sprint-jumps match ~7.127 m/s average. */
+const SPRINT_AIR_SPEED = SPRINT_JUMP_HORIZONTAL_BLOCKS_PER_SEC * BLOCK_SIZE;
 const GRAVITY = 640;
 const TERMINAL_VELOCITY = 600;
 const GROUND_ACCEL = 2200;
@@ -119,6 +142,92 @@ function isOnGround(mover: AABB, solids: ReadonlyArray<AABB>): boolean {
   return false;
 }
 
+function playerAabbOverlapsWater(world: World, pos: { x: number; y: number }): boolean {
+  if (!world.getRegistry().isRegistered("stratum:water")) {
+    return false;
+  }
+  const waterId = world.getWaterBlockId();
+  const region = feetToScreenAABB(pos);
+  const worldYBottom = -(region.y + region.height);
+  const worldYTop = -region.y;
+  const wx0 = Math.floor(region.x / BLOCK_SIZE);
+  const wx1 = Math.floor((region.x + region.width - 1) / BLOCK_SIZE);
+  const wy0 = Math.floor(worldYBottom / BLOCK_SIZE);
+  const wy1 = Math.floor(worldYTop / BLOCK_SIZE);
+  for (let wx = wx0; wx <= wx1; wx++) {
+    for (let wy = wy0; wy <= wy1; wy++) {
+      if (world.getChunkAt(wx, wy) === undefined) {
+        continue;
+      }
+      if (world.getForegroundBlockId(wx, wy) === waterId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function findCollidingSurfaceBelowColumn(
+  world: World,
+  wx: number,
+  startWy: number,
+  waterId: number,
+): number | null {
+  for (let wy = startWy; wy >= WORLD_Y_MIN; wy--) {
+    const def = world.getBlock(wx, wy);
+    if (def.id === waterId) {
+      continue;
+    }
+    if (def.collides) {
+      return wy;
+    }
+  }
+  return null;
+}
+
+function countContiguousWaterAboveSolid(
+  world: World,
+  wx: number,
+  solidWy: number,
+  waterId: number,
+): number {
+  let d = 0;
+  for (let wy = solidWy + 1; wy <= WORLD_Y_MAX; wy++) {
+    if (world.getForegroundBlockId(wx, wy) === waterId) {
+      d++;
+    } else {
+      break;
+    }
+  }
+  return d;
+}
+
+function maxWaterDepthAboveFooting(
+  world: World,
+  pos: { x: number; y: number },
+  waterId: number,
+): number {
+  const region = feetToScreenAABB(pos);
+  const wx0 = Math.floor(region.x / BLOCK_SIZE);
+  const wx1 = Math.floor((region.x + region.width - 1) / BLOCK_SIZE);
+  const feetBy = Math.floor(pos.y / BLOCK_SIZE);
+  let maxD = 0;
+  for (let wx = wx0; wx <= wx1; wx++) {
+    if (world.getChunkAt(wx, feetBy) === undefined) {
+      continue;
+    }
+    const solidWy = findCollidingSurfaceBelowColumn(world, wx, feetBy, waterId);
+    if (solidWy === null) {
+      continue;
+    }
+    maxD = Math.max(
+      maxD,
+      countContiguousWaterAboveSolid(world, wx, solidWy, waterId),
+    );
+  }
+  return maxD;
+}
+
 function chebyshev(ax: number, ay: number, bx: number, by: number): number {
   return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }
@@ -190,6 +299,8 @@ export class Player {
   private readonly itemRegistry: ItemRegistry;
   private readonly airId: number;
   private prevHotbarSlot = 0;
+  /** Downward feet travel (blocks) while airborne; reset on ground. Landing includes this frame’s drop. */
+  private fallDistanceBlocks = 0;
 
   constructor(registry: BlockRegistry, bus: EventBus, audio: AudioEngine, itemRegistry: ItemRegistry) {
     this.bus = bus;
@@ -225,6 +336,7 @@ export class Player {
     this.state.coyoteTimeRemaining = 0;
     this.state.jumpBufferRemaining = 0;
     this.state.health = PLAYER_MAX_HEALTH;
+    this.fallDistanceBlocks = 0;
   }
 
   /** Reduce health; amount is floored. HP does not go below 0. */
@@ -236,12 +348,21 @@ export class Player {
     this.state.health = Math.max(0, this.state.health - d);
   }
 
+  /** Restore health; amount is floored. HP does not exceed `PLAYER_MAX_HEALTH`. */
+  heal(amount: number): void {
+    if (amount <= 0) {
+      return;
+    }
+    const h = Math.floor(amount);
+    this.state.health = Math.min(PLAYER_MAX_HEALTH, this.state.health + h);
+  }
+
   /** Restore position, hotbar, and inventory from persistence. */
   applySavedState(
     feetWorldX: number,
     feetWorldY: number,
     hotbarSlot: number,
-    inventory?: ({ key: string; count: number } | null)[],
+    inventory?: import("../items/PlayerInventory").SerializedInventorySlot[],
     health?: number,
   ): void {
     this.spawnAt(feetWorldX, feetWorldY);
@@ -278,6 +399,7 @@ export class Player {
       state.prevPosition.y = state.position.y;
       state.velocity.x = 0;
       state.velocity.y = 0;
+      this.fallDistanceBlocks = 0;
       return;
     }
 
@@ -295,7 +417,15 @@ export class Player {
     if (input.isDown("right")) {
       moveInput += 1;
     }
-    const speed = input.isDown("sprint") ? SPRINT_SPEED : WALK_SPEED;
+    const sprintHeld = input.isDown("sprint");
+    const inWater = playerAabbOverlapsWater(world, state.position);
+    const waterMult = inWater ? PLAYER_WATER_SPEED_MULT : 1;
+    const speed =
+      (sprintHeld && !state.onGround && moveInput !== 0
+        ? SPRINT_AIR_SPEED
+        : sprintHeld
+          ? SPRINT_SPEED
+          : WALK_SPEED) * waterMult;
     const targetVx = moveInput * speed;
     const accel = state.onGround ? GROUND_ACCEL : AIR_ACCEL;
     const decel = state.onGround ? GROUND_DECEL : AIR_DECEL;
@@ -306,9 +436,22 @@ export class Player {
       state.jumpBufferRemaining = JUMP_BUFFER_SEC;
     }
 
-    state.velocity.y += GRAVITY * dt;
-    if (state.velocity.y > TERMINAL_VELOCITY) {
-      state.velocity.y = TERMINAL_VELOCITY;
+    if (inWater) {
+      state.velocity.y += GRAVITY * PLAYER_WATER_GRAVITY_MULT * dt;
+      if (input.isDown("jump")) {
+        state.velocity.y -= PLAYER_WATER_SWIM_HOLD_UP_ACCEL * dt;
+        if (state.velocity.y < PLAYER_WATER_SWIM_HOLD_MAX_UP_SPEED) {
+          state.velocity.y = PLAYER_WATER_SWIM_HOLD_MAX_UP_SPEED;
+        }
+      }
+      if (state.velocity.y > PLAYER_WATER_MAX_SINK_SPEED_PX) {
+        state.velocity.y = PLAYER_WATER_MAX_SINK_SPEED_PX;
+      }
+    } else {
+      state.velocity.y += GRAVITY * dt;
+      if (state.velocity.y > TERMINAL_VELOCITY) {
+        state.velocity.y = TERMINAL_VELOCITY;
+      }
     }
 
     let mover = feetToScreenAABB(state.position);
@@ -329,6 +472,7 @@ export class Player {
     const feet = screenAABBTofeet(mover);
     state.position.x = feet.x;
     state.position.y = feet.y;
+    const inWaterAfterMove = playerAabbOverlapsWater(world, state.position);
 
     if (hitY && state.velocity.y > 0) {
       state.velocity.y = 0;
@@ -337,17 +481,49 @@ export class Player {
     }
 
     state.onGround = isOnGround(mover, this.solidScratch);
+    const onGroundAfterCollision = state.onGround;
+    const downBlocksThisTick =
+      Math.max(0, state.prevPosition.y - state.position.y) / BLOCK_SIZE;
+    if (!onGroundAfterCollision) {
+      this.fallDistanceBlocks += downBlocksThisTick;
+    } else if (!wasOnGround) {
+      this.fallDistanceBlocks += downBlocksThisTick;
+      let fallDmg = playerFallDamageFromDistance(this.fallDistanceBlocks);
+      if (fallDmg > 0 && world.getRegistry().isRegistered("stratum:water")) {
+        const wDepth = maxWaterDepthAboveFooting(
+          world,
+          state.position,
+          world.getWaterBlockId(),
+        );
+        if (wDepth >= 2) {
+          fallDmg = 0;
+        } else if (wDepth === 1) {
+          fallDmg = Math.floor(fallDmg * PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT);
+        }
+      }
+      if (fallDmg > 0) {
+        this.takeDamage(fallDmg);
+      }
+      this.fallDistanceBlocks = 0;
+    } else {
+      this.fallDistanceBlocks = 0;
+    }
+
     if (state.onGround || wasOnGround) {
       state.coyoteTimeRemaining = COYOTE_TIME_SEC;
     }
 
     const canUseGroundJump = state.onGround || state.coyoteTimeRemaining > 0;
-    if (state.jumpBufferRemaining > 0 && canUseGroundJump) {
+    if (
+      state.jumpBufferRemaining > 0 &&
+      canUseGroundJump &&
+      !inWaterAfterMove
+    ) {
       state.velocity.y = JUMP_VELOCITY;
       state.onGround = false;
       state.jumpBufferRemaining = 0;
       state.coyoteTimeRemaining = 0;
-    } else if (state.onGround && state.velocity.y >= 0) {
+    } else if (state.onGround && state.velocity.y >= 0 && !inWaterAfterMove) {
       state.velocity.y = 0;
     }
 
@@ -355,6 +531,8 @@ export class Player {
       state.facingRight = true;
     } else if (moveInput < 0) {
       state.facingRight = false;
+    } else if (Math.abs(state.velocity.x) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD) {
+      state.facingRight = state.velocity.x > 0;
     }
 
     for (const [action, slot] of HOTBAR_KEYS) {
@@ -387,7 +565,15 @@ export class Player {
         const off = ITEM_THROW_SPAWN_OFFSET_PX;
         const sx = state.position.x + dirX * off;
         const sy = chestY - dirY * off;
-        world.spawnItem(dropStack.itemId, 1, sx, sy, vx, vy);
+        world.spawnItem(
+          dropStack.itemId,
+          1,
+          sx,
+          sy,
+          vx,
+          vy,
+          dropStack.damage ?? 0,
+        );
       }
     }
 
@@ -444,13 +630,6 @@ export class Player {
             if (layer === "bg") {
               if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
               world.setBackgroundBlock(wx, wy, 0);
-              this.bus.emit({
-                type: "game:block-changed",
-                wx,
-                wy,
-                blockId: 0,
-                layer: "bg",
-              } satisfies GameEvent);
             } else if (def.tallGrass === "bottom" || def.tallGrass === "top") {
               const bottomWy =
                 def.tallGrass === "bottom" ? wy : wy - 1;
@@ -470,42 +649,22 @@ export class Player {
                 if (dropsLoot) world.spawnLootForBrokenBlock(bottomCell.id, wx, bottomWy);
                 world.setBlock(wx, topWy, 0);
                 world.setBlock(wx, bottomWy, 0);
-                this.bus.emit({
-                  type: "game:block-changed",
-                  wx,
-                  wy: topWy,
-                  blockId: 0,
-                  layer: "fg",
-                } satisfies GameEvent);
-                this.bus.emit({
-                  type: "game:block-changed",
-                  wx,
-                  wy: bottomWy,
-                  blockId: 0,
-                  layer: "fg",
-                } satisfies GameEvent);
               } else {
                 if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
                 world.setBlock(wx, wy, 0);
-                this.bus.emit({
-                  type: "game:block-changed",
-                  wx,
-                  wy,
-                  blockId: 0,
-                  layer: "fg",
-                } satisfies GameEvent);
               }
             } else {
-              if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
-              world.setBlock(wx, wy, 0);
-              this.bus.emit({
-                type: "game:block-changed",
-                wx,
-                wy,
-                blockId: 0,
-                layer: "fg",
-              } satisfies GameEvent);
+              if (def.identifier === "stratum:furnace") {
+                world.spawnFurnaceItemDropsAt(wx, wy);
+              }
+              if (def.identifier === "stratum:chest") {
+                world.destroyChestForPlayerBreak(wx, wy, dropsLoot);
+              } else {
+                if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
+                world.setBlock(wx, wy, 0);
+              }
             }
+            this.inventory.applyToolUseFromMining(heldSlot);
             state.breakTarget = null;
             state.breakAccum = 0;
             state.breakProgress = 0;
@@ -526,9 +685,127 @@ export class Player {
       state.breakProgress = 0;
     }
 
-    if (input.isJustPressed("place") && inReach) {
-      const cell = world.getBlock(wx, wy);
+    const placeEdgeWithInventoryOpen =
+      input.isWorldInputBlocked() &&
+      !state.backgroundEditMode &&
+      input.isJustPressedPlaceIgnoreWorldBlock();
 
+    if (
+      (input.isJustPressed("place") || placeEdgeWithInventoryOpen) &&
+      inReach
+    ) {
+      const cell = world.getBlock(wx, wy);
+      // Water: replace in-cell like air/replaceable, but only if hasForegroundPlacementSupport
+      // (solid neighbor or back-wall) — same gate as normal blocks below.
+      const canPlaceInCell =
+        cell.id === this.airId || cell.replaceable || cell.water;
+
+      if (placeEdgeWithInventoryOpen && !canPlaceInCell) {
+        if (cell.identifier === "stratum:chest") {
+          this.bus.emit({
+            type: "chest:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+        } else if (cell.identifier === "stratum:crafting_table") {
+          this.bus.emit({
+            type: "crafting-table:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+        } else if (cell.identifier === "stratum:furnace") {
+          this.bus.emit({
+            type: "furnace:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+        }
+      } else if (!input.isWorldInputBlocked()) {
+      let placeHandled = false;
+      if (input.isJustPressed("place") && !state.backgroundEditMode) {
+        const hotbarSlot = state.hotbarSlot % HOTBAR_SIZE;
+        const stack = this.inventory.getStack(hotbarSlot);
+        const held =
+          stack !== null ? this.itemRegistry.getById(stack.itemId) : undefined;
+        const farmlandDryId = this.registry.getByIdentifier(
+          "stratum:farmland_dry",
+        ).id;
+        const farmlandMoistId = this.registry.getByIdentifier(
+          "stratum:farmland_moist",
+        ).id;
+
+        if (held?.key === "stratum:bucket" && cell.water) {
+          if (isWaterSourceMetadata(world.getMetadata(wx, wy))) {
+            const wb = this.itemRegistry.getByKey("stratum:water_bucket");
+            if (wb !== undefined && world.setBlock(wx, wy, this.airId)) {
+              this.inventory.setStack(hotbarSlot, { itemId: wb.id, count: 1 });
+              placeHandled = true;
+              this.audio.playSfx(getPlaceSound("generic"), {
+                pitchVariance: 20,
+              });
+            }
+          }
+        }
+
+        if (
+          !placeHandled &&
+          held?.key === "stratum:wheat_seeds" &&
+          (cell.id === farmlandDryId || cell.id === farmlandMoistId)
+        ) {
+          const above = world.getBlock(wx, wy + 1);
+          const clearAbove =
+            above.id === this.airId ||
+            (above.replaceable && above.id !== this.airId);
+          if (clearAbove) {
+            if (above.id !== this.airId) {
+              world.spawnLootForBrokenBlock(above.id, wx, wy + 1);
+              world.setBlock(wx, wy + 1, this.airId);
+            }
+            const wheat0 = this.registry.getByIdentifier(
+              "stratum:wheat_stage_0",
+            ).id;
+            if (world.setBlock(wx, wy + 1, wheat0)) {
+              if (this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                placeHandled = true;
+                this.audio.playSfx(getPlaceSound("grass"), {
+                  pitchVariance: 25,
+                });
+              } else {
+                world.setBlock(wx, wy + 1, this.airId);
+              }
+            }
+          }
+        }
+
+        if (!placeHandled && held?.toolType === "hoe") {
+          if (cell.id !== farmlandDryId && cell.id !== farmlandMoistId) {
+            if (
+              cell.identifier === "stratum:dirt" ||
+              cell.identifier === "stratum:grass"
+            ) {
+              const above = world.getBlock(wx, wy + 1);
+              const clearAbove =
+                above.id === this.airId ||
+                (above.replaceable && above.id !== this.airId);
+              if (clearAbove) {
+                if (above.id !== this.airId) {
+                  world.spawnLootForBrokenBlock(above.id, wx, wy + 1);
+                  world.setBlock(wx, wy + 1, this.airId);
+                }
+                if (world.setBlock(wx, wy, farmlandDryId)) {
+                  this.inventory.applyToolUseFromMining(hotbarSlot);
+                  this.audio.playSfx(getPlaceSound("dirt"), {
+                    pitchVariance: 30,
+                  });
+                  placeHandled = true;
+                }
+              }
+            }
+          }
+        }
+
+      }
+      if (!placeHandled) {
       if (state.backgroundEditMode) {
         const bgEmpty = world.getBackgroundId(wx, wy) === 0;
         if (bgEmpty) {
@@ -548,21 +825,12 @@ export class Player {
                   this.audio.playSfx(getPlaceSound(placedDef.material), {
                     pitchVariance: 30,
                   });
-                  this.bus.emit({
-                    type: "game:block-changed",
-                    wx,
-                    wy,
-                    blockId: placesBlockId,
-                    layer: "bg",
-                  } satisfies GameEvent);
                 }
               }
             }
           }
         }
       } else {
-      const canPlaceInCell =
-        cell.id === this.airId || cell.replaceable;
       if (canPlaceInCell) {
         const hotbarSlot = state.hotbarSlot % HOTBAR_SIZE;
         const stack = this.inventory.getStack(hotbarSlot);
@@ -631,20 +899,6 @@ export class Player {
                     this.audio.playSfx(getPlaceSound(placed.material), {
                       pitchVariance: 30,
                     });
-                    this.bus.emit({
-                      type: "game:block-changed",
-                      wx,
-                      wy,
-                      blockId: placesBlockId,
-                      layer: "fg",
-                    } satisfies GameEvent);
-                    this.bus.emit({
-                      type: "game:block-changed",
-                      wx,
-                      wy: wy + 1,
-                      blockId: topId,
-                      layer: "fg",
-                    } satisfies GameEvent);
                   }
                 }
               }
@@ -672,29 +926,109 @@ export class Player {
                   !overlapsAnyPlayer &&
                   world.canPlaceForegroundWithCactusRules(wx, wy, placesBlockId)
                 ) {
-                  const placed = this.registry.getById(placesBlockId);
-                  if (!world.setBlock(wx, wy, placesBlockId)) {
+                  const placedDefForSfx = this.registry.getById(placesBlockId);
+                  const waterBlockId = world.getWaterBlockId();
+                  const placedCellOk =
+                    placesBlockId === waterBlockId &&
+                    itemDef?.key === "stratum:water_bucket"
+                      ? world.setBlock(wx, wy, waterBlockId, {
+                          cellMetadata: withWaterFlowLevel(0, 0),
+                        })
+                      : world.setBlock(wx, wy, placesBlockId);
+                  if (!placedCellOk) {
                     // vertical bounds
                   } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
-                    world.setBlock(wx, wy, 0);
+                    world.setBlock(wx, wy, this.airId);
                   } else {
-                    this.audio.playSfx(getPlaceSound(placed.material), {
-                      pitchVariance: 30,
-                    });
-                    this.bus.emit({
-                      type: "game:block-changed",
-                      wx,
-                      wy,
-                      blockId: placesBlockId,
-                      layer: "fg",
-                    } satisfies GameEvent);
+                    if (itemDef?.key === "stratum:water_bucket") {
+                      const bdef = this.itemRegistry.getByKey("stratum:bucket");
+                      if (bdef !== undefined) {
+                        this.inventory.setStack(hotbarSlot, {
+                          itemId: bdef.id,
+                          count: 1,
+                        });
+                      }
+                    }
+                    this.audio.playSfx(
+                      getPlaceSound(placedDefForSfx.material),
+                      {
+                        pitchVariance: 30,
+                      },
+                    );
                   }
                 }
               }
             }
           }
         }
+      } else if (cell.identifier === "stratum:chest") {
+        this.bus.emit({
+          type: "chest:open-request",
+          wx,
+          wy,
+        } satisfies GameEvent);
+      } else if (cell.identifier === "stratum:crafting_table") {
+        this.bus.emit({
+          type: "crafting-table:open-request",
+          wx,
+          wy,
+        } satisfies GameEvent);
+      } else if (cell.identifier === "stratum:furnace") {
+        this.bus.emit({
+          type: "furnace:open-request",
+          wx,
+          wy,
+        } satisfies GameEvent);
       }
+      }
+
+      if (
+        !placeHandled &&
+        input.isJustPressed("place") &&
+        !state.backgroundEditMode
+      ) {
+        const hotbarSlot = state.hotbarSlot % HOTBAR_SIZE;
+        const stack = this.inventory.getStack(hotbarSlot);
+        const heldEdible =
+          stack !== null ? this.itemRegistry.getById(stack.itemId) : undefined;
+        const eatHp = heldEdible?.eatRestoreHealth;
+        if (
+          eatHp !== undefined &&
+          eatHp > 0 &&
+          state.health < PLAYER_MAX_HEALTH &&
+          this.inventory.consumeOneFromSlot(hotbarSlot)
+        ) {
+          this.heal(eatHp);
+          this.audio.playSfx(getPlaceSound("generic"), {
+            pitchVariance: 18,
+          });
+        }
+      }
+      }
+      }
+    }
+
+    if (
+      input.isJustPressed("place") &&
+      !input.isWorldInputBlocked() &&
+      !state.backgroundEditMode &&
+      !inReach
+    ) {
+      const hotbarSlot = state.hotbarSlot % HOTBAR_SIZE;
+      const stack = this.inventory.getStack(hotbarSlot);
+      const heldFar =
+        stack !== null ? this.itemRegistry.getById(stack.itemId) : undefined;
+      const eatHpFar = heldFar?.eatRestoreHealth;
+      if (
+        eatHpFar !== undefined &&
+        eatHpFar > 0 &&
+        state.health < PLAYER_MAX_HEALTH &&
+        this.inventory.consumeOneFromSlot(hotbarSlot)
+      ) {
+        this.heal(eatHpFar);
+        this.audio.playSfx(getPlaceSound("generic"), {
+          pitchVariance: 18,
+        });
       }
     }
 
@@ -719,6 +1053,15 @@ export class Player {
           volume: 0.4,
           pitchVariance: 80,
         });
+        if (!blockBelow.water && blockBelow.id !== this.airId) {
+          this.bus.emit({
+            type: "entity:ground-kick",
+            feetWorldX: state.position.x,
+            feetWorldY: state.position.y,
+            velocityX: state.velocity.x,
+            blockId: blockBelow.id,
+          } satisfies GameEvent);
+        }
       }
     } else {
       state.stepAccum = 0;

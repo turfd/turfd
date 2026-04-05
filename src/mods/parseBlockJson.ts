@@ -4,6 +4,9 @@
 import { z } from "zod";
 import type { BlockDefinitionBase, BlockMaterial } from "../core/blockDefinition";
 
+/** Block JSON after parse; {@link numericId} becomes {@link BlockDefinition.id} at registration. */
+export type ParsedBlockDefinition = BlockDefinitionBase & { readonly numericId: number };
+
 const blockMaterialSchema = z.enum([
   "stone",
   "dirt",
@@ -35,7 +38,15 @@ const stratumBlockComponentsSchema = z
     "stratum:replaceable": z.boolean().optional(),
     "stratum:tall_grass": z.enum(["none", "bottom", "top"]).optional(),
     "stratum:plant_foot_offset_px": z.number().int().min(0).max(15).optional(),
+    /** Whole-pixel vertical shift for plant quads after foot crop (see {@link BlockDefinitionBase.plantRenderOffsetYPx}). */
+    "stratum:plant_render_offset_y_px": z.number().int().min(-8).max(8).optional(),
+    /** Whole-pixel horizontal sway for plants (see {@link BlockDefinitionBase.windSwayMaxPx}). */
+    "stratum:wind_sway_max_px": z.number().int().min(1).max(3).optional(),
     "stratum:tags": z.array(z.string()).optional(),
+    /** Furnace: burn time per block item (`burn_seconds` per consumed unit). */
+    "stratum:fuel": z.object({ burn_seconds: z.number().positive() }).strict().optional(),
+    /** Stable save/wire id; must be dense 0..N-1 with air = 0 (`BlockRegistry.registerInOrder`). */
+    "stratum:numeric_id": z.number().int().min(0).max(65535),
   })
   .strict();
 
@@ -54,7 +65,7 @@ const stratumBlockJsonSchema = z
 /**
  * Parse and validate block JSON. Unknown top-level or component keys fail Zod `.strict()`.
  */
-export function parseBlockJson(raw: unknown): BlockDefinitionBase {
+export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
   const parsed = stratumBlockJsonSchema.parse(raw);
   const block = parsed["stratum:block"];
   const c = block.components;
@@ -81,6 +92,10 @@ export function parseBlockJson(raw: unknown): BlockDefinitionBase {
     replaceable: c["stratum:replaceable"] ?? false,
     tallGrass: c["stratum:tall_grass"] ?? "none",
     plantFootOffsetPx: c["stratum:plant_foot_offset_px"],
+    plantRenderOffsetYPx: c["stratum:plant_render_offset_y_px"],
+    windSwayMaxPx: c["stratum:wind_sway_max_px"],
     tags: c["stratum:tags"],
+    fuelBurnSeconds: c["stratum:fuel"]?.burn_seconds,
+    numericId: c["stratum:numeric_id"],
   };
 }

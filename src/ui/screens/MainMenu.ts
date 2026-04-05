@@ -4,13 +4,14 @@
  */
 import type { IAuthProvider } from "../../auth/IAuthProvider";
 import type { EventBus } from "../../core/EventBus";
+import { unixRandom01 } from "../../core/unixRandom";
 import type { ModRepository } from "../../mods/ModRepository";
 import { mountProfileScreen } from "./ProfileScreen";
 import type {
   IndexedDBStore,
   WorldMetadata,
 } from "../../persistence/IndexedDBStore";
-import { readVolumeStored, VOL_KEYS } from "../../audio/volumeSettings";
+import { mountSettingsPanel } from "../settings/mountSettingsPanel";
 import { HOST_PEER_SUFFIX_ALPHABET } from "../../network/hostPeerId";
 import {
   getMyRoomRating,
@@ -20,7 +21,6 @@ import {
   setStratumRoomRating,
   type ListedRoom,
 } from "../../network/roomDirectoryApi";
-import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
 import { createWorldPackEditorController } from "../worldEditPacksUi";
 import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
 import { MenuBackground } from "./MenuBackground";
@@ -39,6 +39,12 @@ export type MainMenuResult =
       roomPassword?: string;
     };
 
+/** Returned when leaving the menu; reuse {@link menuBackground} behind the loading overlay. */
+export type MainMenuExit = {
+  result: MainMenuResult;
+  menuBackground: MenuBackground;
+};
+
 const STRATUM_ROOM_HOST_PREFS_KEY = "stratum_room_host_prefs";
 const ROOM_TITLE_MAX_LEN = 48;
 const ROOM_MOTD_MAX_LEN = 280;
@@ -51,14 +57,14 @@ const ROOM_CODE_VALID = new RegExp(
 // ---------------------------------------------------------------------------
 
 function randomSixDigitSeed(): number {
-  return Math.floor(Math.random() * 900_000) + 100_000;
+  return Math.floor(unixRandom01() * 900_000) + 100_000;
 }
 
 function parseSeedInput(raw: string): number {
   const t = raw.trim();
   if (t === "") return randomSixDigitSeed();
   const n = parseInt(t, 10);
-  return Number.isNaN(n) ? Math.floor(Math.random() * 999_999) : n;
+  return Number.isNaN(n) ? Math.floor(unixRandom01() * 999_999) : n;
 }
 
 function formatDate(ts: number): string {
@@ -548,7 +554,6 @@ function injectStyles(base: string): void {
     .mm-host-world-modal-card {
       display: flex;
       flex-direction: column;
-      width: min(40rem, 100%);
       max-height: min(88vh, 720px);
       min-height: 0;
     }
@@ -565,8 +570,6 @@ function injectStyles(base: string): void {
     .mm-host-world-editor-card {
       display: flex;
       flex-direction: column;
-      width: min(52rem, 100%);
-      max-width: 100%;
       max-height: min(92vh, 820px);
       min-height: 0;
       padding: 0;
@@ -1700,6 +1703,98 @@ function injectStyles(base: string): void {
       line-height: 1.45;
       color: var(--mm-ink-soft);
     }
+    .mm-workshop-library-stacks {
+      margin-top: 4px;
+    }
+    .mm-workshop-library-well {
+      min-height: 72px;
+    }
+    .mm-workshop-library-pack-row {
+      align-items: flex-start;
+      cursor: pointer;
+      margin-bottom: 8px;
+    }
+    .mm-workshop-library-pack-row:last-child {
+      margin-bottom: 0;
+    }
+    .mm-workshop-library-pack-row:focus-visible {
+      outline: 2px solid var(--mm-ink-mid);
+      outline-offset: 2px;
+    }
+    .mm-workshop-library-pack-icon-wrap {
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--mm-border);
+      background: rgba(0, 0, 0, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .mm-workshop-library-pack-icon {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    .mm-workshop-library-pack-icon-ph {
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      background: linear-gradient(135deg, var(--mm-border-strong), var(--mm-border));
+      opacity: 0.55;
+    }
+    .mm-workshop-library-pack-text {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .mm-workshop-library-pack-title-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+    }
+    .mm-workshop-library-pack-name {
+      font-family: 'BoldPixels', monospace;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--mm-ink);
+    }
+    .mm-workshop-library-pack-meta {
+      font-family: 'M5x7', monospace;
+      font-size: calc(15px + var(--mm-m5-nudge));
+      line-height: 1.35;
+      color: var(--mm-ink-soft);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mm-workshop-library-pack-desc {
+      margin: 0;
+      font-family: 'M5x7', monospace;
+      font-size: calc(15px + var(--mm-m5-nudge));
+      line-height: 1.45;
+      color: var(--mm-ink-mid);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .mm-workshop-library-pack-aside {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+      min-width: 112px;
+    }
     .mm-workshop-upload-steps {
       margin: 0 0 6px;
       font-family: 'BoldPixels', monospace;
@@ -1917,6 +2012,14 @@ function injectStyles(base: string): void {
       corner-shape: squircle;
       padding: 1.45rem 1.6rem;
       animation: mm-modal-card-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+    /* These use two classes so width wins over the base .mm-modal-card rule above. */
+    .mm-modal-card.mm-host-world-modal-card {
+      width: min(42rem, 100%);
+    }
+    .mm-modal-card.mm-host-world-editor-card {
+      width: min(70rem, calc(100vw - 2.75rem));
+      max-width: 100%;
     }
     .mm-modal-title {
       font-family: 'BoldPixels', monospace;
@@ -2793,7 +2896,7 @@ export class MainMenu {
     store: IndexedDBStore,
     auth: IAuthProvider,
     workshop?: MainMenuWorkshopDeps,
-  ): Promise<MainMenuResult> {
+  ): Promise<MainMenuExit> {
     const base = import.meta.env.BASE_URL;
     injectStyles(base);
 
@@ -2803,7 +2906,7 @@ export class MainMenu {
       console.warn("[MainMenu] Background world failed to load:", err);
     });
 
-    return new Promise<MainMenuResult>((resolve) => {
+    return new Promise<MainMenuExit>((resolve) => {
       const root = document.createElement("div");
       root.className = "mm-root";
 
@@ -2854,6 +2957,12 @@ export class MainMenu {
 
       let profileUnmount: (() => void) | null = null;
       let workshopUnmount: (() => void) | null = null;
+      let settingsPanelAbort: AbortController | null = null;
+
+      function abortSettingsPanel(): void {
+        settingsPanelAbort?.abort();
+        settingsPanelAbort = null;
+      }
 
       function disposeProfile(): void {
         if (profileUnmount !== null) {
@@ -2978,8 +3087,7 @@ export class MainMenu {
         createBtn.addEventListener("click", () => {
           const name = nameInput.value.trim() || "My World";
           const seed = parseSeedInput(seedInput.value);
-          cleanup();
-          resolve({ action: "new", name, seed });
+          exitToGame({ action: "new", name, seed });
         });
         actions.appendChild(cancelBtn);
         actions.appendChild(createBtn);
@@ -2999,6 +3107,7 @@ export class MainMenu {
       // -- Render functions --------------------------------------------------
 
       function renderHome(): void {
+        abortSettingsPanel();
         disposeProfile();
         disposeWorkshop();
         content.replaceChildren();
@@ -3049,7 +3158,7 @@ export class MainMenu {
         if (tab === "solo") renderSolo();
         else if (tab === "online") renderOnline();
         else if (tab === "workshop") renderWorkshop();
-        else if (tab === "settings") renderSettings();
+        else if (tab === "settings") void renderSettings();
         else if (tab === "profile") renderProfile();
       }
 
@@ -3057,6 +3166,7 @@ export class MainMenu {
         if (workshop === undefined) {
           return;
         }
+        abortSettingsPanel();
         disposeProfile();
         disposeWorkshop();
         content.replaceChildren();
@@ -3078,6 +3188,7 @@ export class MainMenu {
       }
 
       function renderProfile(): void {
+        abortSettingsPanel();
         disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
@@ -3086,6 +3197,7 @@ export class MainMenu {
       }
 
       function renderSolo(): void {
+        abortSettingsPanel();
         disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
@@ -3122,8 +3234,7 @@ export class MainMenu {
             }
             for (const world of worlds) {
               appendWorldRowToList(list, world, () => {
-                cleanup();
-                resolve({ action: "load", uuid: world.uuid });
+                exitToGame({ action: "load", uuid: world.uuid });
               }, {
                 onEdit: (w) => {
                   openWorldEditor(w);
@@ -3159,8 +3270,6 @@ export class MainMenu {
       }
 
       function loadHostPrefs(): {
-        roomTitle: string;
-        motd: string;
         isPrivate: boolean;
         worldUuid: string;
       } {
@@ -3168,23 +3277,17 @@ export class MainMenu {
           const raw = localStorage.getItem(STRATUM_ROOM_HOST_PREFS_KEY);
           if (raw === null) {
             return {
-              roomTitle: "",
-              motd: "",
               isPrivate: false,
               worldUuid: "",
             };
           }
           const j = JSON.parse(raw) as Record<string, unknown>;
           return {
-            roomTitle: typeof j.roomTitle === "string" ? j.roomTitle : "",
-            motd: typeof j.motd === "string" ? j.motd : "",
             isPrivate: j.isPrivate === true,
             worldUuid: typeof j.worldUuid === "string" ? j.worldUuid : "",
           };
         } catch {
           return {
-            roomTitle: "",
-            motd: "",
             isPrivate: false,
             worldUuid: "",
           };
@@ -3192,16 +3295,12 @@ export class MainMenu {
       }
 
       function saveHostPrefs(p: {
-        roomTitle: string;
-        motd: string;
         isPrivate: boolean;
         worldUuid: string;
       }): void {
         localStorage.setItem(
           STRATUM_ROOM_HOST_PREFS_KEY,
           JSON.stringify({
-            roomTitle: p.roomTitle,
-            motd: p.motd,
             isPrivate: p.isPrivate,
             worldUuid: p.worldUuid,
           }),
@@ -3296,49 +3395,25 @@ export class MainMenu {
           descriptionInput.value = fresh.description ?? "";
           descriptionField.appendChild(descriptionInput);
 
-          let roomTitleInput: HTMLInputElement | undefined;
-          let motdInput: HTMLTextAreaElement | undefined;
           let privCb: HTMLInputElement | undefined;
           let passInput: HTMLInputElement | undefined;
 
-          let roomSectionTitle: HTMLElement | undefined;
-          let roomTitleField: HTMLElement | undefined;
-          let motdField: HTMLElement | undefined;
-          let roomMotdCountEl: HTMLElement | undefined;
+          let roomListingNote: HTMLElement | undefined;
           let privRow: HTMLElement | undefined;
           let passField: HTMLElement | undefined;
 
           if (opts.mode === "host") {
             const hp = opts.hostRoomPrefs ?? {
-              roomTitle: "",
-              motd: "",
               isPrivate: false,
               worldUuid: "",
             };
 
-            roomSectionTitle = document.createElement("h4");
-            roomSectionTitle.className = "mm-bedrock-world-section-subtitle";
-            roomSectionTitle.textContent = "Room listing";
-
-            roomTitleField = makeField(`Room name (max ${ROOM_TITLE_MAX_LEN})`);
-            roomTitleInput = document.createElement("input");
-            roomTitleInput.type = "text";
-            roomTitleInput.maxLength = ROOM_TITLE_MAX_LEN;
-            roomTitleField.appendChild(roomTitleInput);
-
-            motdField = makeField(
-              `Room description / MOTD (max ${ROOM_MOTD_MAX_LEN})`,
-            );
-            motdInput = document.createElement("textarea");
-            motdInput.className = "mm-textarea";
-            motdInput.maxLength = ROOM_MOTD_MAX_LEN;
-            motdField.appendChild(motdInput);
-
-            roomMotdCountEl = document.createElement("p");
-            roomMotdCountEl.className = "mm-modal-meta";
-            const updateRoomMotdCount = (): void => {
-              roomMotdCountEl!.textContent = `${motdInput!.value.length} / ${ROOM_MOTD_MAX_LEN} characters`;
-            };
+            roomListingNote = document.createElement("p");
+            roomListingNote.className = "mm-modal-meta";
+            roomListingNote.style.marginTop = "6px";
+            roomListingNote.textContent =
+              "The public room list uses this world’s name and description above (title up to " +
+              `${ROOM_TITLE_MAX_LEN} chars, description up to ${ROOM_MOTD_MAX_LEN}).`;
 
             privRow = document.createElement("div");
             privRow.className = "mm-settings-row";
@@ -3362,14 +3437,7 @@ export class MainMenu {
               passField!.style.display = privCb!.checked ? "block" : "none";
             };
 
-            roomTitleInput.value =
-              hp.worldUuid === worldUuid && hp.roomTitle.trim() !== ""
-                ? hp.roomTitle
-                : "My room";
-            motdInput.value = hp.motd;
             privCb.checked = hp.isPrivate;
-            updateRoomMotdCount();
-            motdInput.addEventListener("input", updateRoomMotdCount);
             syncPassField();
             privCb.addEventListener("change", syncPassField);
           }
@@ -3470,21 +3538,16 @@ export class MainMenu {
           if (opts.mode === "host") {
             const hostRoomBtn = makeBtn("Host room", "mm-btn");
             hostRoomBtn.addEventListener("click", () => {
-              if (
-                roomTitleInput === undefined ||
-                motdInput === undefined ||
-                privCb === undefined ||
-                passInput === undefined
-              ) {
+              if (privCb === undefined || passInput === undefined) {
                 return;
               }
-              const roomTitle = roomTitleInput.value.trim();
-              if (roomTitle.length < 1) {
-                feedback.textContent = "Enter a room name.";
-                feedback.classList.add("mm-feedback-error");
-                return;
-              }
-              const motd = motdInput.value.slice(0, ROOM_MOTD_MAX_LEN);
+              const roomTitle = (nameInput.value.trim() || "My World").slice(
+                0,
+                ROOM_TITLE_MAX_LEN,
+              );
+              const motd = descriptionInput.value
+                .trim()
+                .slice(0, ROOM_MOTD_MAX_LEN);
               const isPrivate = privCb.checked;
               const pw = passInput.value;
               if (isPrivate && pw.trim().length < 4) {
@@ -3497,13 +3560,10 @@ export class MainMenu {
               void persistWorldEdits()
                 .then(() => {
                   saveHostPrefs({
-                    roomTitle,
-                    motd,
                     isPrivate,
                     worldUuid,
                   });
-                  cleanup();
-                  resolve({
+                  exitToGame({
                     action: "multiplayer-host",
                     worldUuid,
                     roomTitle,
@@ -3567,17 +3627,11 @@ export class MainMenu {
           generalPanel.appendChild(descriptionField);
           if (
             opts.mode === "host" &&
-            roomSectionTitle !== undefined &&
-            roomTitleField !== undefined &&
-            motdField !== undefined &&
-            roomMotdCountEl !== undefined &&
+            roomListingNote !== undefined &&
             privRow !== undefined &&
             passField !== undefined
           ) {
-            generalPanel.appendChild(roomSectionTitle);
-            generalPanel.appendChild(roomTitleField);
-            generalPanel.appendChild(motdField);
-            generalPanel.appendChild(roomMotdCountEl);
+            generalPanel.appendChild(roomListingNote);
             generalPanel.appendChild(privRow);
             generalPanel.appendChild(passField);
           }
@@ -3675,8 +3729,7 @@ export class MainMenu {
               "Use six characters from A–Z and 2–9 (excludes I, O, 0, 1).";
             return;
           }
-          cleanup();
-          resolve({ action: "multiplayer-join", roomCode: code });
+          exitToGame({ action: "multiplayer-join", roomCode: code });
         };
         goBtn.addEventListener("click", attemptJoin);
         actions.appendChild(cancelBtn);
@@ -3843,6 +3896,7 @@ export class MainMenu {
       }
 
       function renderOnline(): void {
+        abortSettingsPanel();
         disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
@@ -4194,16 +4248,14 @@ export class MainMenu {
                 joinErr.textContent = "Enter the room password.";
                 return;
               }
-              cleanup();
-              resolve({
+              exitToGame({
                 action: "multiplayer-join",
                 roomCode: code,
                 password: pw,
               });
               return;
             }
-            cleanup();
-            resolve({ action: "multiplayer-join", roomCode: code });
+            exitToGame({ action: "multiplayer-join", roomCode: code });
           });
         }
 
@@ -4325,7 +4377,8 @@ export class MainMenu {
         content.appendChild(panel);
       }
 
-      function renderSettings(): void {
+      async function renderSettings(): Promise<void> {
+        abortSettingsPanel();
         disposeWorkshop();
         disposeProfile();
         content.replaceChildren();
@@ -4333,94 +4386,30 @@ export class MainMenu {
 
         const panel = document.createElement("div");
         panel.className = "mm-panel mm-settings-panel";
-
-        const title = document.createElement("p");
-        title.className = "mm-panel-title";
-        title.textContent = "Settings";
-        panel.appendChild(title);
-
-        const volSection = document.createElement("div");
-        volSection.className = "mm-settings-section";
-        volSection.textContent = "Volume";
-        panel.appendChild(volSection);
-
-        const volumeSliders: Array<{
-          label: string;
-          key: string;
-          def: number;
-        }> = [
-          { label: "Master", key: VOL_KEYS.master, def: 80 },
-          { label: "Music", key: VOL_KEYS.music, def: 60 },
-          { label: "SFX", key: VOL_KEYS.sfx, def: 80 },
-        ];
-        for (const { label, key, def } of volumeSliders) {
-          const row = document.createElement("div");
-          row.className = "mm-settings-row";
-          const lbl = document.createElement("label");
-          lbl.textContent = label;
-          const slider = document.createElement("input");
-          slider.type = "range";
-          slider.min = "0";
-          slider.max = "100";
-          slider.value = String(readVolumeStored(key, def));
-          const val = document.createElement("span");
-          val.className = "mm-settings-val";
-          val.textContent = slider.value;
-          slider.addEventListener("input", () => {
-            val.textContent = slider.value;
-            localStorage.setItem(key, slider.value);
-          });
-          row.appendChild(lbl);
-          row.appendChild(slider);
-          row.appendChild(val);
-          panel.appendChild(row);
-        }
-
-        const texSection = document.createElement("div");
-        texSection.className = "mm-settings-section";
-        texSection.textContent = "Texture packs";
-        panel.appendChild(texSection);
-        const texHint = document.createElement("p");
-        texHint.className = "mm-settings-coming-soon";
-        texHint.style.marginBottom = "10px";
-        texHint.textContent =
-          "Global resource packs load after each world’s resource packs. Changes apply the next time you start or load a world.";
-        panel.appendChild(texHint);
-        const texBtn = makeBtn(
-          "Manage global texture packs…",
-          "mm-btn mm-btn-secondary",
-        );
-        texBtn.addEventListener("click", () => {
-          void openGlobalTexturePacksModal({
-            store,
-            getInstalled: () =>
-              workshop?.modRepository.getInstalled() ?? [],
-          });
-        });
-        panel.appendChild(texBtn);
-
-        const bindSection = document.createElement("div");
-        bindSection.className = "mm-settings-section";
-        bindSection.textContent = "Controls";
-        panel.appendChild(bindSection);
-        const comingSoon = document.createElement("p");
-        comingSoon.className = "mm-settings-coming-soon";
-        comingSoon.textContent = "Key rebinding coming in a future update.";
-        panel.appendChild(comingSoon);
-
         content.appendChild(panel);
+
+        settingsPanelAbort = new AbortController();
+        await mountSettingsPanel(panel, {
+          store,
+          getInstalled: () =>
+            workshop?.modRepository.getInstalled() ?? [],
+          signal: settingsPanelAbort.signal,
+        });
       }
 
       // -- Cleanup -----------------------------------------------------------
       function cleanup(): void {
         clearOnlinePoll();
+        abortSettingsPanel();
         disposeWorkshop();
         disposeProfile();
         root.remove();
-        // Destroy background: the destroyed flag stops init() mid-flight if still running.
-        // main.ts calls mount.replaceChildren() next, which removes any residual canvas.
-        bg.destroy();
         void bgPromise; // ensure promise is observed (suppress unhandled rejection lint)
+      }
+
+      function exitToGame(menuResult: MainMenuResult): void {
+        cleanup();
+        resolve({ result: menuResult, menuBackground: bg });
       }
 
       // -- Assemble ----------------------------------------------------------

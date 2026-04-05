@@ -1,16 +1,19 @@
 /**
  * Timed block interactions: leaf decay, grass smothering, grass spreading,
- * sapling growth.
+ * sapling growth, farmland moisture (dry ↔ moist near water), wheat crop growth.
  *
  * Runs each fixed tick on the authoritative side (host / offline).  Maintains a
  * time-delayed event queue so changes feel organic rather than instant.
  */
 
 import type { EventBus } from "../core/EventBus";
+import { unixRandom01 } from "../core/unixRandom";
 import type { GameEvent } from "../core/types";
-import { WORLDGEN_NO_COLLIDE } from "../core/constants";
+import { CHUNK_SIZE, WORLDGEN_NO_COLLIDE } from "../core/constants";
 import type { BlockRegistry } from "./blocks/BlockRegistry";
 import type { World } from "./World";
+import { getBlock } from "./chunk/Chunk";
+import { chunkToWorldOrigin, worldToChunk } from "./chunk/ChunkCoord";
 import { forEachDeciduousBushCell, forEachSpruceBushCell } from "./gen/treeCanopy";
 
 // ---------------------------------------------------------------------------
@@ -61,11 +64,39 @@ const SPRUCE_CLEARANCE = 10;
 /** Vertical clearance required above sapling for birch tree growth (taller than oak). */
 const BIRCH_CLEARANCE = 9;
 
+/** Chebyshev distance (max of |dx|,|dy|) for farmland to count water as nearby. */
+const FARMLAND_WATER_RADIUS = 5;
+
+/** Random-tick samples per fixed tick for farmland moisture (dry↔moist). */
+const FARMLAND_MOISTURE_SAMPLES_PER_TICK = 4;
+
+/** Block radius around the player to sample for farmland moisture. */
+const FARMLAND_MOISTURE_SAMPLE_RADIUS = 40;
+
+/** Delay before dry farmland becomes moist when hydrated (seconds). */
+const FARMLAND_MOISTEN_MIN_SEC = 3;
+const FARMLAND_MOISTEN_MAX_SEC = 12;
+
+/** Delay before moist farmland dries when not hydrated (seconds). */
+const FARMLAND_DRYOUT_MIN_SEC = 25;
+const FARMLAND_DRYOUT_MAX_SEC = 55;
+
+/** Delay between wheat growth stages (seconds). */
+const WHEAT_GROW_MIN_SEC = 18;
+const WHEAT_GROW_MAX_SEC = 48;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type InteractionKind = "leaf-decay" | "grass-smother" | "grass-spread" | "sapling-grow";
+type InteractionKind =
+  | "leaf-decay"
+  | "grass-smother"
+  | "grass-spread"
+  | "sapling-grow"
+  | "farmland-moisten"
+  | "farmland-dryout"
+  | "wheat-grow";
 
 interface ScheduledEvent {
   wx: number;
@@ -81,7 +112,6 @@ interface ScheduledEvent {
 export class BlockInteractions {
   private readonly world: World;
   private readonly registry: BlockRegistry;
-  private readonly bus: EventBus;
 
   private readonly queue: ScheduledEvent[] = [];
   private readonly pending = new Set<string>();
@@ -101,11 +131,22 @@ export class BlockInteractions {
   private readonly oakLeavesId: number;
   private readonly spruceLeavesId: number;
   private readonly birchLeavesId: number;
+  private readonly farmlandDryId: number;
+  private readonly farmlandMoistId: number;
+  /** `wheat_stage_0` … `wheat_stage_7` in order. */
+  private readonly wheatStageIds: readonly number[];
+  private readonly wheatStageByBlockId = new Map<number, number>();
+
+  /**
+   * Chunk coords (`cx,cy`) whose immature wheat has already been given grow timers.
+   * Without this, {@link hydrateWheatSchedulesInLoadedWorld} would rescan every loaded
+   * chunk after every streaming tick (catastrophic main-thread cost).
+   */
+  private readonly wheatHydratedChunkKeys = new Set<string>();
 
   constructor(world: World, registry: BlockRegistry, bus: EventBus) {
     this.world = world;
     this.registry = registry;
-    this.bus = bus;
 
     this.grassId = registry.getByIdentifier("stratum:grass").id;
     this.dirtId = registry.getByIdentifier("stratum:dirt").id;
@@ -124,6 +165,21 @@ export class BlockInteractions {
     this.oakLeavesId = registry.getByIdentifier("stratum:oak_leaves").id;
     this.spruceLeavesId = registry.getByIdentifier("stratum:spruce_leaves").id;
     this.birchLeavesId = registry.getByIdentifier("stratum:birch_leaves").id;
+    this.farmlandDryId = registry.getByIdentifier("stratum:farmland_dry").id;
+    this.farmlandMoistId = registry.getByIdentifier("stratum:farmland_moist").id;
+    this.wheatStageIds = [
+      registry.getByIdentifier("stratum:wheat_stage_0").id,
+      registry.getByIdentifier("stratum:wheat_stage_1").id,
+      registry.getByIdentifier("stratum:wheat_stage_2").id,
+      registry.getByIdentifier("stratum:wheat_stage_3").id,
+      registry.getByIdentifier("stratum:wheat_stage_4").id,
+      registry.getByIdentifier("stratum:wheat_stage_5").id,
+      registry.getByIdentifier("stratum:wheat_stage_6").id,
+      registry.getByIdentifier("stratum:wheat_stage_7").id,
+    ];
+    for (let i = 0; i < this.wheatStageIds.length; i++) {
+      this.wheatStageByBlockId.set(this.wheatStageIds[i]!, i);
+    }
 
     this.leafIds = new Set([
       this.oakLeavesId,
@@ -143,11 +199,60 @@ export class BlockInteractions {
   // Public
   // -----------------------------------------------------------------------
 
+  /**
+   * Ensures immature wheat has a pending `wheat-grow` timer. Chunks hydrated from disk (or net)
+   * never emit per-cell `game:block-changed`, so crops would otherwise never advance.
+   */
+  hydrateWheatSchedulesInLoadedWorld(): void {
+    const chunks = this.world.getChunkManager().getLoadedChunks();
+    const loadedKeys = new Set<string>();
+    for (const chunk of chunks) {
+      loadedKeys.add(`${chunk.coord.cx},${chunk.coord.cy}`);
+    }
+    const staleHydrationKeys: string[] = [];
+    for (const key of this.wheatHydratedChunkKeys) {
+      if (!loadedKeys.has(key)) {
+        staleHydrationKeys.push(key);
+      }
+    }
+    for (const key of staleHydrationKeys) {
+      this.wheatHydratedChunkKeys.delete(key);
+    }
+    for (const chunk of chunks) {
+      const key = `${chunk.coord.cx},${chunk.coord.cy}`;
+      if (this.wheatHydratedChunkKeys.has(key)) {
+        continue;
+      }
+      const { wx: ox, wy: oy } = chunkToWorldOrigin(chunk.coord);
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+          const id = getBlock(chunk, lx, ly);
+          if (id === this.airId) {
+            continue;
+          }
+          const widx = this.wheatStageIndex(id);
+          if (widx < 0 || widx >= 7) {
+            continue;
+          }
+          this.scheduleWheatGrow(ox + lx, oy + ly);
+        }
+      }
+      this.wheatHydratedChunkKeys.add(key);
+    }
+  }
+
   /** Called once per fixed tick on the authority (host / offline). */
   tick(dtSec: number, playerBlockX: number, playerBlockY: number): void {
     const expired: ScheduledEvent[] = [];
     for (let i = this.queue.length - 1; i >= 0; i--) {
       const ev = this.queue[i]!;
+
+      if (ev.kind === "sapling-grow" || ev.kind === "wheat-grow") {
+        const c = worldToChunk(ev.wx, ev.wy);
+        if (this.world.getChunk(c.cx, c.cy) === undefined) {
+          continue;
+        }
+      }
 
       if (ev.kind === "sapling-grow") {
         const light = Math.max(
@@ -178,6 +283,7 @@ export class BlockInteractions {
     }
 
     this.sampleGrassSpread(playerBlockX, playerBlockY);
+    this.sampleFarmlandMoisture(playerBlockX, playerBlockY);
   }
 
   // -----------------------------------------------------------------------
@@ -195,8 +301,13 @@ export class BlockInteractions {
 
     if (this.saplingIds.has(blockId)) {
       const delay = SAPLING_GROW_MIN_SEC +
-        Math.random() * (SAPLING_GROW_MAX_SEC - SAPLING_GROW_MIN_SEC);
+        unixRandom01() * (SAPLING_GROW_MAX_SEC - SAPLING_GROW_MIN_SEC);
       this.schedule(wx, wy, "sapling-grow", delay);
+    }
+
+    const wheatIdx = this.wheatStageIndex(blockId);
+    if (wheatIdx >= 0 && wheatIdx < 7) {
+      this.scheduleWheatGrow(wx, wy);
     }
 
     const def = this.registry.getById(blockId);
@@ -204,6 +315,9 @@ export class BlockInteractions {
       const below = this.world.getBlock(wx, wy - 1);
       if (below.id === this.grassId) {
         this.schedule(wx, wy - 1, "grass-smother", GRASS_SMOTHER_DELAY_SEC);
+      }
+      if (below.id === this.farmlandDryId || below.id === this.farmlandMoistId) {
+        this.world.setBlock(wx, wy - 1, this.dirtId);
       }
     }
   }
@@ -223,7 +337,7 @@ export class BlockInteractions {
         if (this.isLeafSupported(wx, wy)) continue;
 
         const delay =
-          LEAF_DECAY_BASE_SEC + Math.random() * LEAF_DECAY_JITTER_SEC;
+          LEAF_DECAY_BASE_SEC + unixRandom01() * LEAF_DECAY_JITTER_SEC;
         this.schedule(wx, wy, "leaf-decay", delay);
       }
     }
@@ -248,8 +362,8 @@ export class BlockInteractions {
   private sampleGrassSpread(px: number, py: number): void {
     const r = GRASS_SPREAD_RADIUS;
     for (let i = 0; i < GRASS_SPREAD_SAMPLES_PER_TICK; i++) {
-      const wx = px + Math.floor(Math.random() * (r * 2 + 1)) - r;
-      const wy = py + Math.floor(Math.random() * (r * 2 + 1)) - r;
+      const wx = px + Math.floor(unixRandom01() * (r * 2 + 1)) - r;
+      const wy = py + Math.floor(unixRandom01() * (r * 2 + 1)) - r;
 
       if (this.world.getBlock(wx, wy).id !== this.dirtId) continue;
       if (this.world.getBlock(wx, wy + 1).solid) continue;
@@ -257,7 +371,7 @@ export class BlockInteractions {
 
       const delay =
         GRASS_SPREAD_MIN_SEC +
-        Math.random() * (GRASS_SPREAD_MAX_SEC - GRASS_SPREAD_MIN_SEC);
+        unixRandom01() * (GRASS_SPREAD_MAX_SEC - GRASS_SPREAD_MIN_SEC);
       this.schedule(wx, wy, "grass-spread", delay);
     }
   }
@@ -275,8 +389,53 @@ export class BlockInteractions {
   }
 
   // -----------------------------------------------------------------------
+  // Farmland moisture (random-tick style near player)
+  // -----------------------------------------------------------------------
+
+  /** True if any water block lies within Chebyshev radius {@link FARMLAND_WATER_RADIUS}. */
+  private isNearFarmlandWater(wx: number, wy: number): boolean {
+    const r = FARMLAND_WATER_RADIUS;
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        if (this.world.getBlock(wx + dx, wy + dy).water) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private sampleFarmlandMoisture(px: number, py: number): void {
+    const rad = FARMLAND_MOISTURE_SAMPLE_RADIUS;
+    for (let i = 0; i < FARMLAND_MOISTURE_SAMPLES_PER_TICK; i++) {
+      const wx = px + Math.floor(unixRandom01() * (rad * 2 + 1)) - rad;
+      const wy = py + Math.floor(unixRandom01() * (rad * 2 + 1)) - rad;
+
+      const id = this.world.getBlock(wx, wy).id;
+      if (id === this.farmlandDryId && this.isNearFarmlandWater(wx, wy)) {
+        const delay =
+          FARMLAND_MOISTEN_MIN_SEC +
+          unixRandom01() * (FARMLAND_MOISTEN_MAX_SEC - FARMLAND_MOISTEN_MIN_SEC);
+        this.schedule(wx, wy, "farmland-moisten", delay);
+      } else if (id === this.farmlandMoistId && !this.isNearFarmlandWater(wx, wy)) {
+        const delay =
+          FARMLAND_DRYOUT_MIN_SEC +
+          unixRandom01() * (FARMLAND_DRYOUT_MAX_SEC - FARMLAND_DRYOUT_MIN_SEC);
+        this.schedule(wx, wy, "farmland-dryout", delay);
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Scheduling
   // -----------------------------------------------------------------------
+
+  private scheduleWheatGrow(wx: number, wy: number): void {
+    const delay =
+      WHEAT_GROW_MIN_SEC +
+      unixRandom01() * (WHEAT_GROW_MAX_SEC - WHEAT_GROW_MIN_SEC);
+    this.schedule(wx, wy, "wheat-grow", delay);
+  }
 
   private schedule(
     wx: number,
@@ -308,6 +467,15 @@ export class BlockInteractions {
       case "sapling-grow":
         this.execSaplingGrow(ev.wx, ev.wy);
         break;
+      case "farmland-moisten":
+        this.execFarmlandMoisten(ev.wx, ev.wy);
+        break;
+      case "farmland-dryout":
+        this.execFarmlandDryout(ev.wx, ev.wy);
+        break;
+      case "wheat-grow":
+        this.execWheatGrow(ev.wx, ev.wy);
+        break;
     }
   }
 
@@ -318,7 +486,6 @@ export class BlockInteractions {
 
     this.world.spawnLootForBrokenBlock(block.id, wx, wy);
     this.world.setBlock(wx, wy, this.airId);
-    this.emitBlockChanged(wx, wy, 0);
   }
 
   private execGrassSmother(wx: number, wy: number): void {
@@ -327,7 +494,6 @@ export class BlockInteractions {
     if (!above.solid || above.transparent) return;
 
     this.world.setBlock(wx, wy, this.dirtId);
-    this.emitBlockChanged(wx, wy, this.dirtId);
   }
 
   private execGrassSpread(wx: number, wy: number): void {
@@ -336,7 +502,32 @@ export class BlockInteractions {
     if (!this.hasAdjacentGrass(wx, wy)) return;
 
     this.world.setBlock(wx, wy, this.grassId);
-    this.emitBlockChanged(wx, wy, this.grassId);
+  }
+
+  private execFarmlandMoisten(wx: number, wy: number): void {
+    if (this.world.getBlock(wx, wy).id !== this.farmlandDryId) return;
+    if (!this.isNearFarmlandWater(wx, wy)) return;
+    this.world.setBlock(wx, wy, this.farmlandMoistId);
+  }
+
+  private execFarmlandDryout(wx: number, wy: number): void {
+    if (this.world.getBlock(wx, wy).id !== this.farmlandMoistId) return;
+    if (this.isNearFarmlandWater(wx, wy)) return;
+    this.world.setBlock(wx, wy, this.farmlandDryId);
+  }
+
+  /** Index 0–7 for wheat stages, or -1 if not a wheat crop block. */
+  private wheatStageIndex(blockId: number): number {
+    return this.wheatStageByBlockId.get(blockId) ?? -1;
+  }
+
+  private execWheatGrow(wx: number, wy: number): void {
+    const id = this.world.getBlock(wx, wy).id;
+    const idx = this.wheatStageIndex(id);
+    if (idx < 0 || idx >= 7) {
+      return;
+    }
+    this.world.setBlock(wx, wy, this.wheatStageIds[idx + 1]!);
   }
 
   // -----------------------------------------------------------------------
@@ -374,7 +565,7 @@ export class BlockInteractions {
 
   private retrySapling(wx: number, wy: number): void {
     const retry = SAPLING_RETRY_MIN_SEC +
-      Math.random() * (SAPLING_RETRY_MAX_SEC - SAPLING_RETRY_MIN_SEC);
+      unixRandom01() * (SAPLING_RETRY_MAX_SEC - SAPLING_RETRY_MIN_SEC);
     this.schedule(wx, wy, "sapling-grow", retry);
   }
 
@@ -443,7 +634,6 @@ export class BlockInteractions {
       this.placeTreeBlock(wx, wy + dy + 1, this.oakLogId);
     }
 
-    this.emitBlockChanged(wx, wy, this.airId);
   }
 
   private growBirchTree(wx: number, wy: number): void {
@@ -462,7 +652,6 @@ export class BlockInteractions {
       this.placeTreeBlock(wx, wy + dy + 1, this.birchLogId);
     }
 
-    this.emitBlockChanged(wx, wy, this.airId);
   }
 
   private growSpruceTree(wx: number, wy: number): void {
@@ -481,7 +670,6 @@ export class BlockInteractions {
       this.placeTreeBlock(wx, wy + dy, this.spruceLogId);
     }
 
-    this.emitBlockChanged(wx, wy, this.airId);
   }
 
   private placeTreeBlock(wx: number, wy: number, blockId: number): void {
@@ -489,23 +677,9 @@ export class BlockInteractions {
     if (existing.id !== this.airId && !existing.replaceable && !this.leafIds.has(existing.id)) {
       return;
     }
-    this.world.setBlock(wx, wy, blockId);
-    this.world.setMetadata(wx, wy, WORLDGEN_NO_COLLIDE);
-    this.emitBlockChanged(wx, wy, blockId);
-  }
-
-  // -----------------------------------------------------------------------
-  // Helpers
-  // -----------------------------------------------------------------------
-
-  private emitBlockChanged(wx: number, wy: number, blockId: number): void {
-    this.bus.emit({
-      type: "game:block-changed",
-      wx,
-      wy,
-      blockId,
-      layer: "fg",
-    } satisfies GameEvent);
+    this.world.setBlock(wx, wy, blockId, {
+      cellMetadata: WORLDGEN_NO_COLLIDE,
+    });
   }
 }
 

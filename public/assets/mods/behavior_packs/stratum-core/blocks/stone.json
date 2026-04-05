@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:stone" },
+    "description": {
+      "identifier": "stratum:stone"
+    },
     "components": {
       "stratum:display_name": "Stone",
-      "stratum:texture": { "all": "stone" },
+      "stratum:texture": {
+        "all": "stone"
+      },
       "stratum:random_flip_x": true,
       "stratum:solid": true,
       "stratum:transparent": false,
@@ -15,7 +19,9 @@
       "stratum:light_emission": 0,
       "stratum:light_absorption": 15,
       "stratum:material": "stone",
-      "stratum:loot_table": "stratum:stone"
+      "stratum:tags": ["stratum:furnace_material"],
+      "stratum:loot_table": "stratum:stone",
+      "stratum:numeric_id": 10
     }
   }
 }

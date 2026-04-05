@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:diamond_pickaxe"
+    },
+    "components": {
+      "stratum:display_name": "Diamond Pickaxe",
+      "stratum:texture_key": "diamond_pickaxe",
+      "stratum:max_stack": 1,
+      "stratum:tool_type": "pickaxe",
+      "stratum:tool_tier": 3,
+      "stratum:tool_speed": 8,
+      "stratum:max_durability": 1561,
+      "stratum:numeric_id": 58
+    }
+  }
+}

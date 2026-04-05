@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:dandelion" },
+    "description": {
+      "identifier": "stratum:dandelion"
+    },
     "components": {
       "stratum:display_name": "Dandelion",
-      "stratum:texture": { "all": "dandelion" },
+      "stratum:texture": {
+        "all": "dandelion"
+      },
       "stratum:solid": false,
       "stratum:transparent": true,
       "stratum:water": false,
@@ -15,7 +19,9 @@
       "stratum:replaceable": true,
       "stratum:tall_grass": "none",
       "stratum:loot_table": "stratum:dandelion",
-      "stratum:plant_foot_offset_px": 5
+      "stratum:plant_foot_offset_px": 5,
+      "stratum:wind_sway_max_px": 1,
+      "stratum:numeric_id": 8
     }
   }
 }

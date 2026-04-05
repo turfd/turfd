@@ -17,6 +17,7 @@ import {
   type OwnedModRow,
 } from "../network/workshopModApi";
 import type { IndexedDBStore } from "../persistence/IndexedDBStore";
+import { findPackPngBytes } from "./cachedModPackIcon";
 import { WorkshopUnavailableError } from "./WorkshopUnavailableError";
 import type { IModRepository } from "./IModRepository";
 import {
@@ -102,17 +103,6 @@ function readManifestFromFiles(files: Record<string, Uint8Array>): WorkshopManif
   const text = new TextDecoder().decode(files[key]!);
   const json: unknown = JSON.parse(text);
   return WorkshopManifestSchema.parse(json);
-}
-
-function readPackPng(files: Record<string, Uint8Array>): Uint8Array | undefined {
-  for (const name of ["pack.png", "Pack.png"]) {
-    const u = files[name];
-    if (u !== undefined) {
-      return u;
-    }
-  }
-  const key = Object.keys(files).find((k) => /(^|\/)pack\.png$/i.test(k));
-  return key !== undefined ? files[key] : undefined;
 }
 
 export class ModRepository implements IModRepository {
@@ -402,7 +392,7 @@ export class ModRepository implements IModRepository {
     }
     const files = normalizeZipEntries(rawFiles);
     const manifest = readManifestFromFiles(files);
-    const packFromZip = readPackPng(files);
+    const packFromZip = findPackPngBytes(files);
     const cover = packFromZip ?? coverBytes;
     if (cover.length === 0) {
       throw new Error("pack.png is required (in the ZIP or as a separate upload).");

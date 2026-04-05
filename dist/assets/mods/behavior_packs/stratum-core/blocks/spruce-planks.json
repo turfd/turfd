@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:spruce_planks" },
+    "description": {
+      "identifier": "stratum:spruce_planks"
+    },
     "components": {
       "stratum:display_name": "Spruce Planks",
-      "stratum:texture": { "all": "spruce_planks" },
+      "stratum:texture": {
+        "all": "spruce_planks"
+      },
       "stratum:solid": true,
       "stratum:transparent": false,
       "stratum:water": false,
@@ -14,7 +18,13 @@
       "stratum:light_absorption": 15,
       "stratum:material": "wood",
       "stratum:loot_table": "stratum:spruce_planks",
-      "stratum:tags": ["stratum:planks"]
+      "stratum:tags": [
+        "stratum:planks"
+      ],
+      "stratum:fuel": {
+        "burn_seconds": 4
+      },
+      "stratum:numeric_id": 40
     }
   }
 }

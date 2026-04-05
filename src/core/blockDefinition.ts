@@ -60,6 +60,20 @@ export interface BlockDefinitionBase {
    * on the block’s lower edge so short plants don’t visually float above the ground.
    */
   plantFootOffsetPx?: number;
+  /**
+   * Whole-pixel shift applied to the plant tile quad on Y after {@link plantFootOffsetPx} UV crop.
+   * Positive moves the sprite down on screen (e.g. align crops with lowered farmland art).
+   */
+  plantRenderOffsetYPx?: number;
+  /**
+   * Foreground tile wind: oscillates the whole sprite horizontally by up to this many **whole
+   * pixels** (pixel-snapped, not skew). Omit or 0 to disable.
+   */
+  windSwayMaxPx?: number;
   /** Crafting tags (e.g. `"stratum:logs"`, `"stratum:planks"`). */
   tags?: readonly string[];
+  /**
+   * Copied to the auto-registered block item: furnace burn seconds per item (`stratum:fuel` in block JSON).
+   */
+  fuelBurnSeconds?: number;
 }

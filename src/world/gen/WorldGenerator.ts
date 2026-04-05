@@ -1,15 +1,25 @@
 /** Deterministic chunk fill: terrain columns, caves, ores, bedrock. */
-import { CHUNK_SIZE, WORLD_Y_MIN, WORLDGEN_NO_COLLIDE } from "../../core/constants";
+import {
+  CHUNK_SIZE,
+  LAKE_BIOME_TREE_SUPPRESS_INFLUENCE,
+  WATER_SEA_LEVEL_WY,
+  WORLD_Y_MIN,
+  WORLDGEN_NO_COLLIDE,
+} from "../../core/constants";
 import type { BlockRegistry } from "../blocks/BlockRegistry";
 import { chunkToWorldOrigin, localIndex } from "../chunk/ChunkCoord";
 import type { ChunkCoord } from "../chunk/ChunkCoord";
 import { createChunk, type Chunk } from "../chunk/Chunk";
 import { GeneratorContext } from "./GeneratorContext";
-import { TerrainNoise, type ForestType } from "./TerrainNoise";
+import { TerrainNoise, type ForestType } from "../../core/TerrainNoise";
 import { CaveGenerator } from "./CaveGenerator";
 import { OreVeins } from "./OreVeins";
 import { SedimentPockets } from "./SedimentPockets";
 import { forEachDeciduousBushCell, forEachSpruceBushCell } from "./treeCanopy";
+import {
+  applySeaLevelFloodWater,
+  applySeaLevelFloodWaterRegion,
+} from "./SeaLevelWaterFill";
 
 // ---------------------------------------------------------------------------
 // Oak tree shapes (round-ish canopy)
@@ -90,6 +100,15 @@ type TreeShape =
 
 const TREE_PADDING_BLOCKS = 10;
 
+const CARDINAL_NEIGHBOR_OFFSETS = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+] as const;
+
+const HORIZONTAL_NEIGHBOR_DX = [-1, 1] as const;
+
 export class WorldGenerator {
   private readonly blockRegistry: BlockRegistry;
   private readonly terrain: TerrainNoise;
@@ -116,6 +135,7 @@ export class WorldGenerator {
   private readonly sandstoneId: number;
   private readonly cactusId: number;
   private readonly deadBushId: number;
+  private readonly waterId: number | null;
 
   constructor(seed: number, registry: BlockRegistry) {
     this.blockRegistry = registry;
@@ -144,13 +164,20 @@ export class WorldGenerator {
     this.sandstoneId = registry.getByIdentifier("stratum:sandstone").id;
     this.cactusId = registry.getByIdentifier("stratum:cactus").id;
     this.deadBushId = registry.getByIdentifier("stratum:dead_bush").id;
+    this.waterId = registry.isRegistered("stratum:water")
+      ? registry.getByIdentifier("stratum:water").id
+      : null;
   }
 
   getSurfaceHeight(wx: number): number {
     return this.terrain.getSurfaceHeight(wx);
   }
 
-  generateChunk(coord: ChunkCoord): Chunk {
+  /**
+   * Terrain columns, caves, ores, backdrop — no sea fill, trees, or surface decor.
+   * Pair with {@link applySeaLevelFloodToChunkRegion} + {@link decorateChunkSurface} for multi-chunk strips.
+   */
+  generateChunkTerrainOnly(coord: ChunkCoord): Chunk {
     const chunk = createChunk(coord);
     const origin = chunkToWorldOrigin(coord);
 
@@ -160,31 +187,67 @@ export class WorldGenerator {
 
       for (let ly = 0; ly < CHUNK_SIZE; ly++) {
         const wy = origin.wy + ly;
-        chunk.blocks[localIndex(lx, ly)] = this.pickBlock(wx, wy, surfaceY);
+        const idx = localIndex(lx, ly);
+        chunk.blocks[idx] = this.pickBlock(wx, wy, surfaceY);
+        chunk.background[idx] = this.naturalBackdropId(wx, wy, surfaceY);
       }
     }
-    this.placeBackgroundTrees(chunk, origin.wx, origin.wy);
-    this.decorateSurfaceVegetation(chunk, origin.wx, origin.wy);
-    this.decorateDesertSurface(chunk, origin.wx, origin.wy);
-    this.fillTerrainBackgroundLayer(chunk, origin.wx, origin.wy);
-
-    chunk.dirty = true;
     return chunk;
   }
 
+  /** Trees, flowers, desert plants — run after water placement. */
+  decorateChunkSurface(chunk: Chunk, originWx: number, originWy: number): void {
+    this.placeBackgroundTrees(chunk, originWx, originWy);
+    this.decorateSurfaceVegetation(chunk, originWx, originWy);
+    this.decorateDesertSurface(chunk, originWx, originWy);
+    chunk.dirty = true;
+  }
+
   /**
-   * Back-wall tiles: geological column ignoring caves; ores → stone; sky → 0.
-   * Matches dirt/gravel pockets used in foreground stone.
+   * Sea / lake flood across many chunks (same rules as per-chunk {@link applySeaLevelFloodWater},
+   * but air connects across chunk borders).
    */
-  private fillTerrainBackgroundLayer(chunk: Chunk, originWx: number, originWy: number): void {
-    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-      const wx = originWx + lx;
-      const surfaceY = this.terrain.getSurfaceHeight(wx);
-      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-        const wy = originWy + ly;
-        chunk.background[localIndex(lx, ly)] = this.naturalBackdropId(wx, wy, surfaceY);
-      }
+  applySeaLevelFloodToChunkRegion(
+    chunkMap: Map<string, Chunk>,
+    bounds: {
+      minCx: number;
+      maxCx: number;
+      minCy: number;
+      maxCy: number;
+    },
+  ): void {
+    if (this.waterId === null) {
+      return;
     }
+    applySeaLevelFloodWaterRegion(chunkMap, bounds, {
+      registry: this.blockRegistry,
+      airId: this.airId,
+      waterId: this.waterId,
+      grassId: this.grassId,
+      sandId: this.sandId,
+      dirtId: this.dirtId,
+      seaLevelWy: WATER_SEA_LEVEL_WY,
+      getSurfaceHeight: (wx) => this.terrain.getSurfaceHeight(wx),
+    });
+  }
+
+  generateChunk(coord: ChunkCoord): Chunk {
+    const chunk = this.generateChunkTerrainOnly(coord);
+    const origin = chunkToWorldOrigin(coord);
+    if (this.waterId !== null) {
+      applySeaLevelFloodWater(chunk, origin.wx, origin.wy, {
+        registry: this.blockRegistry,
+        airId: this.airId,
+        waterId: this.waterId,
+        grassId: this.grassId,
+        sandId: this.sandId,
+        dirtId: this.dirtId,
+        seaLevelWy: WATER_SEA_LEVEL_WY,
+        getSurfaceHeight: (wx) => this.terrain.getSurfaceHeight(wx),
+      });
+    }
+    this.decorateChunkSurface(chunk, origin.wx, origin.wy);
+    return chunk;
   }
 
   private naturalBackdropId(wx: number, wy: number, surfaceY: number): number {
@@ -225,6 +288,9 @@ export class WorldGenerator {
         if (chunk.blocks[aboveIdx] !== this.airId) {
           continue;
         }
+        if (this.foregroundTouchesWaterCardinal(chunk, lx, ly + 1)) {
+          continue;
+        }
         const wx = originWx + lx;
         const wy = originWy + ly;
         const h = this.hash2(wx * 131 + 17, wy * 91 + 9);
@@ -248,7 +314,7 @@ export class WorldGenerator {
 
   /** In-chunk ±X neighbors: solid non-replaceable blocks invalidate cactus (matches player rules at edges). */
   private horizontalNeighborSolidForCactus(chunk: Chunk, lx: number, ly: number): boolean {
-    for (const dlx of [-1, 1] as const) {
+    for (const dlx of HORIZONTAL_NEIGHBOR_DX) {
       const nx = lx + dlx;
       if (nx < 0 || nx >= CHUNK_SIZE) {
         continue;
@@ -273,53 +339,59 @@ export class WorldGenerator {
         continue;
       }
       const surfaceY = this.terrain.getSurfaceHeight(wx);
-      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-        const wy = originWy + ly;
-        if (wy !== surfaceY) {
-          continue;
-        }
-        const idx = localIndex(lx, ly);
-        if (chunk.blocks[idx] !== this.sandId) {
-          continue;
-        }
-        if (ly + 1 >= CHUNK_SIZE) {
-          continue;
-        }
-        const aboveIdx = localIndex(lx, ly + 1);
-        if (chunk.blocks[aboveIdx] !== this.airId) {
-          continue;
-        }
-        const h = this.hash2(wx * 401 + 3, wy * 307 + 19);
-        if (h % 1000 >= 160) {
-          continue;
-        }
-        const h2 = this.hash2(wx * 811 + 1, wy * 503 + 29);
-        if (h2 % 10 < 5) {
-          const height = 2 + ((h2 >>> 8) % 3);
-          let ok = true;
-          for (let k = 1; k <= height; k++) {
-            if (ly + k >= CHUNK_SIZE) {
-              ok = false;
-              break;
-            }
-            if (chunk.blocks[localIndex(lx, ly + k)] !== this.airId) {
-              ok = false;
-              break;
-            }
-            if (this.horizontalNeighborSolidForCactus(chunk, lx, ly + k)) {
-              ok = false;
-              break;
-            }
+      const ly = surfaceY - originWy;
+      if (ly < 0 || ly >= CHUNK_SIZE) {
+        continue;
+      }
+      const wy = surfaceY;
+      const idx = localIndex(lx, ly);
+      if (chunk.blocks[idx] !== this.sandId) {
+        continue;
+      }
+      if (ly + 1 >= CHUNK_SIZE) {
+        continue;
+      }
+      const aboveIdx = localIndex(lx, ly + 1);
+      if (chunk.blocks[aboveIdx] !== this.airId) {
+        continue;
+      }
+      if (this.foregroundTouchesWaterCardinal(chunk, lx, ly + 1)) {
+        continue;
+      }
+      const h = this.hash2(wx * 401 + 3, wy * 307 + 19);
+      if (h % 1000 >= 160) {
+        continue;
+      }
+      const h2 = this.hash2(wx * 811 + 1, wy * 503 + 29);
+      if (h2 % 10 < 5) {
+        const height = 2 + ((h2 >>> 8) % 3);
+        let ok = true;
+        for (let k = 1; k <= height; k++) {
+          if (ly + k >= CHUNK_SIZE) {
+            ok = false;
+            break;
           }
-          if (!ok) {
-            continue;
+          if (chunk.blocks[localIndex(lx, ly + k)] !== this.airId) {
+            ok = false;
+            break;
           }
-          for (let k = 1; k <= height; k++) {
-            chunk.blocks[localIndex(lx, ly + k)] = this.cactusId;
+          if (this.horizontalNeighborSolidForCactus(chunk, lx, ly + k)) {
+            ok = false;
+            break;
           }
-        } else {
-          chunk.blocks[aboveIdx] = this.deadBushId;
+          if (this.foregroundTouchesWaterCardinal(chunk, lx, ly + k)) {
+            ok = false;
+            break;
+          }
         }
+        if (!ok) {
+          continue;
+        }
+        for (let k = 1; k <= height; k++) {
+          chunk.blocks[localIndex(lx, ly + k)] = this.cactusId;
+        }
+      } else {
+        chunk.blocks[aboveIdx] = this.deadBushId;
       }
     }
   }
@@ -351,6 +423,14 @@ export class WorldGenerator {
     surfaceY: number,
     shape: TreeShape,
   ): void {
+    if (this.treeFootprintIntersectsWater(chunk, originWx, originWy, anchorWx)) {
+      return;
+    }
+    const plantedY = this.resolvePlantedSurfaceY(chunk, originWx, originWy, anchorWx, surfaceY, shape);
+    if (plantedY === null) {
+      return;
+    }
+    surfaceY = plantedY;
     if (shape.type === "spruce") {
       this.placeSpruceTree(chunk, originWx, originWy, anchorWx, surfaceY, shape.spec);
       return;
@@ -417,6 +497,78 @@ export class WorldGenerator {
     this.placeTrunkCell(chunk, originWx, originWy, anchorWx + 2, forkY, trunkId);
   }
 
+  /**
+   * World Y of the block the tree should grow from (grass/sand), after flood/shore passes.
+   * Noise surface can sit above the real top soil when water filled the column above the bed
+   * (trunk cells skip water → floating logs). Twin oaks use the lower of the two columns when both resolve.
+   */
+  private resolvePlantedSurfaceY(
+    chunk: Chunk,
+    originWx: number,
+    originWy: number,
+    anchorWx: number,
+    nominalSurfaceY: number,
+    shape: TreeShape,
+  ): number | null {
+    const sy0 = this.resolveTreeSurfaceY(chunk, originWx, originWy, anchorWx, nominalSurfaceY);
+    if (sy0 === null) {
+      return null;
+    }
+    const twinFork = shape.type === "oak" && shape.shape.kind === "twinFork";
+    if (!twinFork) {
+      return sy0;
+    }
+    const sy1 = this.resolveTreeSurfaceY(chunk, originWx, originWy, anchorWx + 1, nominalSurfaceY);
+    return sy1 === null ? sy0 : Math.min(sy0, sy1);
+  }
+
+  /**
+   * Highest grass/sand in this chunk column whose cell above is air or surface decor (not water).
+   * Scans downward from near nominal surface height.
+   */
+  private resolveTreeSurfaceY(
+    chunk: Chunk,
+    originWx: number,
+    originWy: number,
+    wx: number,
+    nominalSurfaceY: number,
+  ): number | null {
+    const lx = wx - originWx;
+    if (lx < 0 || lx >= CHUNK_SIZE) {
+      return null;
+    }
+    const chunkWyLo = originWy;
+    const chunkWyHi = originWy + CHUNK_SIZE - 1;
+    const scanHi = Math.min(chunkWyHi, nominalSurfaceY + 8);
+    const scanLo = Math.max(chunkWyLo, nominalSurfaceY - 48);
+
+    for (let wy = scanHi; wy >= scanLo; wy--) {
+      const ly = wy - originWy;
+      const idx = localIndex(lx, ly);
+      const id = chunk.blocks[idx]!;
+      if (id !== this.grassId && id !== this.sandId) {
+        continue;
+      }
+      if (ly + 1 >= CHUNK_SIZE) {
+        return wy;
+      }
+      const aboveId = chunk.blocks[localIndex(lx, ly + 1)]!;
+      if (aboveId === this.airId || this.isSurfaceVegetationBlock(aboveId)) {
+        return wy;
+      }
+    }
+    return null;
+  }
+
+  private isSurfaceVegetationBlock(id: number): boolean {
+    return (
+      id === this.shortGrassId ||
+      id === this.tallGrassBottomId ||
+      id === this.dandelionId ||
+      id === this.poppyId
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Spruce tree placement (conical canopy)
   // -------------------------------------------------------------------------
@@ -463,6 +615,79 @@ export class WorldGenerator {
     });
   }
 
+  /**
+   * Skip the whole tree if any in-chunk cell in a broad footprint (trunk + canopy + shoreline)
+   * is water — avoids trunks through pools, roots on water, and floating crowns over lakes.
+   */
+  private treeFootprintIntersectsWater(
+    chunk: Chunk,
+    originWx: number,
+    originWy: number,
+    anchorWx: number,
+  ): boolean {
+    if (this.waterId === null) {
+      return false;
+    }
+    const wid = this.waterId;
+    const padX = 12;
+    let minSurf = this.terrain.getSurfaceHeight(anchorWx);
+    let maxSurf = minSurf;
+    for (let wx = anchorWx - padX; wx <= anchorWx + padX; wx++) {
+      const s = this.terrain.getSurfaceHeight(wx);
+      if (s < minSurf) {
+        minSurf = s;
+      }
+      if (s > maxSurf) {
+        maxSurf = s;
+      }
+    }
+    const chunkWyLo = originWy;
+    const chunkWyHi = originWy + CHUNK_SIZE - 1;
+    const yStart = Math.max(
+      Math.min(minSurf - 6, WATER_SEA_LEVEL_WY),
+      chunkWyLo,
+    );
+    const yEnd = Math.min(maxSurf + 28, chunkWyHi);
+    if (yStart > yEnd) {
+      return false;
+    }
+    for (let wx = anchorWx - padX; wx <= anchorWx + padX; wx++) {
+      for (let wy = yStart; wy <= yEnd; wy++) {
+        const lx = wx - originWx;
+        const ly = wy - originWy;
+        if (lx < 0 || lx >= CHUNK_SIZE || ly < 0 || ly >= CHUNK_SIZE) {
+          continue;
+        }
+        if (chunk.blocks[localIndex(lx, ly)] === wid) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private foregroundTouchesWaterCardinal(
+    chunk: Chunk,
+    lx: number,
+    ly: number,
+  ): boolean {
+    if (this.waterId === null) {
+      return false;
+    }
+    const wid = this.waterId;
+    for (const [dx, dy] of CARDINAL_NEIGHBOR_OFFSETS) {
+      const nx = lx + dx;
+      const ny = ly + dy;
+      if (nx < 0 || nx >= CHUNK_SIZE || ny < 0 || ny >= CHUNK_SIZE) {
+        continue;
+      }
+      if (chunk.blocks[localIndex(nx, ny)] === wid) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private placeBackgroundCell(
     chunk: Chunk,
     originWx: number,
@@ -477,7 +702,11 @@ export class WorldGenerator {
       return;
     }
     const idx = localIndex(lxLocal, lyLocal);
-    if (chunk.blocks[idx] !== this.airId) {
+    const existing = chunk.blocks[idx]!;
+    if (this.waterId !== null && existing === this.waterId) {
+      return;
+    }
+    if (existing !== this.airId) {
       return;
     }
     chunk.blocks[idx] = blockId;
@@ -499,6 +728,9 @@ export class WorldGenerator {
     }
     const idx = localIndex(lxLocal, lyLocal);
     const existing = chunk.blocks[idx]!;
+    if (this.waterId !== null && existing === this.waterId) {
+      return;
+    }
     if (
       existing !== this.airId &&
       existing !== this.oakLeavesId &&
@@ -517,6 +749,9 @@ export class WorldGenerator {
 
   private shouldSpawnTreeAt(wx: number, surfaceY: number, density: number): boolean {
     if (this.terrain.isDesert(wx)) {
+      return false;
+    }
+    if (this.terrain.getLakeBiomeInfluence(wx) > LAKE_BIOME_TREE_SUPPRESS_INFLUENCE) {
       return false;
     }
     if (density <= 0.01) {

@@ -6,8 +6,18 @@ import {
   Sprite,
   UniformGroup,
 } from "pixi.js";
-import fragSrc from "./shaders/composite.frag.glsl?raw";
+import { COMPOSITE_FRAGMENT_GLSL } from "./compositeFragmentSource";
 import { OcclusionTexture } from "./OcclusionTexture";
+
+function assertCompositeFragmentSource(src: string): string {
+  if (typeof src !== "string" || !src.includes("void main")) {
+    throw new Error(
+      `[CompositePass] Invalid fragment shader module (got ${typeof src}). ` +
+        "Clear devtools cache / hard-reload.",
+    );
+  }
+  return src;
+}
 import { IndirectLightTexture } from "./IndirectLightTexture";
 
 type CompositeUniformStruct = {
@@ -129,9 +139,10 @@ export class CompositePass {
       },
     });
 
+    const fragmentSrc = assertCompositeFragmentSource(COMPOSITE_FRAGMENT_GLSL);
     const glProgram = GlProgram.from({
       vertex: FILTER_VERT_SRC,
-      fragment: fragSrc,
+      fragment: fragmentSrc,
       name: "stratum-composite",
     });
 
@@ -289,7 +300,12 @@ export class CompositePass {
   }
 
   destroy(): void {
-    this._filter.destroy(true);
+    // Pixi `GlProgram.from()` returns a **global singleton** per (vertex, fragment) source.
+    // Loading UI ({@link MenuBackground}) and gameplay ({@link LightingComposer}) both use this
+    // pass with identical sources. `filter.destroy(true)` calls `GlProgram.destroy()`, which
+    // nulls `vertex`/`fragment` on that shared object — the surviving game's filter still
+    // references it → WebGL compiles the literal "null" and terrain disappears until GL reset.
+    this._filter.destroy(false);
     this._sprite.destroy();
   }
 }

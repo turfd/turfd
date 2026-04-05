@@ -7,6 +7,7 @@ import type { RecipeRegistry } from "../world/RecipeRegistry";
 import type { AtlasLoader } from "../renderer/AtlasLoader";
 import { parseBlockJson } from "./parseBlockJson";
 import { parseItemJson } from "./parseItemJson";
+import { registerParsedItemsInOrder } from "./loadInternalBehaviorPack";
 import { parseRecipeJson } from "./parseRecipeJson";
 import type { IModRepository } from "./IModRepository";
 import {
@@ -89,16 +90,20 @@ export async function loadWorkshopBlocksIntoRegistry(
       jobs.push({ modId: c.modId, path });
     }
   }
-  let done = 0;
-  const total = jobs.length;
+  const parsed: { path: string; def: ReturnType<typeof parseBlockJson> }[] = [];
   for (const { path, modId } of jobs) {
     const c = cachedMods.find((x) => x.modId === modId);
     if (c === undefined) {
       continue;
     }
     const raw = readUtf8Json(c.files, path);
-    const def = parseBlockJson(raw);
-    registry.register(def);
+    parsed.push({ path, def: parseBlockJson(raw) });
+  }
+  parsed.sort((a, b) => a.def.numericId - b.def.numericId);
+  let done = 0;
+  const total = parsed.length;
+  for (const { path, def } of parsed) {
+    registry.registerInOrder(def);
     done++;
     progress?.(done, total, path);
   }
@@ -109,30 +114,17 @@ export function loadWorkshopItemsIntoRegistry(
   itemRegistry: ItemRegistry,
   cachedMods: readonly CachedMod[],
 ): void {
+  const parsed: ReturnType<typeof parseItemJson>[] = [];
   for (const c of cachedMods) {
     if (!shouldLoadBlocks(c.manifest)) {
       continue;
     }
     for (const path of c.manifest.items) {
       const raw = readUtf8Json(c.files, path);
-      const def = parseItemJson(raw);
-      let placesBlockId: number | undefined;
-      if (def.placesBlockIdentifier !== undefined) {
-        const b = registry.getByIdentifier(def.placesBlockIdentifier);
-        placesBlockId = b.id;
-      }
-      itemRegistry.register({
-        key: def.identifier,
-        textureName: def.textureKey,
-        displayName: def.displayName,
-        maxStack: def.maxStack,
-        placesBlockId,
-        toolType: def.toolType,
-        toolTier: def.toolTier,
-        toolSpeed: def.toolSpeed,
-      });
+      parsed.push(parseItemJson(raw));
     }
   }
+  registerParsedItemsInOrder(registry, itemRegistry, parsed);
 }
 
 export function loadWorkshopLootIntoResolver(

@@ -15,6 +15,8 @@ export interface RecipeDefinition {
   readonly station: string | null;
   readonly ingredients: readonly IngredientSlot[];
   readonly output: IngredientSlot;
+  /** Smelting JSON recipe `id` for the Furnace tab (queue key + `cook_time_sec` / fuel sim). */
+  readonly smeltingSourceId?: string;
 }
 
 export type CraftResult =

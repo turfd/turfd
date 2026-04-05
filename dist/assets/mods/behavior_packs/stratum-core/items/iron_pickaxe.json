@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:iron_pickaxe"
+    },
+    "components": {
+      "stratum:display_name": "Iron Pickaxe",
+      "stratum:texture_key": "iron_pickaxe",
+      "stratum:max_stack": 1,
+      "stratum:tool_type": "pickaxe",
+      "stratum:tool_tier": 2,
+      "stratum:tool_speed": 6,
+      "stratum:max_durability": 250,
+      "stratum:numeric_id": 66
+    }
+  }
+}

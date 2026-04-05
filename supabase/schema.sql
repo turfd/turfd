@@ -111,6 +111,26 @@ create trigger stratum_room_sessions_set_updated_at
   before update on public.stratum_room_sessions
   for each row execute function public.set_stratum_room_sessions_updated_at();
 
+-- Hosts call touch_stratum_room_session ~every 60s while online. Directory
+-- listing and join lookup require updated_at within this window so closed
+-- tabs (which never run clearRoom) stop advertising within a few minutes.
+create or replace function public.stratum_room_session_is_directory_live(
+  p_expires_at timestamptz,
+  p_updated_at timestamptz
+)
+returns boolean
+language sql
+stable
+as $$
+  select p_expires_at > now()
+    and p_updated_at > now() - interval '3 minutes';
+$$;
+
+grant execute on function public.stratum_room_session_is_directory_live(
+  timestamptz,
+  timestamptz
+) to anon, authenticated;
+
 alter table public.stratum_room_sessions enable row level security;
 
 -- No SELECT policy: clients cannot list or read rows via PostgREST.
@@ -153,7 +173,7 @@ begin
   select s.host_peer_id into pid
   from public.stratum_room_sessions s
   where s.room_code = code
-    and s.expires_at > now()
+    and public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
     and coalesce(s.is_private, false) = false
   limit 1;
   return pid;
@@ -233,7 +253,7 @@ create policy "stratum_room_comments_select_active"
     exists (
       select 1 from public.stratum_room_sessions s
       where s.room_code = stratum_room_comments.room_code
-        and s.expires_at > now()
+        and public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
     )
   );
 
@@ -245,7 +265,7 @@ create policy "stratum_room_comments_insert_own"
     and exists (
       select 1 from public.stratum_room_sessions s
       where s.room_code = stratum_room_comments.room_code
-        and s.expires_at > now()
+        and public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
     )
   );
 
@@ -280,7 +300,7 @@ create policy "stratum_room_ratings_select_active"
     exists (
       select 1 from public.stratum_room_sessions s
       where s.room_code = stratum_room_ratings.room_code
-        and s.expires_at > now()
+        and public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
     )
   );
 
@@ -292,7 +312,7 @@ create policy "stratum_room_ratings_insert_own"
     and exists (
       select 1 from public.stratum_room_sessions s
       where s.room_code = stratum_room_ratings.room_code
-        and s.expires_at > now()
+        and public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
     )
   );
 
@@ -330,7 +350,7 @@ begin
     into rec
   from public.stratum_room_sessions s
   where s.room_code = code
-    and s.expires_at > now()
+    and public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
   limit 1;
   if rec.host_peer_id is null then
     return null;
@@ -553,7 +573,7 @@ begin
           from public.stratum_room_comments y
           where y.room_code = s.room_code
         ) c on true
-        where s.expires_at > now()
+        where public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
           and (
             q = ''
             or s.room_title ilike '%' || q || '%'
@@ -610,7 +630,8 @@ begin
   end if;
   if not exists (
     select 1 from public.stratum_room_sessions s
-    where s.room_code = code and s.expires_at > now()
+    where s.room_code = code
+      and public.stratum_room_session_is_directory_live(s.expires_at, s.updated_at)
   ) then
     return '[]'::jsonb;
   end if;

@@ -30,6 +30,8 @@ export class DroppedItem {
   readonly id: string;
   readonly itemId: ItemId;
   count: number;
+  /** Uses consumed for damageable tools (optional). */
+  damage: number;
   x: number;
   y: number;
   /** World horizontal velocity (px/s); +right, matches screen +x. */
@@ -46,10 +48,12 @@ export class DroppedItem {
     y: number,
     vx = 0,
     vy = 0,
+    damage = 0,
   ) {
     this.id = id;
     this.itemId = itemId;
     this.count = count;
+    this.damage = damage;
     this.x = x;
     this.y = y;
     this.vx = vx;

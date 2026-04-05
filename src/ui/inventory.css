@@ -105,9 +105,20 @@
   transition:
     opacity 0.1s ease,
     visibility 0.1s ease;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+#inventory-ui-root .inv-item-tooltip__name {
+  display: block;
+}
+
+#inventory-ui-root .inv-item-tooltip__detail {
+  display: block;
+  margin-top: 5px;
+  font-size: calc(20px + var(--mm-m5-nudge, 4px));
+  line-height: 1.35;
+  color: #aeaeb2;
+  letter-spacing: 0.02em;
 }
 
 #inventory-ui-root .inv-item-tooltip.inv-item-tooltip--visible {
@@ -127,7 +138,7 @@
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: 26px;
+  min-height: 22px;
   pointer-events: none;
 }
 
@@ -138,31 +149,29 @@
   flex-shrink: 0;
 }
 
-#inventory-ui-root .inv-heart-glyph {
+#inventory-ui-root .inv-heart {
   position: absolute;
   left: 0;
   top: 50%;
-  transform: translateY(-50%);
-  font-family: "M5x7", monospace;
-  font-size: 22px;
+  translate: 0 -50%;
+  margin: 0;
+  padding: 0;
+  font-size: 20px;
   line-height: 1;
-  -webkit-font-smoothing: none;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: auto;
   pointer-events: none;
   user-select: none;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
 }
 
-#inventory-ui-root .inv-heart-glyph--empty {
-  color: rgba(60, 60, 64, 0.92);
-  text-shadow:
-    0 0 2px #000,
-    1px 1px 0 #1a1a1c;
-}
-
-#inventory-ui-root .inv-heart-glyph--full {
+#inventory-ui-root .inv-heart--full {
   color: #e53935;
-  text-shadow:
-    0 0 2px #000,
-    1px 1px 0 #7a1515;
+}
+
+#inventory-ui-root .inv-heart--empty {
+  color: rgba(90, 90, 96, 0.95);
 }
 
 #inventory-ui-root .inv-heart-clip {
@@ -264,6 +273,35 @@
   text-shadow: 1px 1px 0 #1a1a1c;
 }
 
+#inventory-ui-root .inv-slot-durability {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 3px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-slot-durability--hidden {
+  display: none;
+}
+
+#inventory-ui-root .inv-slot-durability-fill {
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  background: linear-gradient(90deg, #2d8f45, #5ec96e);
+  border-radius: 2px;
+  transition: width 0.12s ease-out;
+}
+
+#inventory-ui-root .inv-slot-durability-fill--low {
+  background: linear-gradient(90deg, #b03a32, #e07860);
+}
+
 #inventory-ui-root .inv-overlay {
   position: absolute;
   inset: 0;
@@ -285,7 +323,8 @@
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
-  align-items: stretch;
+  /* flex-start: row height follows inventory only; chest/crafting cap to --inv-panel-sync-height */
+  align-items: flex-start;
   justify-content: center;
   gap: 14px;
   width: max-content;
@@ -294,13 +333,125 @@
   padding: 0 0.75rem;
 }
 
+/* No chest open: remove from flex row so inventory sits next to crafting with no dead gap */
+#inventory-ui-root .inv-chest-mount.inv-chest-mount--collapsed {
+  display: none;
+}
+
+#inventory-ui-root .inv-chest-mount {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  align-self: flex-start;
+  /* Must match CHEST_GRID_COLUMNS in ChestPanel.ts (narrow column + vertical scroll). */
+  --inv-chest-cols: 4;
+  --inv-chest-grid-inner-width: calc(
+    var(--inv-chest-cols) * var(--inv-slot-px, 58px) +
+      (var(--inv-chest-cols) - 1) * var(--inv-grid-gap, 10px)
+  );
+  /* Inner padding + scrollbar gutter so the thumb does not cover slot cells */
+  width: clamp(240px, 32vw, calc(var(--inv-chest-grid-inner-width) + 40px));
+  max-width: calc(var(--inv-chest-grid-inner-width) + 40px);
+  /* Same fixed height as inventory (set by InventoryUI); max-height alone lets short content shrink the panel */
+  height: var(--inv-panel-sync-height, min(72vh, 520px));
+  max-height: var(--inv-panel-sync-height, min(72vh, 520px));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#inventory-ui-root .inv-chest-sidebar {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: rgba(40, 40, 42, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  corner-shape: squircle;
+  transform: translateX(calc(-100% - 24px));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--inv-anim-ms, 300ms) cubic-bezier(0.22, 1, 0.36, 1),
+    opacity var(--inv-anim-ms, 300ms) ease;
+}
+
+#inventory-ui-root .inv-chest-sidebar.inv-chest-sidebar--open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#inventory-ui-root .inv-chest-sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 12px 14px;
+  gap: 10px;
+}
+
+#inventory-ui-root .inv-chest-title {
+  font-family: "M5x7", monospace;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #aeaeb2;
+  flex-shrink: 0;
+}
+
+/* Scrollbar matches `.inv-craft-list` */
+#inventory-ui-root .inv-chest-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  padding-right: 10px;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) rgba(0, 0, 0, 0.25);
+}
+
+#inventory-ui-root .inv-chest-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+#inventory-ui-root .inv-chest-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+#inventory-ui-root .inv-chest-scroll::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+#inventory-ui-root .inv-chest-grid {
+  display: grid;
+  gap: var(--inv-grid-gap, 10px);
+  align-content: start;
+}
+
 #inventory-ui-root .inv-crafting-mount {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  align-self: flex-start;
   width: clamp(280px, 38vw, 440px);
+  height: var(--inv-panel-sync-height, min(72vh, 520px));
+  max-height: var(--inv-panel-sync-height, min(72vh, 520px));
   min-height: 0;
+  overflow: hidden;
 }
 
 #inventory-ui-root .inv-overlay.inv-overlay--open {
@@ -311,10 +462,10 @@
 
 #inventory-ui-root .inv-panel {
   flex: 0 1 auto;
-  align-self: stretch;
+  align-self: flex-start;
   display: flex;
   flex-direction: column;
-  padding: 1.25rem 1.35rem 1.4rem;
+  padding: 1.25rem 1.35rem 1.25rem;
   max-width: min(740px, calc(100vw - 2rem));
   box-sizing: border-box;
   background: rgba(44, 44, 46, 0.94);
@@ -338,6 +489,8 @@
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -379,19 +532,19 @@
 
 #inventory-ui-root .inv-craft-tab {
   font-family: "M5x7", monospace;
-  font-size: 19px;
+  font-size: 17px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #8e8e93;
   background: rgba(56, 56, 58, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0 8px 8px 0;
-  padding: 12px 7px;
+  padding: 10px 6px;
   margin: 0;
   cursor: pointer;
   writing-mode: vertical-rl;
   text-orientation: mixed;
-  min-height: 5rem;
+  min-height: 3.75rem;
   text-align: center;
   line-height: 1.2;
 }
@@ -411,34 +564,121 @@
   order: 1;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 14px 14px 10px 14px;
+  padding: 12px 12px 8px 12px;
 }
 
 #inventory-ui-root .inv-craft-title {
-  font-size: 24px;
+  flex-shrink: 0;
+  font-size: 21px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #aeaeb2;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
+}
+
+#inventory-ui-root .inv-craft-search-row {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#inventory-ui-root .inv-craft-search-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+#inventory-ui-root .inv-craft-filter-toggle {
+  flex-shrink: 0;
+  align-self: stretch;
+  padding: 6px 10px;
+  font-family: "M5x7", monospace;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8e8e93;
+  background: rgba(32, 32, 34, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1.2;
+  max-width: 7.5rem;
+}
+
+#inventory-ui-root .inv-craft-filter-toggle:hover {
+  color: #d1d1d6;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+#inventory-ui-root .inv-craft-filter-toggle.inv-craft-filter-toggle--on {
+  color: #f2f2f7;
+  border-color: rgba(120, 180, 255, 0.45);
+  background: rgba(40, 52, 72, 0.95);
+}
+
+#inventory-ui-root .inv-craft-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  font-family: "M5x7", monospace;
+  font-size: 18px;
+  font-weight: normal;
+  font-synthesis: none;
+  -webkit-font-smoothing: none;
+  color: #f2f2f7;
+  background: rgba(32, 32, 34, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+#inventory-ui-root .inv-craft-search::placeholder {
+  color: #636366;
+}
+
+#inventory-ui-root .inv-craft-search:focus {
+  outline: none;
+  border-color: rgba(120, 180, 255, 0.45);
 }
 
 #inventory-ui-root .inv-craft-list {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
   padding-right: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) rgba(0, 0, 0, 0.25);
+}
+
+#inventory-ui-root .inv-craft-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+#inventory-ui-root .inv-craft-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+#inventory-ui-root .inv-craft-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
 }
 
 #inventory-ui-root .inv-craft-row {
   display: block;
-  padding: 8px 10px;
-  border-radius: 10px;
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
   background: rgba(52, 52, 54, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: pointer;
@@ -449,28 +689,45 @@
   background: rgba(58, 58, 60, 0.9);
 }
 
+#inventory-ui-root .inv-craft-row.inv-craft-row--partial {
+  box-shadow: 0 0 0 1px rgba(255, 72, 72, 0.75);
+  border-color: rgba(255, 72, 72, 0.55);
+}
+
+#inventory-ui-root .inv-craft-row.inv-craft-row--partial:hover {
+  border-color: rgba(255, 100, 100, 0.85);
+  box-shadow: 0 0 0 1px rgba(255, 100, 100, 0.9);
+  background: rgba(58, 48, 48, 0.92);
+}
+
 #inventory-ui-root .inv-craft-row.inv-craft-row--dimmed {
   opacity: 0.38;
   cursor: default;
+}
+
+#inventory-ui-root .inv-craft-row.inv-craft-row--dimmed:hover {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(52, 52, 54, 0.85);
 }
 
 #inventory-ui-root .inv-craft-out {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
 #inventory-ui-root .inv-craft-meta {
   flex: 1;
   min-width: 0;
+  padding-left: 2px;
 }
 
 #inventory-ui-root .inv-craft-name {
   font-family: "M5x7", monospace;
-  font-size: 26px;
+  font-size: 22px;
   color: #f2f2f7;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -480,7 +737,7 @@
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
-  gap: 6px 10px;
+  gap: 4px 7px;
   align-items: center;
 }
 
@@ -493,13 +750,22 @@
 
 #inventory-ui-root .inv-craft-ing-count {
   font-family: "M5x7", monospace;
-  font-size: 22px;
+  font-size: 19px;
   color: #c7c7cc;
+}
+
+#inventory-ui-root .inv-craft-ing--unmet .inv-craft-ing-icon {
+  filter: brightness(0.42) saturate(0.3);
+  opacity: 0.88;
+}
+
+#inventory-ui-root .inv-craft-ing--unmet .inv-craft-ing-count {
+  color: #5c5c60;
 }
 
 #inventory-ui-root .inv-craft-mult {
   font-family: "M5x7", monospace;
-  font-size: 24px;
+  font-size: 21px;
   color: #8e8e93;
   flex-shrink: 0;
   align-self: center;
@@ -508,8 +774,8 @@
 /* Match inv-slot + inv-slot-icon: fixed box + absolutely centered sprite (reliable in flex). */
 #inventory-ui-root .inv-craft-out-slot {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
   align-self: center;
 }
@@ -519,8 +785,8 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   background-repeat: no-repeat;
   pointer-events: none;
   image-rendering: pixelated;
@@ -529,8 +795,8 @@
 
 #inventory-ui-root .inv-craft-ing-slot {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
 }
 
@@ -539,8 +805,8 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   background-repeat: no-repeat;
   pointer-events: none;
   image-rendering: pixelated;
@@ -548,12 +814,116 @@
 }
 
 #inventory-ui-root .inv-craft-hint {
+  flex-shrink: 0;
   min-height: 1.25em;
-  margin-top: 8px;
+  margin-top: 6px;
   font-family: "M5x7", monospace;
-  font-size: 20px;
+  font-size: 18px;
   color: #ff9f0a;
   line-height: 1.3;
+}
+
+/* Appended to document.body (fixed layer); not nested under #inventory-ui-root */
+.inv-craft-tooltip {
+  position: fixed;
+  z-index: 20000;
+  max-width: 280px;
+  padding: 8px 10px;
+  font-family: "M5x7", monospace;
+  font-size: 17px;
+  line-height: 1.35;
+  color: #f2f2f7;
+  background: rgba(28, 28, 30, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  -webkit-font-smoothing: none;
+}
+
+.inv-craft-tooltip.inv-craft-tooltip--hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.inv-craft-tooltip-heading {
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8e8e93;
+  margin-bottom: 6px;
+}
+
+.inv-craft-tooltip-line {
+  margin-bottom: 3px;
+}
+
+.inv-craft-tooltip-line:last-child {
+  margin-bottom: 0;
+}
+
+.inv-craft-tooltip-line--missing {
+  color: #ff6b6b;
+}
+
+#inventory-ui-root .inv-furnace-chrome {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(40, 40, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#inventory-ui-root .inv-furnace-chrome--hidden {
+  display: none;
+}
+
+#inventory-ui-root .inv-furnace-fuel-row--hidden {
+  display: none;
+}
+
+#inventory-ui-root .inv-furnace-chrome-label {
+  font-family: "M5x7", monospace;
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8e8e93;
+}
+
+#inventory-ui-root .inv-furnace-chrome .inv-furnace-slot {
+  width: 40px;
+  height: 40px;
+}
+
+#inventory-ui-root .inv-furnace-chrome .inv-slot-icon {
+  width: 30px;
+  height: 30px;
+}
+
+#inventory-ui-root .inv-furnace-output-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 40px);
+  gap: 5px;
+}
+
+#inventory-ui-root .inv-furnace-row-progress-wrap {
+  margin-top: 5px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+#inventory-ui-root .inv-furnace-row-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ff9f0a, #ffd60a);
+  transition: width 0.08s linear;
 }
 
 #inventory-ui-root .inv-panel-title {
@@ -617,6 +987,31 @@
 }
 
 /* Cursor stack (mount is outside #inventory-ui-root) */
+#cursor-stack-ui .cursor-stack-durability {
+  width: var(--cursor-dur-w, 40px);
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+#cursor-stack-ui .cursor-stack-durability--hidden {
+  display: none;
+}
+
+#cursor-stack-ui .cursor-stack-durability-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #2d8f45, #5ec96e);
+  border-radius: 2px;
+}
+
+#cursor-stack-ui .cursor-stack-durability-fill--low {
+  background: linear-gradient(90deg, #b03a32, #e07860);
+}
+
 #cursor-stack-ui {
   transition: opacity 0.12s ease;
 }

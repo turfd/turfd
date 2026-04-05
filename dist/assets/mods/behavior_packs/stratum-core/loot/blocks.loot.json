@@ -3,7 +3,12 @@
   "loot_tables": {
     "stratum:stone": {
       "entries": [
-        { "itemKey": "stratum:stone", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:cobblestone", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:cobblestone": {
+      "entries": [
+        { "itemKey": "stratum:cobblestone", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
     "stratum:dirt": {
@@ -69,6 +74,16 @@
         { "itemKey": "stratum:crafting_table", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
+    "stratum:furnace": {
+      "entries": [
+        { "itemKey": "stratum:furnace", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:chest": {
+      "entries": [
+        { "itemKey": "stratum:chest", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
     "stratum:oak_leaves": {
       "entries": [
         { "itemKey": "stratum:stick", "countMin": 0, "countMax": 2, "chance": 0.4 },
@@ -114,7 +129,7 @@
     },
     "stratum:coal_ore": {
       "entries": [
-        { "itemKey": "stratum:coal", "countMin": 1, "countMax": 2, "chance": 1.0 }
+        { "itemKey": "stratum:coal", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
     "stratum:iron_ore": {
@@ -180,6 +195,16 @@
     },
     "stratum:water": {
       "entries": []
+    },
+    "stratum:wheat_crop_immature": {
+      "entries": [
+        { "itemKey": "stratum:wheat_seeds", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:wheat_crop_mature": {
+      "entries": [
+        { "itemKey": "stratum:wheat", "countMin": 3, "countMax": 4, "chance": 1.0 }
+      ]
     }
   }
 }

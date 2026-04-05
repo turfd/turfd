@@ -1,8 +1,36 @@
 {
   "textures": {
+    "bread": "assets/mods/resource_packs/stratum-core/textures/items/bread.png",
+    "bucket": "assets/mods/resource_packs/stratum-core/textures/items/bucket.png",
+    "water_bucket": "assets/mods/resource_packs/stratum-core/textures/items/water_bucket.png",
+    "wheat": "assets/mods/resource_packs/stratum-core/textures/items/wheat.png",
+    "wheat_seeds": "assets/mods/resource_packs/stratum-core/textures/items/wheat_seeds.png",
+    "charcoal": "assets/mods/resource_packs/stratum-core/textures/items/charcoal.png",
+    "coal": "assets/mods/resource_packs/stratum-core/textures/items/coal.png",
+    "diamond": "assets/mods/resource_packs/stratum-core/textures/items/diamond.png",
+    "diamond_axe": "assets/mods/resource_packs/stratum-core/textures/items/diamond_axe.png",
+    "diamond_pickaxe": "assets/mods/resource_packs/stratum-core/textures/items/diamond_pickaxe.png",
+    "gold_hoe": "assets/mods/resource_packs/stratum-core/textures/items/golden_hoe.png",
+    "diamond_hoe": "assets/mods/resource_packs/stratum-core/textures/items/diamond_hoe.png",
+    "diamond_shovel": "assets/mods/resource_packs/stratum-core/textures/items/diamond_shovel.png",
+    "gold_axe": "assets/mods/resource_packs/stratum-core/textures/items/golden_axe.png",
+    "gold_ingot": "assets/mods/resource_packs/stratum-core/textures/items/gold_ingot.png",
+    "gold_pickaxe": "assets/mods/resource_packs/stratum-core/textures/items/golden_pickaxe.png",
+    "gold_shovel": "assets/mods/resource_packs/stratum-core/textures/items/golden_shovel.png",
+    "iron_axe": "assets/mods/resource_packs/stratum-core/textures/items/iron_axe.png",
+    "iron_ingot": "assets/mods/resource_packs/stratum-core/textures/items/iron_ingot.png",
+    "iron_pickaxe": "assets/mods/resource_packs/stratum-core/textures/items/iron_pickaxe.png",
+    "iron_hoe": "assets/mods/resource_packs/stratum-core/textures/items/iron_hoe.png",
+    "iron_shovel": "assets/mods/resource_packs/stratum-core/textures/items/iron_shovel.png",
+    "stick": "assets/mods/resource_packs/stratum-core/textures/items/stick.png",
+    "tall_grass": "assets/mods/resource_packs/stratum-core/textures/tiles/tall_grass.png",
     "wooden_axe": "assets/mods/resource_packs/stratum-core/textures/items/wooden_axe.png",
     "wooden_pickaxe": "assets/mods/resource_packs/stratum-core/textures/items/wooden_pickaxe.png",
+    "wooden_hoe": "assets/mods/resource_packs/stratum-core/textures/items/wooden_hoe.png",
     "wooden_shovel": "assets/mods/resource_packs/stratum-core/textures/items/wooden_shovel.png",
-    "stick": "assets/mods/resource_packs/stratum-core/textures/items/stick.png"
+    "stone_pickaxe": "assets/mods/resource_packs/stratum-core/textures/items/stone_pickaxe.png",
+    "stone_axe": "assets/mods/resource_packs/stratum-core/textures/items/stone_axe.png",
+    "stone_shovel": "assets/mods/resource_packs/stratum-core/textures/items/stone_shovel.png",
+    "stone_hoe": "assets/mods/resource_packs/stratum-core/textures/items/stone_hoe.png"
   }
 }

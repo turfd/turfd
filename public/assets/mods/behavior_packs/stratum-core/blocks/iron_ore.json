@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:iron_ore" },
+    "description": {
+      "identifier": "stratum:iron_ore"
+    },
     "components": {
       "stratum:display_name": "Iron Ore",
-      "stratum:texture": { "all": "iron_ore" },
+      "stratum:texture": {
+        "all": "iron_ore"
+      },
       "stratum:solid": true,
       "stratum:transparent": false,
       "stratum:water": false,
@@ -15,7 +19,8 @@
       "stratum:light_emission": 0,
       "stratum:light_absorption": 15,
       "stratum:material": "stone",
-      "stratum:loot_table": "stratum:iron_ore"
+      "stratum:loot_table": "stratum:iron_ore",
+      "stratum:numeric_id": 34
     }
   }
 }

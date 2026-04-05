@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:sand" },
+    "description": {
+      "identifier": "stratum:sand"
+    },
     "components": {
       "stratum:display_name": "Sand",
-      "stratum:texture": { "all": "sand" },
+      "stratum:texture": {
+        "all": "sand"
+      },
       "stratum:solid": true,
       "stratum:transparent": false,
       "stratum:water": false,
@@ -13,7 +17,8 @@
       "stratum:light_emission": 0,
       "stratum:light_absorption": 15,
       "stratum:material": "sand",
-      "stratum:loot_table": "stratum:sand"
+      "stratum:loot_table": "stratum:sand",
+      "stratum:numeric_id": 12
     }
   }
 }

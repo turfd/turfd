@@ -9,11 +9,22 @@ export type ItemModDefinition = {
   readonly displayName: string;
   readonly textureKey: string;
   readonly maxStack: number;
+  /** Stable id for saves, furnace/chest tails, and wire; must extend contiguously after block-items. */
+  readonly numericId: number;
   readonly placesBlockIdentifier?: string;
-  readonly toolType?: "axe" | "pickaxe" | "shovel";
+  readonly toolType?: "axe" | "pickaxe" | "shovel" | "hoe";
   readonly toolTier?: number;
   readonly toolSpeed?: number;
+  readonly maxDurability?: number;
+  readonly fuelBurnSeconds?: number;
+  readonly tags?: readonly string[];
+  /** HP restored when eaten (right-click in world). */
+  readonly eatRestoreHealth?: number;
+  readonly inventoryTooltip?: string;
 };
+
+/** Alias for parsed workshop / core item JSON. */
+export type ParsedItemDefinition = ItemModDefinition;
 
 const stratumItemComponentsSchema = z
   .object({
@@ -26,9 +37,15 @@ const stratumItemComponentsSchema = z
     "stratum:texture_key": z.string().min(1).optional(),
     /** Block identifier this item places, e.g. `stratum:tall_grass_bottom`. */
     "stratum:places_block": z.string().min(1).optional(),
-    "stratum:tool_type": z.enum(["axe", "pickaxe", "shovel"]).optional(),
+    "stratum:tool_type": z.enum(["axe", "pickaxe", "shovel", "hoe"]).optional(),
     "stratum:tool_tier": z.number().int().min(0).optional(),
     "stratum:tool_speed": z.number().positive().optional(),
+    "stratum:max_durability": z.number().int().min(1).optional(),
+    "stratum:fuel": z.object({ burn_seconds: z.number().positive() }).strict().optional(),
+    "stratum:tags": z.array(z.string()).optional(),
+    "stratum:numeric_id": z.number().int().min(1).max(65535),
+    "stratum:eat_restore_health": z.number().int().min(1).optional(),
+    "stratum:inventory_tooltip": z.string().min(1).optional(),
   })
   .strict();
 
@@ -56,9 +73,15 @@ export function parseItemJson(raw: unknown): ItemModDefinition {
     displayName: c["stratum:display_name"],
     textureKey,
     maxStack: c["stratum:max_stack"] ?? MAX_STACK_DEFAULT,
+    numericId: c["stratum:numeric_id"],
     placesBlockIdentifier: c["stratum:places_block"],
     toolType: c["stratum:tool_type"],
     toolTier: c["stratum:tool_tier"],
     toolSpeed: c["stratum:tool_speed"],
+    maxDurability: c["stratum:max_durability"],
+    fuelBurnSeconds: c["stratum:fuel"]?.burn_seconds,
+    tags: c["stratum:tags"],
+    eatRestoreHealth: c["stratum:eat_restore_health"],
+    inventoryTooltip: c["stratum:inventory_tooltip"],
   };
 }

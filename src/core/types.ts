@@ -1,3 +1,4 @@
+import type { KeybindableAction } from "../input/bindings";
 import type { NetworkMessage } from "../network/protocol/messages";
 import type {
   ModComment,
@@ -53,7 +54,17 @@ export type GameEvent =
       blockX: number;
       blockY: number;
     }
+  /** Local player or remote peer: walking on solid ground (footstep cadence). */
+  | {
+      type: "entity:ground-kick";
+      feetWorldX: number;
+      feetWorldY: number;
+      velocityX: number;
+      blockId: number;
+    }
   | { type: "game:worldLoaded"; name: string }
+  | { type: "world:loaded" }
+  | { type: "window:resized" }
   | {
       type: "settings:volume";
       master: number;
@@ -61,11 +72,17 @@ export type GameEvent =
       sfx: number;
     }
   | {
+      type: "settings:apply-key-bindings";
+      bindings: Record<KeybindableAction, readonly string[]>;
+    }
+  | {
       type: "network:chunk-received";
       chunkX: number;
       chunkY: number;
       blocks: Uint16Array;
       background?: Uint16Array;
+      /** Per-cell flags from host (e.g. tree trunks); omitted on legacy wire. */
+      metadata?: Uint8Array;
     }
   | {
       type: "network:chunk-send-request";
@@ -78,8 +95,17 @@ export type GameEvent =
       wx: number;
       wy: number;
       blockId: number;
+      /** Set when a block was replaced (e.g. break → air); used for break particles. */
+      previousBlockId?: number;
       /** Foreground vs back-wall; omit treated as foreground for older handlers. */
       layer?: "fg" | "bg";
+      /** Foreground per-cell flags after change (e.g. tree no-collision); omit/0 when unused. */
+      cellMetadata?: number;
+    }
+  | {
+      type: "game:chunks-fg-bulk-updated";
+      /** Chunks whose lighting was recomputed after batched foreground writes (±1 neighborhood). */
+      chunkCoords: readonly { cx: number; cy: number }[];
     }
   | { type: "net:peer-joined"; peerId: string }
   | {
@@ -107,9 +133,14 @@ export type GameEvent =
   | { type: "ui:chat-compose"; open: boolean }
   | { type: "game:chat-submit"; text: string }
   | { type: "game:chat-closed" }
-  | { type: "craft:request"; recipeId: string; batches: number }
-  | { type: "craft:result"; ok: true; crafted: number }
+  | { type: "craft:request"; recipeId: string; batches: number; shiftKey?: boolean }
+  | { type: "craft:result"; ok: true; crafted: number; recipeId?: string; shiftKey?: boolean }
   | { type: "craft:result"; ok: false; reason: string }
+  | { type: "furnace:fuel-slot-click"; button: number }
+  | { type: "furnace:output-slot-click"; slotIndex: number; button: number }
+  | { type: "chest:open-request"; wx: number; wy: number }
+  | { type: "crafting-table:open-request"; wx: number; wy: number }
+  | { type: "furnace:open-request"; wx: number; wy: number }
   | { type: "mod:install-started"; modId: string }
   | { type: "mod:install-progress"; modId: string; percent: number }
   | { type: "mod:install-complete"; modId: string }

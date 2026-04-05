@@ -1,5 +1,5 @@
 /**
- * Registered block type (numeric id assigned by {@link BlockRegistry}).
+ * Registered block type (`id` from JSON `stratum:numeric_id` via {@link BlockRegistry}).
  *
  * Fields: `id`, `identifier`, `displayName`, `material`, `textureName`, `solid`, `collides`, `transparent`,
  * `water`, `hardness`, `lightEmission`, `lightAbsorption`, `drops`, `replaceable`, `tallGrass`.

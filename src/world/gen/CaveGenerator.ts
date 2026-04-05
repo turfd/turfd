@@ -22,10 +22,6 @@ export class CaveGenerator {
     const tunnelWidth = 0.18 + wobble;
     if (Math.abs(worm) > tunnelWidth) return false;
 
-    const dropWorm = this.wormNoise(wx * 0.025 + 47.3, wy * 0.008);
-    const dropWobble = this.wobbleNoise(wx * 0.06 + 91.1, wy * 0.06) * 0.1;
-    if (Math.abs(dropWorm) < 0.12 + dropWobble) return true;
-
     return true;
   }
 }

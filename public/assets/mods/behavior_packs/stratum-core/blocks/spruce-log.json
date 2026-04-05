@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:spruce_log" },
+    "description": {
+      "identifier": "stratum:spruce_log"
+    },
     "components": {
       "stratum:display_name": "Spruce Log",
-      "stratum:texture": { "all": "spruce_log" },
+      "stratum:texture": {
+        "all": "spruce_log"
+      },
       "stratum:solid": true,
       "stratum:transparent": false,
       "stratum:water": false,
@@ -14,7 +18,13 @@
       "stratum:light_absorption": 15,
       "stratum:material": "wood",
       "stratum:loot_table": "stratum:spruce_log",
-      "stratum:tags": ["stratum:logs"]
+      "stratum:tags": [
+        "stratum:logs"
+      ],
+      "stratum:fuel": {
+        "burn_seconds": 12
+      },
+      "stratum:numeric_id": 21
     }
   }
 }

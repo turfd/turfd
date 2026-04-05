@@ -7,7 +7,7 @@
  */
 
 /** 32-bit mix for stable per-cell decoration. */
-export function treeRngHash(a: number, b: number, salt: number = 0): number {
+function treeRngHash(a: number, b: number, salt: number = 0): number {
   let h = (a * 0x45d9f3b + salt) ^ (b * 0x119de1f3);
   h ^= h >>> 16;
   h = Math.imul(h, 0x7feb352d);
@@ -20,7 +20,7 @@ export function treeRngHash(a: number, b: number, salt: number = 0): number {
 /**
  * Oak/birch-style leaf blob. dy > 0 is above the canopy center (toward sky).
  */
-export function isInsideDeciduousBush(
+function isInsideDeciduousBush(
   dx: number,
   dy: number,
   radiusX: number,

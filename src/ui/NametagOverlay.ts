@@ -25,6 +25,9 @@ function ensureFonts(): void {
 
 export type NametagRosterEntry = { displayName: string };
 
+/** Gap from nametag bottom to head anchor (px). */
+const NAMETAG_GAP_ABOVE_HEAD_PX = 14;
+
 export class NametagOverlay {
   private layer: HTMLDivElement | null = null;
   private readonly tags = new Map<string, HTMLDivElement>();
@@ -43,17 +46,21 @@ export class NametagOverlay {
     this.layer = layer;
   }
 
-  syncLayout(mount: HTMLElement, canvas: HTMLCanvasElement): void {
+  /**
+   * Size the overlay to the mount, not the canvas rect delta. The game canvas is `width/height: 100%`
+   * on the mount; using `getBoundingClientRect()` math (`cr - mr`) drifts on some DPR / fractional
+   * layouts while `100%` stays aligned with the same containing block as the canvas.
+   */
+  syncLayout(_mount: HTMLElement, _canvas: HTMLCanvasElement): void {
     const layer = this.layer;
     if (layer === null) {
       return;
     }
-    const mr = mount.getBoundingClientRect();
-    const cr = canvas.getBoundingClientRect();
-    layer.style.left = `${cr.left - mr.left}px`;
-    layer.style.top = `${cr.top - mr.top}px`;
-    layer.style.width = `${cr.width}px`;
-    layer.style.height = `${cr.height}px`;
+    layer.style.left = "0";
+    layer.style.top = "0";
+    layer.style.width = "100%";
+    layer.style.height = "100%";
+    layer.style.boxSizing = "border-box";
   }
 
   /**
@@ -71,7 +78,10 @@ export class NametagOverlay {
       y: number;
       displayName: string;
     },
-    remotes: ReadonlyMap<string, { x: number; y: number }>,
+    remotes: ReadonlyMap<
+      string,
+      { prevX: number; prevY: number; x: number; y: number }
+    >,
     roster: ReadonlyMap<string, NametagRosterEntry>,
     localPeerId: string | null,
   ): void {
@@ -81,11 +91,18 @@ export class NametagOverlay {
     }
     this.syncLayout(mount, canvas);
 
-    const cw = canvas.width;
-    const ch = canvas.height;
+    const cw = Math.max(1, canvas.width);
+    const ch = Math.max(1, canvas.height);
     const cr = canvas.getBoundingClientRect();
-    const scaleX = cr.width / Math.max(1, cw);
-    const scaleY = cr.height / Math.max(1, ch);
+    // Same mapping as InputManager (buffer ↔ CSS via canvas rect).
+    const cssPerBufX = cr.width / cw;
+    const cssPerBufY = cr.height / ch;
+    const bufPerCssX = cw / Math.max(cr.width, 1e-6);
+    const bufPerCssY = ch / Math.max(cr.height, 1e-6);
+    const uniform =
+      Math.abs(bufPerCssX - bufPerCssY) < 1e-3
+        ? (cssPerBufX + cssPerBufY) * 0.5
+        : null;
 
     const placeTag = (id: string, text: string, worldX: number, worldY: number): void => {
       let el = this.tags.get(id);
@@ -93,13 +110,16 @@ export class NametagOverlay {
         el = document.createElement("div");
         el.style.cssText = [
           "position:absolute",
-          "transform:translate(-50%,calc(-100% - 4px))",
+          `transform:translate(-50%,calc(-100% - ${NAMETAG_GAP_ABOVE_HEAD_PX}px))`,
           "font-family:'M5x7',monospace",
           "font-size:20px",
           "color:#f2f2f7",
           "text-shadow:0 1px 2px #000,0 0 4px #000",
           "white-space:nowrap",
           "max-width:280px",
+          "box-sizing:border-box",
+          /* Inset keeps M5x7 glyph edges + shadow from clipping under overflow:hidden */
+          "padding:0 5px",
           "overflow:hidden",
           "text-overflow:ellipsis",
           "pointer-events:none",
@@ -111,8 +131,8 @@ export class NametagOverlay {
       const headX = worldX;
       const headY = -worldY - PLAYER_HEIGHT;
       const { x: sx, y: sy } = camera.worldToScreen(headX, headY);
-      const px = sx * scaleX;
-      const py = sy * scaleY;
+      const px = uniform !== null ? sx * uniform : sx * cssPerBufX;
+      const py = uniform !== null ? sy * uniform : sy * cssPerBufY;
       el.style.left = `${px}px`;
       el.style.top = `${py}px`;
     };
@@ -129,7 +149,9 @@ export class NametagOverlay {
       stale.delete(peerId);
       const entry = roster.get(peerId);
       const label = entry?.displayName ?? peerId;
-      placeTag(peerId, label, rp.x, rp.y);
+      const rx = rp.prevX + (rp.x - rp.prevX) * alpha;
+      const ry = rp.prevY + (rp.y - rp.prevY) * alpha;
+      placeTag(peerId, label, rx, ry);
     }
 
     for (const id of stale) {

@@ -5,6 +5,8 @@
 
 import { CHUNK_SIZE } from "../core/constants";
 import type { EventBus } from "../core/EventBus";
+import type { FurnacePersistedChunk } from "../world/furnace/furnacePersisted";
+import type { ChestPersistedChunk } from "../world/chest/chestPersisted";
 import type { INetworkAdapter, PeerId } from "./INetworkAdapter";
 import { MsgType, type NetworkMessage } from "./protocol/messages";
 
@@ -13,6 +15,9 @@ type ChunkSnapshot = {
   chunkY: number;
   blocks: Uint16Array;
   background: Uint16Array;
+  furnaces?: FurnacePersistedChunk[];
+  chests?: ChestPersistedChunk[];
+  metadata?: Uint8Array;
 };
 
 type ChunkIterator = (fn: (chunk: ChunkSnapshot) => void) => void;
@@ -40,6 +45,9 @@ export class ChunkSyncManager {
         cy: chunk.chunkY,
         blocks: chunk.blocks,
         background: chunk.background,
+        furnaces: chunk.furnaces,
+        chests: chunk.chests,
+        metadata: chunk.metadata?.slice(),
       };
       this._adapter.send(peerId, msg);
     });
@@ -59,6 +67,7 @@ export class ChunkSyncManager {
       chunkY: msg.cy,
       blocks,
       background: msg.background?.slice(),
+      metadata: msg.metadata?.slice(),
     });
   }
 }

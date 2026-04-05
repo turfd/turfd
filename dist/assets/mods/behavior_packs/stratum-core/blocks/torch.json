@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:torch" },
+    "description": {
+      "identifier": "stratum:torch"
+    },
     "components": {
       "stratum:display_name": "Torch",
-      "stratum:texture": { "all": "torch" },
+      "stratum:texture": {
+        "all": "torch"
+      },
       "stratum:solid": false,
       "stratum:transparent": true,
       "stratum:water": false,
@@ -12,7 +16,8 @@
       "stratum:light_emission": 14,
       "stratum:light_absorption": 0,
       "stratum:material": "generic",
-      "stratum:loot_table": "stratum:torch"
+      "stratum:loot_table": "stratum:torch",
+      "stratum:numeric_id": 23
     }
   }
 }

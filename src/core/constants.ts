@@ -6,6 +6,110 @@ export const PLAYER_WIDTH = 14;
 export const PLAYER_HEIGHT = 28;
 
 /**
+ * Packed walk sheet under `resource_packs/.../textures/` (see {@link PLAYER_WALK_ATLAS_IMAGE_REL}).
+ * Aseprite export: `frames` `1 0.png` … `1 4.png` — sheet 85×40, cells 17×40 (same layout as `meta.image` in JSON).
+ */
+export const PLAYER_WALK_ATLAS_IMAGE_REL = "GUI/player/walking.png";
+
+export const PLAYER_WALK_ATLAS_FRAMES: readonly Readonly<{
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}>[] = [
+  { x: 0, y: 0, w: 17, h: 40 }, // 1 0.png — idle
+  { x: 17, y: 0, w: 17, h: 40 }, // 1 1.png
+  { x: 34, y: 0, w: 17, h: 40 }, // 1 2.png
+  { x: 51, y: 0, w: 17, h: 40 }, // 1 3.png
+  { x: 68, y: 0, w: 17, h: 40 }, // 1 4.png
+] as const;
+
+export const PLAYER_WALK_FRAME_COUNT = PLAYER_WALK_ATLAS_FRAMES.length;
+
+/** 0-based index of the standing idle pose (`1 0.png`). */
+export const PLAYER_WALK_IDLE_FRAME_INDEX = 0;
+
+/** Walk-cycle indices left-to-right after idle (`1 1` … `1 4`). */
+export const PLAYER_WALK_CYCLE_FRAME_INDICES: readonly number[] = [1, 2, 3, 4];
+
+/** Mining pose: alternates with idle frame while holding break on a block (`breaking.png`). */
+export const PLAYER_BREAKING_ATLAS_IMAGE_REL = "GUI/player/breaking.png";
+
+/** Single cell from `breaking.png` — match idle walk cell (`1 0`) for alignment. */
+export const PLAYER_BREAKING_ATLAS_FRAMES: readonly Readonly<{
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}>[] = [{ x: 0, y: 0, w: 17, h: 40 }] as const;
+
+/** AnimatedSprite speed for idle ↔ breaking two-frame loop (see {@link PLAYER_WALK_ANIM_SPEED}). */
+export const PLAYER_BREAKING_ANIM_SPEED = 0.14;
+
+/**
+ * Extra offset for the mining pose frame only (`breaking.png` vs idle walk cell).
+ * In source texels, multiplied by the player uniform scale each frame; sign is for the unmirrored sprite
+ * (`facingRight === false`). When facing right, the body uses negative `scale.x`, so the feet-position
+ * nudge is applied with the opposite sign to match the mirror.
+ */
+export const PLAYER_BREAKING_MINING_FRAME_OFFSET_X_TEXELS = -2;
+export const PLAYER_BREAKING_MINING_FRAME_OFFSET_Y_TEXELS = 0;
+
+/** Single-frame jump pose (`jump.png`). */
+export const PLAYER_JUMP_ATLAS_IMAGE_REL = "GUI/player/jump.png";
+
+/** Must match `GUI/player/jump.png` pixel size (full sheet = single frame). */
+export const PLAYER_JUMP_ATLAS_FRAMES: readonly Readonly<{
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}>[] = [{ x: 0, y: 0, w: 21, h: 32 }] as const;
+
+/**
+ * Remotes: treat vertical speed above this (px/s) as airborne for jump sprite (no `onGround` on wire).
+ */
+export const PLAYER_REMOTE_AIR_VY_THRESHOLD = 18;
+
+/**
+ * {@link AnimatedSprite.animationSpeed} while walking on the ground (Pixi ticker units; ~0.1–0.2 is typical).
+ */
+export const PLAYER_WALK_ANIM_SPEED = 0.16;
+
+/** Multiply walk animation speed while sprinting (same frames, faster playback). */
+export const PLAYER_SPRINT_ANIM_SPEED_MULT = 1.8;
+
+/** Minimum horizontal speed (px/s) to play the walk cycle instead of idle. */
+export const PLAYER_MOVE_ANIM_VEL_THRESHOLD = 12;
+
+/**
+ * Remote peers: treat horizontal speed above this as “sprint” for animation timing (between walk and sprint caps).
+ */
+export const PLAYER_REMOTE_SPRINT_VEL_THRESHOLD = 155;
+
+/**
+ * Low-pass net velocity toward animation thresholds (1/e time ≈ 1/this many seconds). Reduces walk/idle flicker from ~30 Hz state updates.
+ */
+export const PLAYER_REMOTE_ANIM_VEL_SMOOTH_PER_SEC = 12;
+
+/**
+ * Applied after fitting the walk sheet to the hitbox. Hitbox ({@link PLAYER_WIDTH} × {@link PLAYER_HEIGHT}) is unchanged.
+ * `1.5` ≈ ¾ of the prior “2×” display size.
+ */
+export const PLAYER_SPRITE_SCALE_MULTIPLIER = 1.5;
+
+/**
+ * Nudge the walk sprite down (+) or up (−) in world/container pixels (after scale). Fixes a few px of
+ * “floating” when the art’s soles sit above the bottom of the frame.
+ */
+export const PLAYER_SPRITE_FEET_OFFSET_PX = 0;
+
+/**
+ * Extra nudge from sheet texels × draw scale (see {@link PLAYER_SPRITE_FEET_OFFSET_PX} for fixed px).
+ */
+export const PLAYER_SPRITE_FEET_PAD_TEXELS = 0;
+
+/**
  * Camera follow: positive values shift the view target upward in world space so the player
  * appears lower on screen (more ground/sky above the character).
  */
@@ -20,8 +124,14 @@ export const REACH_BLOCKS = 5;
  */
 export const RECIPE_STATION_CRAFTING_TABLE = "stratum:crafting_table";
 
+/** Recipe JSON `station` value: smelting recipes require proximity to a `stratum:furnace` block. */
+export const RECIPE_STATION_FURNACE = "stratum:furnace";
+
 /** Chebyshev radius from player feet block cell to a crafting table for station recipes. */
 export const CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS = 4;
+
+/** Same reach metric as {@link CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS} for furnace crafting tab. */
+export const FURNACE_ACCESS_RADIUS_BLOCKS = 4;
 
 /**
  * Upper bound for Pixi resolution and CSS sky canvas backing store. Cuts GPU/CPU cost on
@@ -31,6 +141,61 @@ export const MAX_RENDER_DEVICE_PIXEL_RATIO = 2;
 
 /** Base seconds per hardness unit for breaking. */
 export const BREAK_TIME_BASE = 0.5;
+
+/** Block-break debris lifetime (seconds). */
+export const BLOCK_BREAK_PARTICLE_LIFETIME_SEC = 0.42;
+
+/** Debris pixel count bounds (random in [MIN, MAX] inclusive). */
+export const BLOCK_BREAK_PARTICLE_MIN = 5;
+export const BLOCK_BREAK_PARTICLE_MAX = 12;
+
+/**
+ * Expected debris spawns while mining ≈ this many particles over progress 0→1 (local player only).
+ * Applied as fractional accumulator on each progress delta.
+ */
+export const BLOCK_BREAK_PARTICLES_PER_PROGRESS = 16;
+
+/** Footstep “kick up” debris count per step (random inclusive range). */
+export const BLOCK_STEP_KICK_PARTICLE_MIN = 1;
+export const BLOCK_STEP_KICK_PARTICLE_MAX = 3;
+
+/** Extra particles when horizontal speed ≥ {@link PLAYER_REMOTE_SPRINT_VEL_THRESHOLD} (local + remote). */
+export const BLOCK_STEP_KICK_PARTICLE_SPRINT_EXTRA = 1;
+
+/** Shorter than break debris so kicked dust reads lighter. */
+export const BLOCK_STEP_KICK_LIFETIME_SEC = 0.36;
+
+/** Ambient canopy leaf fall: max concurrent sprites (Minecraft-like density). */
+export const LEAF_FALL_MAX_PARTICLES = 96;
+/** Spawn attempts per fixed tick (each samples a random loaded chunk / cell). */
+export const LEAF_FALL_SPAWN_TRIES_PER_TICK = 14;
+/** When a candidate leaf cell qualifies, probability to actually spawn one particle. */
+export const LEAF_FALL_SPAWN_CHANCE = 0.82;
+/**
+ * Fraction of spawn rolls that may use any leaf block (not only canopy-edge cells).
+ * Matches “ambient around foliage” feel; rest still prefer exposed underside.
+ */
+export const LEAF_FALL_INTERIOR_LEAF_FRACTION = 0.45;
+/** Chebyshev chunk distance from player for sampling (see {@link VIEW_DISTANCE_CHUNKS}). */
+export const LEAF_FALL_SPAWN_CHUNK_RADIUS = 8;
+/** Horizontal sway amplitude in world pixels (feet-up space, applied on top of drift). */
+export const LEAF_FALL_SWAY_AMP_PX = 10;
+/** Sway angular frequency (rad/s). */
+export const LEAF_FALL_SWAY_OMEGA = 1.85;
+/**
+ * Gravity scale vs break debris ({@link ITEM_GRAVITY} × {@link BLOCK_SIZE} × this).
+ */
+export const LEAF_FALL_GRAVITY_MUL = 0.085;
+/** Per-second velocity retention (raised to the power dt×60 for frame-rate independence). */
+export const LEAF_FALL_AIR_DRAG = 0.988;
+/** Fade out over this clearance (world px) above non-leaf ground. */
+export const LEAF_FALL_GROUND_FADE_PX = 44;
+/** Despawn when this many px or less above ground top. */
+export const LEAF_FALL_DESPAWN_CLEARANCE_PX = 2;
+/** Safety cap on leaf-fall lifetime (seconds). */
+export const LEAF_FALL_MAX_LIFETIME_SEC = 48;
+/** Particle frames in atlas (`leaf_0` … `leaf_N`). */
+export const LEAF_FALL_FRAME_COUNT = 12;
 
 /** Blocks per chunk edge (square chunks). */
 export const CHUNK_SIZE = 32;
@@ -132,14 +297,48 @@ export const ITEM_DROP_LANDING_FRICTION = 0.78;
 /** Number of inventory slots (4 rows × 9 columns = 36). */
 export const INVENTORY_SIZE = 36;
 
+/** Chest storage: single chest (half of player grid). */
+export const CHEST_SINGLE_SLOTS = INVENTORY_SIZE / 2;
+
+/** Double chest (full player grid). */
+export const CHEST_DOUBLE_SLOTS = INVENTORY_SIZE;
+
+/** Chebyshev radius from feet to a chest for opening / UI (matches crafting table metric). */
+export const CHEST_ACCESS_RADIUS_BLOCKS = 4;
+
 /** Number of hotbar slots. */
 export const HOTBAR_SIZE = 9;
 
 /** Player health (integer HP). Each heart icon represents 2 HP. */
 export const PLAYER_MAX_HEALTH = 10;
 
+/**
+ * Blocks fallen (downward feet travel) before fall damage starts. Matches vanilla-style ~3-block safe drop.
+ */
+export const PLAYER_FALL_SAFE_BLOCKS = 3;
+
+/**
+ * Vanilla player max HP used only to scale fall damage when {@link PLAYER_MAX_HEALTH} differs.
+ * Damage = max(0, floor((fallBlocks − safe) × maxHealth / this)).
+ *
+ * Floor after scaling keeps Minecraft-like breakpoints at low max health (e.g. 22 blocks → 9 damage,
+ * 23 → 10 at 10 HP). Using ceil((fall − safe) × maxHealth/20) would kill at 22 blocks.
+ */
+export const PLAYER_FALL_DAMAGE_REFERENCE_MAX_HEALTH = 20;
+
 /** Hearts shown in the HUD (2 HP per heart, spans {@link PLAYER_MAX_HEALTH}). */
 export const PLAYER_HEART_COUNT = 5;
+
+/** Fall damage in HP from accumulated fall distance (blocks), before armor/resistance. */
+export function playerFallDamageFromDistance(fallBlocks: number): number {
+  const excess = fallBlocks - PLAYER_FALL_SAFE_BLOCKS;
+  if (excess <= 0) {
+    return 0;
+  }
+  return Math.floor(
+    excess * (PLAYER_MAX_HEALTH / PLAYER_FALL_DAMAGE_REFERENCE_MAX_HEALTH),
+  );
+}
 
 /** Shared duration (ms) for inventory panel + crafting sidebar open/close CSS transitions. */
 export const INVENTORY_ANIM_MS = 300;
@@ -149,6 +348,75 @@ export const INVENTORY_ITEM_ICON_DISPLAY_PX = 48;
 
 /** Metadata bit: world-generated tree block — no player collision. */
 export const WORLDGEN_NO_COLLIDE = 0x01;
+
+/**
+ * World Y used only for water column depth tint in the renderer (deeper below this → darker).
+ * Often aligned with {@link WATER_SEA_LEVEL_WY} for consistent shading.
+ */
+export const WATER_DEPTH_TINT_REFERENCE_WY = -15;
+
+/**
+ * Final chunk flood-fill: open-sky-connected air at this world Y or below becomes water.
+ * Tune relative to terrain surface height range so you get coastlines, not all-ocean.
+ */
+export const WATER_SEA_LEVEL_WY = -2;
+
+/**
+ * Lake biome: horizontal scale in blocks (simplex input `wx / this`). Larger ⇒ broader water bodies.
+ */
+export const LAKE_BIOME_SCALE_BLOCKS = 400;
+
+/**
+ * Lake mask (macro noise 0..1): smoothstep edges. Higher band ⇒ fewer, more separated lakes.
+ */
+export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.78;
+export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.94;
+
+/**
+ * Second noise channel (0..1): multiplied with macro mask for irregular shorelines and extra rarity.
+ */
+export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.52;
+export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.76;
+
+/** Approximate lake bed depth below {@link WATER_SEA_LEVEL_WY} at full lake influence (before jitter). */
+export const LAKE_BIOME_DEPTH_BLOCKS = 7;
+
+/** Lake bed vertical jitter amplitude (blocks), from high-frequency noise. */
+export const LAKE_BIOME_DEPTH_JITTER_SCALE = 2;
+
+/** Do not spawn trees when lake shore blend exceeds this (0..1). */
+export const LAKE_BIOME_TREE_SUPPRESS_INFLUENCE = 0.12;
+
+/** Max horizontal flow distance from a source / fall reset (Minecraft-style “9 more blocks”). */
+export const WATER_MAX_FLOW = 9;
+
+/**
+ * Water flow level packed in chunk metadata (bits 1–5, after {@link WORLDGEN_NO_COLLIDE}).
+ * 0 = source / full block; 1..{@link WATER_MAX_FLOW} = flowing (farther = more top crop).
+ */
+export const WATER_FLOW_SHIFT = 1;
+export const WATER_FLOW_MASK = 0x3e;
+
+/** Run water flow spread every N fixed ticks (halves CPU vs every tick; still converges). */
+export const WATER_FLOW_EVERY_N_TICKS = 2;
+
+/** Horizontal move multiplier while the player overlaps water blocks. */
+export const PLAYER_WATER_SPEED_MULT = 0.35;
+
+/** Fraction of normal gravity applied while submerged (slow sink). */
+export const PLAYER_WATER_GRAVITY_MULT = 0.14;
+
+/** Max downward speed in water (px/s, world Y up). */
+export const PLAYER_WATER_MAX_SINK_SPEED_PX = 110;
+
+/** Upward acceleration while holding jump in water (world Y up, applied as −vy per second). */
+export const PLAYER_WATER_SWIM_HOLD_UP_ACCEL = 520;
+
+/** Most negative vy (fastest upward swim) while holding jump in water. */
+export const PLAYER_WATER_SWIM_HOLD_MAX_UP_SPEED = -118;
+
+/** Fall damage multiplier when landing with exactly one block of water above solid support. */
+export const PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT = 0.45;
 
 /** Account username length (profiles table CHECK aligns). */
 export const USERNAME_MIN_LENGTH = 3;
@@ -166,3 +434,73 @@ export const MOD_MAX_COVER_SIZE = 512 * 1024;
 /** Workshop directory page size (list RPC). */
 export const MOD_PAGE_SIZE = 20;
 
+/** Horizontal parallax factor for distant terrain (screen-space, matches legacy bg.png). */
+export const BACKGROUND_PARALLAX_X = 0.15;
+
+/** Debounce before rebuilding backdrop after window resize. */
+export const BACKGROUND_RESIZE_DEBOUNCE_MS = 300;
+
+/**
+ * Leftmost world block column (X) where the parallax tile strip starts — same terrain as the
+ * main world at those coordinates (1:1 with {@link WorldGenerator}).
+ */
+export const BACKGROUND_TILE_STRIP_ORIGIN_BLOCK_X = 50;
+
+/** Chunk columns = ceil(viewportWidth×scale / chunk) + margin; menu / non-gameplay parallax. */
+export const BACKGROUND_TILE_STRIP_WIDTH_SCALE = 2;
+
+/**
+ * In-game parallax uses a **fixed** world anchor (no sliding), so the strip is made wider than
+ * {@link BACKGROUND_TILE_STRIP_WIDTH_SCALE} so long walks stay inside generated columns longer.
+ */
+export const BACKGROUND_TILE_STRIP_WIDTH_SCALE_GAMEPLAY = 4;
+
+/**
+ * Multiplier on camera zoom for the parallax tile strip only; values below 1 read as farther /
+ * smaller than the playable layer.
+ */
+export const BACKGROUND_TILE_STRIP_VISUAL_SCALE = 0.52;
+
+/** Gaussian blur on the strip (both axes); applied via Pixi {@link BlurFilter} on the strip container. */
+export const BACKGROUND_TILE_STRIP_BLUR = 6;
+
+/** Blur quality (Pixi passes); higher = smoother, costlier. */
+export const BACKGROUND_TILE_STRIP_BLUR_QUALITY = 3;
+
+/**
+ * Extra multiplier on world ambient for the blurred parallax strip tint.
+ * `1` = peak daylight uses full texture lightness; below `1` dims the strip even at noon.
+ */
+export const BACKGROUND_TILE_STRIP_LIGHT_ATTENUATION = 1;
+
+/**
+ * When {@link WorldLightingParams.ambient} is below this, night parallax boosts apply
+ * ({@link BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_MIN_SCALE}, {@link BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_TINT_WHITEN}, etc.).
+ */
+export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_AMBIENT_BELOW = 0.5;
+
+/**
+ * Floor on parallax tint brightness at night (before ambientTint). Stops the horizon going
+ * nearly black when `ambient` is tiny; proportional `× BRIGHTEN` alone barely moves it.
+ */
+export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_MIN_SCALE = 0.32;
+
+/** Extra multiplier on scale when ambient is below {@link BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_AMBIENT_BELOW}. */
+export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_BRIGHTEN = 1.15;
+
+/**
+ * At full night (ambient → 0), blend this much of ambientTint toward white so cool night
+ * colors do not crush the distant strip.
+ */
+export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_TINT_WHITEN = 0.55;
+
+/**
+ * Slide parallax chunk window when the camera is within this many **blocks** of strip edge.
+ * ~1.5 chunks: earlier than one chunk, but not so wide that a minimal strip (4 cols) has no interior.
+ */
+export const BACKGROUND_TILE_STRIP_CAMERA_EDGE_MARGIN_BLOCKS =
+  CHUNK_SIZE + Math.floor(CHUNK_SIZE / 2);
+
+/** Vertical chunk span (inclusive) for the strip; mirrors main-menu background depth. */
+export const BACKGROUND_TILE_STRIP_CY_START = -3;
+export const BACKGROUND_TILE_STRIP_CY_END = 2;

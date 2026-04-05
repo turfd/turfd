@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:stone_axe"
+    },
+    "components": {
+      "stratum:display_name": "Stone Axe",
+      "stratum:texture_key": "stone_axe",
+      "stratum:max_stack": 1,
+      "stratum:tool_type": "axe",
+      "stratum:tool_tier": 1,
+      "stratum:tool_speed": 4,
+      "stratum:max_durability": 132,
+      "stratum:numeric_id": 75
+    }
+  }
+}

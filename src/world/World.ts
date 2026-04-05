@@ -1,20 +1,28 @@
 /** Facade: chunks, block registry, and procedural world generation. */
 import { yieldToNextFrame } from "../core/asyncYield";
+import { unixRandom01 } from "../core/unixRandom";
 import {
   BLOCK_SIZE,
+  CHEST_DOUBLE_SLOTS,
+  CHEST_SINGLE_SLOTS,
   CHUNK_SIZE,
+  PLAYER_REMOTE_AIR_VY_THRESHOLD,
   SIMULATION_DISTANCE_CHUNKS,
   SKY_LIGHT_MAX,
+  VIEW_DISTANCE_CHUNKS,
   SPAWN_CHUNK_RADIUS,
+  STEP_INTERVAL,
   STREAM_CHUNK_HYSTERESIS_BLOCKS,
+  WATER_FLOW_EVERY_N_TICKS,
   WORLDGEN_NO_COLLIDE,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
 } from "../core/constants";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import type { EventBus } from "../core/EventBus";
-import type { ItemId } from "../core/itemDefinition";
+import type { ItemId, ItemStack } from "../core/itemDefinition";
 import type { ILootResolver } from "../core/loot";
+import type { ItemRegistry } from "../items/ItemRegistry";
 import type { ChunkRecord, IndexedDBStore } from "../persistence/IndexedDBStore";
 import type { BlockRegistry } from "./blocks/BlockRegistry";
 import type { BlockDefinition } from "./blocks/BlockDefinition";
@@ -36,9 +44,38 @@ import {
 } from "./chunk/ChunkCoord";
 import { GeneratorContext } from "./gen/GeneratorContext";
 import { WorldGenerator } from "./gen/WorldGenerator";
+import { resimulateWaterFromSources, tickWaterFlow } from "./water/WaterSimulation";
 import { createAABB, type AABB } from "../entities/physics/AABB";
 import { RemotePlayer } from "./entities/RemotePlayer";
 import { DroppedItem } from "../entities/DroppedItem";
+import {
+  createEmptyFurnaceTileState,
+  furnaceCellKey,
+  furnaceTilesEqual,
+} from "./furnace/FurnaceTileState";
+import { stepFurnaceTile } from "./furnace/FurnaceSimulator";
+import type { FurnaceTileState } from "./furnace/FurnaceTileState";
+import {
+  furnaceTileToPersisted,
+  normalizeFurnacePersistedChunk,
+  persistedToFurnaceTile,
+  worldXYFromChunkLocal,
+  type FurnacePersistedChunk,
+} from "./furnace/furnacePersisted";
+import {
+  chestCellKey,
+  createEmptyChestTile,
+  type ChestTileState,
+} from "./chest/ChestTileState";
+import { tryMergeChestAfterPlace } from "./chest/chestMerge";
+import { chestIsDoubleAtAnchor, chestStorageAnchor } from "./chest/chestVisual";
+import {
+  chestTileToPersisted,
+  normalizeChestPersistedChunk,
+  persistedToChestTile,
+  type ChestPersistedChunk,
+} from "./chest/chestPersisted";
+import type { SmeltingRegistry } from "./SmeltingRegistry";
 import type { ScreenAABB } from "../core/worldCollision";
 import type { GameEvent } from "../core/types";
 
@@ -47,6 +84,11 @@ function isGrassOrDirtSupport(def: BlockDefinition): boolean {
     def.identifier === "stratum:grass" ||
     def.identifier === "stratum:dirt"
   );
+}
+
+/** Block that may sit directly under a cactus column (sand base or stacked cactus). */
+function isValidCactusSupportBelow(def: BlockDefinition, cactusBlockId: number): boolean {
+  return def.id === cactusBlockId || def.identifier === "stratum:sand";
 }
 
 /** Keeps streaming centre stable until the player moves `hystBlocks` into the target chunk. */
@@ -78,16 +120,26 @@ export type WorldLoadProgress = {
 
 export type WorldLoadProgressCallback = (progress: WorldLoadProgress) => void;
 
+/** Pack signed chunk coords into one number for Set deduping (assumes each axis in [-32768, 32767]). */
+const CHUNK_COORD_PACK_BIAS = 32768;
+function packChunkCoordKey(cx: number, cy: number): number {
+  return ((cx + CHUNK_COORD_PACK_BIAS) << 16) | (cy + CHUNK_COORD_PACK_BIAS);
+}
+
 export class World {
   private readonly registry: BlockRegistry;
   private readonly chunks: ChunkManager;
   private readonly worldGen: WorldGenerator;
+  /** Stable reference for {@link ChunkManager.getOrCreateChunk} (avoids per-call `.bind`). */
+  private readonly _chunkGen: ChunkGenerator;
   private readonly airId: number;
   private readonly cactusBlockId: number;
   private readonly seed: number;
   private readonly store: IndexedDBStore;
   private readonly worldUuid: string;
   private readonly remotePlayers = new Map<string, RemotePlayer>();
+  /** Footstep cadence for `entity:ground-kick` (remote peers). */
+  private readonly remoteGroundKickAccum = new Map<string, number>();
   private readonly bus?: EventBus;
   private readonly _droppedItems = new Map<string, DroppedItem>();
   private _dropSeq = 0;
@@ -101,6 +153,28 @@ export class World {
   private streamCentreCx: number | null = null;
   private streamCentreCy: number | null = null;
 
+  private _furnaceBlockId: number | null = null;
+  private readonly _furnaceTiles = new Map<string, FurnaceTileState>();
+
+  private _chestBlockId: number | null = null;
+  private readonly _chestTiles = new Map<string, ChestTileState>();
+
+  private _waterSimTick = 0;
+  private _waterBlockId: number | null = null;
+  /** When true, next {@link tickWaterSystems} rebuilds flowing water from remaining sources. */
+  private _pendingWaterTopologyResim = false;
+
+  /** When set, chunk loads remap stored numeric ids through identifiers (`WorldMetadata.blockIdPalette`). */
+  private readonly _blockLoadPalette: readonly string[] | undefined;
+
+  /**
+   * When &gt; 0, {@link setBlock} / {@link setBlockWithoutPlantCascade} use a fast path for
+   * air/water-only writes: no per-cell events, deferred lighting until {@link popBulkForegroundWrites}.
+   */
+  private _bulkFgDepth = 0;
+  private readonly _bulkFgChunkKeys = new Set<string>();
+  private readonly _bulkFgSkyWx = new Set<number>();
+
   constructor(
     registry: BlockRegistry,
     seed: number,
@@ -108,6 +182,7 @@ export class World {
     worldUuid: string,
     lootResolver: ILootResolver,
     bus?: EventBus,
+    persistedBlockIdPalette?: readonly string[],
   ) {
     this.registry = registry;
     this.chunks = new ChunkManager();
@@ -120,6 +195,11 @@ export class World {
     this._lootResolver = lootResolver;
     this._lootRng = new GeneratorContext(seed);
     this.bus = bus;
+    this._chunkGen = (coord) => this.worldGen.generateChunk(coord);
+    this._blockLoadPalette =
+      persistedBlockIdPalette !== undefined && persistedBlockIdPalette.length > 0
+        ? [...persistedBlockIdPalette]
+        : undefined;
   }
 
   /** Seeded RNG fork for each block-break loot roll (deterministic order for a given seed). */
@@ -199,11 +279,12 @@ export class World {
     if (wy < WORLD_Y_MIN || wy > WORLD_Y_MAX) {
       return false;
     }
+    const oldBg = this.getBackgroundId(wx, wy);
     const coord = worldToChunk(wx, wy);
-    const gen = this.makeChunkGenerator();
-    const chunk = this.chunks.getOrCreateChunk(coord, gen);
+    const chunk = this.chunks.getOrCreateChunk(coord, this._chunkGen);
     const { lx, ly } = worldToLocalBlock(wx, wy);
     setBackground(chunk, lx, ly, id);
+    this.emitBackgroundBlockChanged(wx, wy, oldBg, id);
     return true;
   }
 
@@ -334,7 +415,7 @@ export class World {
       [placedWx - 1, placedWy - 1],
     ];
     for (let i = attempts.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(unixRandom01() * (i + 1));
       const a = attempts[i]!;
       attempts[i] = attempts[j]!;
       attempts[j] = a;
@@ -380,9 +461,10 @@ export class World {
     y: number,
     vx = 0,
     vy = 0,
+    damage = 0,
   ): void {
     const id = `drop-${++this._dropSeq}`;
-    const drop = new DroppedItem(id, itemId, count, x, y, vx, vy);
+    const drop = new DroppedItem(id, itemId, count, x, y, vx, vy, damage);
     this._droppedItems.set(id, drop);
   }
 
@@ -393,16 +475,22 @@ export class World {
   updateDroppedItems(
     dt: number,
     playerPos: { x: number; y: number },
-    inventory: { add(itemId: ItemId, count: number): number },
+    inventory: { addItemStack(stack: ItemStack): ItemStack | null },
   ): void {
     for (const [id, item] of [...this._droppedItems.entries()]) {
       const collected = item.update(dt, this, playerPos, this._dropSolidScratch);
       if (!collected) {
         continue;
       }
-      const overflow = inventory.add(item.itemId, item.count);
-      if (overflow > 0) {
-        item.count = overflow;
+      const stack: ItemStack = {
+        itemId: item.itemId,
+        count: item.count,
+        ...(item.damage > 0 ? { damage: item.damage } : {}),
+      };
+      const overflow = inventory.addItemStack(stack);
+      if (overflow !== null) {
+        item.count = overflow.count;
+        item.damage = overflow.damage ?? 0;
       } else {
         this._droppedItems.delete(id);
       }
@@ -415,19 +503,159 @@ export class World {
   }
 
   /**
-   * Sets a block in world space. Ignores writes outside vertical bounds.
-   * Phase 2: broadcast `BLOCK_UPDATE` from host here.
+   * Begin batching air/water foreground writes (fluid sim). Pair with {@link popBulkForegroundWrites}.
+   * Defers lighting and per-cell `game:block-changed` until the matching pop.
    */
-  setBlock(wx: number, wy: number, id: number): boolean {
-    if (wy < WORLD_Y_MIN || wy > WORLD_Y_MAX) {
+  pushBulkForegroundWrites(): void {
+    this._bulkFgDepth += 1;
+  }
+
+  popBulkForegroundWrites(): void {
+    this._bulkFgDepth -= 1;
+    if (this._bulkFgDepth < 0) {
+      this._bulkFgDepth = 0;
+    }
+    if (this._bulkFgDepth === 0) {
+      this.flushBulkForegroundWrites();
+    }
+  }
+
+  private flushBulkForegroundWrites(): void {
+    for (const wx of this._bulkFgSkyWx) {
+      this.invalidateSkyTopColumn(wx);
+    }
+    this._bulkFgSkyWx.clear();
+    const affected = new Set<string>();
+    for (const key of this._bulkFgChunkKeys) {
+      affected.add(key);
+      const comma = key.indexOf(",");
+      const cx = Number.parseInt(key.slice(0, comma), 10);
+      const cy = Number.parseInt(key.slice(comma + 1), 10);
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+        continue;
+      }
+      affected.add(`${cx - 1},${cy}`);
+      affected.add(`${cx + 1},${cy}`);
+      affected.add(`${cx},${cy - 1}`);
+      affected.add(`${cx},${cy + 1}`);
+    }
+    this._bulkFgChunkKeys.clear();
+    const chunkCoords: { cx: number; cy: number }[] = [];
+    for (const key of affected) {
+      const comma = key.indexOf(",");
+      const cx = Number.parseInt(key.slice(0, comma), 10);
+      const cy = Number.parseInt(key.slice(comma + 1), 10);
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+        continue;
+      }
+      this.recomputeChunkLight(cx, cy);
+      chunkCoords.push({ cx, cy });
+    }
+    if (chunkCoords.length > 0) {
+      this.bus?.emit({
+        type: "game:chunks-fg-bulk-updated",
+        chunkCoords,
+      } satisfies GameEvent);
+    }
+  }
+
+  /**
+   * Fast in-chunk write for fluid sim: air/water only, existing chunk, no chest/furnace.
+   */
+  private tryBulkForegroundWrite(
+    wx: number,
+    wy: number,
+    newId: number,
+    newMeta: number,
+    oldId: number,
+  ): boolean {
+    if (this._bulkFgDepth <= 0) {
+      return false;
+    }
+    let waterId: number;
+    try {
+      waterId = this.getWaterBlockId();
+    } catch {
+      return false;
+    }
+    if (newId !== this.airId && newId !== waterId) {
+      return false;
+    }
+    if (oldId !== this.airId && !this.registry.getById(oldId).water) {
+      return false;
+    }
+    if (
+      this._chestBlockId !== null &&
+      (oldId === this._chestBlockId || newId === this._chestBlockId)
+    ) {
+      return false;
+    }
+    const fid = this._furnaceBlockId;
+    if (fid !== null && (oldId === fid || newId === fid)) {
       return false;
     }
     const coord = worldToChunk(wx, wy);
-    const gen = this.makeChunkGenerator();
-    const chunk = this.chunks.getOrCreateChunk(coord, gen);
+    const chunk = this.chunks.getChunk(coord);
+    if (chunk === undefined) {
+      return false;
+    }
     const { lx, ly } = worldToLocalBlock(wx, wy);
+    const idx = localIndex(lx, ly);
+    setBlock(chunk, lx, ly, newId);
+    chunk.metadata[idx] = newMeta;
+    chunk.dirty = true;
+    this._bulkFgChunkKeys.add(`${coord.cx},${coord.cy}`);
+    this._bulkFgSkyWx.add(wx);
+    return true;
+  }
+
+  /**
+   * Sets a block in world space. Ignores writes outside vertical bounds.
+   * Phase 2: broadcast `BLOCK_UPDATE` from host here.
+   * @param opts.cellMetadata Per-cell flags for this block (e.g. {@link WORLDGEN_NO_COLLIDE}); defaults to 0.
+   */
+  setBlock(
+    wx: number,
+    wy: number,
+    id: number,
+    opts?: { cellMetadata?: number },
+  ): boolean {
+    if (wy < WORLD_Y_MIN || wy > WORLD_Y_MAX) {
+      return false;
+    }
+    const oldId = this.getBlockId(wx, wy);
+    if (
+      this._bulkFgDepth > 0 &&
+      this.tryBulkForegroundWrite(wx, wy, id, opts?.cellMetadata ?? 0, oldId)
+    ) {
+      return true;
+    }
+    if (
+      this._chestBlockId !== null &&
+      oldId === this._chestBlockId &&
+      id !== this._chestBlockId
+    ) {
+      this.breakChestBeforeBlockChange(wx, wy);
+    }
+    const coord = worldToChunk(wx, wy);
+    const chunk = this.chunks.getOrCreateChunk(coord, this._chunkGen);
+    const { lx, ly } = worldToLocalBlock(wx, wy);
+    const oldMeta = chunk.metadata[localIndex(lx, ly)]!;
     setBlock(chunk, lx, ly, id);
-    chunk.metadata[localIndex(lx, ly)] = 0;
+    const newMeta = opts?.cellMetadata ?? 0;
+    chunk.metadata[localIndex(lx, ly)] = newMeta;
+    this.syncFurnaceTileAfterBlockChange(wx, wy, id);
+    if (this._chestBlockId !== null) {
+      if (id === this._chestBlockId) {
+        tryMergeChestAfterPlace(wx, wy, this.chestMergeContext());
+        this.ensureChestTileAt(wx, wy);
+      } else {
+        this._chestTiles.delete(chestCellKey(wx, wy));
+      }
+      if (oldId === this._chestBlockId || id === this._chestBlockId) {
+        this.markChunksDirtyForHorizontalChestNeighbors(wx, wy);
+      }
+    }
     this.invalidateSkyTopColumn(wx);
     if (this.registry.getById(id).solid) {
       this.nudgeDroppedItemsFromBlock(wx, wy);
@@ -452,7 +680,59 @@ export class World {
 
     this.breakPlantsIfSupportLost(wx, wy);
 
+    this.emitForegroundBlockChanged(wx, wy, oldId, id, oldMeta, newMeta);
+    if (
+      oldId !== id &&
+      this.registry.getById(oldId).water &&
+      !this.registry.getById(id).water
+    ) {
+      this._pendingWaterTopologyResim = true;
+    }
     return true;
+  }
+
+  private emitForegroundBlockChanged(
+    wx: number,
+    wy: number,
+    oldId: number,
+    newId: number,
+    oldMeta: number,
+    newMeta: number,
+  ): void {
+    if (this.bus === undefined) {
+      return;
+    }
+    if (oldId === newId && oldMeta === newMeta) {
+      return;
+    }
+    this.bus.emit({
+      type: "game:block-changed",
+      wx,
+      wy,
+      blockId: newId,
+      previousBlockId: oldId !== newId ? oldId : undefined,
+      layer: "fg",
+      cellMetadata: newMeta,
+    } satisfies GameEvent);
+  }
+
+  private emitBackgroundBlockChanged(
+    wx: number,
+    wy: number,
+    oldId: number,
+    newId: number,
+  ): void {
+    if (this.bus === undefined || oldId === newId) {
+      return;
+    }
+    this.bus.emit({
+      type: "game:block-changed",
+      wx,
+      wy,
+      blockId: newId,
+      previousBlockId: oldId,
+      layer: "bg",
+    } satisfies GameEvent);
   }
 
   /**
@@ -470,13 +750,6 @@ export class World {
       if (support.tallGrass !== "bottom") {
         this.spawnLootForBrokenBlock(above.id, wx, wy + 1);
         this.setBlockWithoutPlantCascade(wx, wy + 1, 0);
-        this.bus?.emit({
-          type: "game:block-changed",
-          wx,
-          wy: wy + 1,
-          blockId: 0,
-          layer: "fg",
-        } satisfies GameEvent);
       }
       return;
     }
@@ -491,6 +764,21 @@ export class World {
         above.identifier === "stratum:short_grass");
 
     if (!isFoliage) {
+      if (
+        above.id === this.cactusBlockId &&
+        !isValidCactusSupportBelow(support, this.cactusBlockId)
+      ) {
+        let y = wy + 1;
+        while (y <= WORLD_Y_MAX) {
+          const cell = this.getBlock(wx, y);
+          if (cell.id !== this.cactusBlockId) {
+            break;
+          }
+          this.spawnLootForBrokenBlock(cell.id, wx, y);
+          this.setBlockWithoutPlantCascade(wx, y, 0);
+          y += 1;
+        }
+      }
       return;
     }
 
@@ -503,49 +791,60 @@ export class World {
         const top = this.getBlock(wx, wy + 2);
         if (top.tallGrass === "top") {
           this.setBlockWithoutPlantCascade(wx, wy + 2, 0);
-          this.bus?.emit({
-            type: "game:block-changed",
-            wx,
-            wy: wy + 2,
-            blockId: 0,
-            layer: "fg",
-          } satisfies GameEvent);
         }
       }
       this.spawnLootForBrokenBlock(above.id, wx, wy + 1);
       this.setBlockWithoutPlantCascade(wx, wy + 1, 0);
-      this.bus?.emit({
-        type: "game:block-changed",
-        wx,
-        wy: wy + 1,
-        blockId: 0,
-        layer: "fg",
-      } satisfies GameEvent);
       return;
     }
 
     this.spawnLootForBrokenBlock(above.id, wx, wy + 1);
     this.setBlockWithoutPlantCascade(wx, wy + 1, 0);
-    this.bus?.emit({
-      type: "game:block-changed",
-      wx,
-      wy: wy + 1,
-      blockId: 0,
-      layer: "fg",
-    } satisfies GameEvent);
   }
 
   /** Internal setBlock without re-running plant-cascade (avoids recursion when clearing plants). */
-  private setBlockWithoutPlantCascade(wx: number, wy: number, id: number): boolean {
+  private setBlockWithoutPlantCascade(
+    wx: number,
+    wy: number,
+    id: number,
+    opts?: { skipChestBreak?: boolean },
+  ): boolean {
     if (wy < WORLD_Y_MIN || wy > WORLD_Y_MAX) {
       return false;
     }
+    const oldId = this.getBlockId(wx, wy);
+    if (
+      this._bulkFgDepth > 0 &&
+      this.tryBulkForegroundWrite(wx, wy, id, 0, oldId)
+    ) {
+      return true;
+    }
+    if (
+      !opts?.skipChestBreak &&
+      this._chestBlockId !== null &&
+      oldId === this._chestBlockId &&
+      id !== this._chestBlockId
+    ) {
+      this.breakChestBeforeBlockChange(wx, wy);
+    }
     const coord = worldToChunk(wx, wy);
-    const gen = this.makeChunkGenerator();
-    const chunk = this.chunks.getOrCreateChunk(coord, gen);
+    const chunk = this.chunks.getOrCreateChunk(coord, this._chunkGen);
     const { lx, ly } = worldToLocalBlock(wx, wy);
+    const oldMeta = chunk.metadata[localIndex(lx, ly)]!;
     setBlock(chunk, lx, ly, id);
     chunk.metadata[localIndex(lx, ly)] = 0;
+    this.syncFurnaceTileAfterBlockChange(wx, wy, id);
+    if (this._chestBlockId !== null) {
+      if (id === this._chestBlockId) {
+        tryMergeChestAfterPlace(wx, wy, this.chestMergeContext());
+        this.ensureChestTileAt(wx, wy);
+      } else {
+        this._chestTiles.delete(chestCellKey(wx, wy));
+      }
+      if (oldId === this._chestBlockId || id === this._chestBlockId) {
+        this.markChunksDirtyForHorizontalChestNeighbors(wx, wy);
+      }
+    }
     this.invalidateSkyTopColumn(wx);
     if (this.registry.getById(id).solid) {
       this.nudgeDroppedItemsFromBlock(wx, wy);
@@ -566,7 +865,55 @@ export class World {
     if (localY === CHUNK_SIZE - 1) {
       this.recomputeChunkLight(cx, cy + 1);
     }
+    this.emitForegroundBlockChanged(wx, wy, oldId, id, oldMeta, 0);
+    if (
+      oldId !== id &&
+      this.registry.getById(oldId).water &&
+      !this.registry.getById(id).water
+    ) {
+      this._pendingWaterTopologyResim = true;
+    }
     return true;
+  }
+
+  /** @internal Fluid sim: clear cells without plant cascade recursion (skips chest break for speed). */
+  setBlockWithoutPlantCascadeForWater(wx: number, wy: number, id: number): void {
+    this.setBlockWithoutPlantCascade(wx, wy, id, { skipChestBreak: true });
+  }
+
+  /** Numeric id of `stratum:water` (cached). */
+  getWaterBlockId(): number {
+    if (this._waterBlockId === null) {
+      this._waterBlockId = this.registry.getByIdentifier("stratum:water").id;
+    }
+    return this._waterBlockId;
+  }
+
+  /** @internal Water flow scan loaded chunks only. */
+  iterLoadedChunks(): Iterable<Chunk> {
+    return this.chunks.getLoadedChunks();
+  }
+
+  /**
+   * Host / single-player: flowing water pass (spread from procedural / placed sources).
+   * No-op if `stratum:water` is not registered.
+   */
+  tickWaterSystems(): void {
+    try {
+      const waterId = this.getWaterBlockId();
+      if (this._pendingWaterTopologyResim) {
+        this._pendingWaterTopologyResim = false;
+        resimulateWaterFromSources(this, this.airId, waterId);
+        this._waterSimTick += 1;
+        return;
+      }
+      this._waterSimTick += 1;
+      if (this._waterSimTick % WATER_FLOW_EVERY_N_TICKS === 0) {
+        tickWaterFlow(this, this.airId, waterId);
+      }
+    } catch {
+      // Pack without water block
+    }
   }
 
   private invalidateSkyTopColumn(wx: number): void {
@@ -642,6 +989,21 @@ export class World {
         h,
       );
     }
+    /**
+     * Hysteresis can leave the stream centre several chunks behind the player's chunk on one axis
+     * (e.g. westbound: target cx jumps far negative while the threshold still holds the old centre).
+     * Rendering only loads meshes within {@link VIEW_DISTANCE_CHUNKS} of the stream centre, so the
+     * player would see empty tiles / missing back-wall until they crossed a narrow boundary. Snap when
+     * the lag exceeds the view ring so the player's chunk is always inside the rendered set.
+     */
+    const lag = Math.max(
+      Math.abs(this.streamCentreCx - targ.cx),
+      Math.abs(this.streamCentreCy - targ.cy),
+    );
+    if (lag > VIEW_DISTANCE_CHUNKS) {
+      this.streamCentreCx = targ.cx;
+      this.streamCentreCy = targ.cy;
+    }
     await this.loadChunksAroundCentre(this.streamCentreCx, this.streamCentreCy);
   }
 
@@ -676,11 +1038,14 @@ export class World {
       SIMULATION_DISTANCE_CHUNKS,
       SPAWN_CHUNK_RADIUS,
     );
+    for (const { cx, cy } of evicted) {
+      this.removeFurnaceTilesInChunk(cx, cy);
+      this.removeChestTilesInChunk(cx, cy);
+    }
     for (const { cx } of evicted) {
       this.invalidateSkyTopStripForChunk(cx);
     }
 
-    const gen = this.makeChunkGenerator();
     const r = SIMULATION_DISTANCE_CHUNKS;
     const pending: ChunkCoord[] = [];
     const seenPending = new Set<string>();
@@ -713,6 +1078,12 @@ export class World {
       if (record !== undefined) {
         const chunk = this.chunkFromRecord(record);
         this.chunks.putChunk(chunk);
+        if (record.furnaces !== undefined && record.furnaces.length > 0) {
+          this.applyFurnaceEntitiesForChunk(coord.cx, coord.cy, record.furnaces);
+        }
+        if (record.chests !== undefined && record.chests.length > 0) {
+          this.applyChestEntitiesForChunk(coord.cx, coord.cy, record.chests);
+        }
         this.invalidateSkyTopStripForChunk(coord.cx);
         loaded++;
         progressCallback?.({
@@ -723,7 +1094,7 @@ export class World {
           cy: coord.cy,
         });
       } else {
-        this.chunks.putChunk(gen(coord));
+        this.chunks.putChunk(this._chunkGen(coord));
         this.invalidateSkyTopStripForChunk(coord.cx);
         loaded++;
         progressCallback?.({
@@ -748,23 +1119,19 @@ export class World {
      * Lighting depends on neighboring chunks. Run a settle pass only after this batch is fully
      * loaded/generated so caves in brand new worlds don't start with stale lighting.
      */
-    const affected = new Set<string>();
+    const affected = new Set<number>();
     for (const { cx, cy } of pending) {
-      affected.add(`${cx},${cy}`);
-      affected.add(`${cx - 1},${cy}`);
-      affected.add(`${cx + 1},${cy}`);
-      affected.add(`${cx},${cy - 1}`);
-      affected.add(`${cx},${cy + 1}`);
+      affected.add(packChunkCoordKey(cx, cy));
+      affected.add(packChunkCoordKey(cx - 1, cy));
+      affected.add(packChunkCoordKey(cx + 1, cy));
+      affected.add(packChunkCoordKey(cx, cy - 1));
+      affected.add(packChunkCoordKey(cx, cy + 1));
     }
     const tLight = import.meta.env.DEV ? chunkPerfNow() : 0;
     let lightI = 0;
     for (const key of affected) {
-      const [cxStr, cyStr] = key.split(",");
-      const cx = Number.parseInt(cxStr ?? "0", 10);
-      const cy = Number.parseInt(cyStr ?? "0", 10);
-      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
-        continue;
-      }
+      const cx = (key >>> 16) - CHUNK_COORD_PACK_BIAS;
+      const cy = (key & 0xffff) - CHUNK_COORD_PACK_BIAS;
       this.recomputeChunkLight(cx, cy);
       lightI += 1;
       if (affected.size > 8 && lightI % 8 === 0) {
@@ -784,17 +1151,46 @@ export class World {
     }
   }
 
+  private remapStoredBlockId(storedId: number): number {
+    const pal = this._blockLoadPalette;
+    if (pal === undefined) {
+      return storedId;
+    }
+    const ident = pal[storedId];
+    if (ident === undefined || ident.length === 0) {
+      return this.airId;
+    }
+    try {
+      return this.registry.getByIdentifier(ident).id;
+    } catch {
+      return this.airId;
+    }
+  }
+
   private chunkFromRecord(record: ChunkRecord): Chunk {
     const coord: ChunkCoord = { cx: record.cx, cy: record.cy };
     const chunk = createChunk(coord);
-    chunk.blocks.set(record.blocks);
+    const pal = this._blockLoadPalette;
+    if (pal === undefined) {
+      chunk.blocks.set(record.blocks);
+    } else {
+      for (let i = 0; i < record.blocks.length; i++) {
+        chunk.blocks[i] = this.remapStoredBlockId(record.blocks[i]!);
+      }
+    }
     chunk.metadata.set(record.metadata);
     const expected = CHUNK_SIZE * CHUNK_SIZE;
     if (
       record.background !== undefined &&
       record.background.length === expected
     ) {
-      chunk.background.set(record.background);
+      if (pal === undefined) {
+        chunk.background.set(record.background);
+      } else {
+        for (let i = 0; i < record.background.length; i++) {
+          chunk.background[i] = this.remapStoredBlockId(record.background[i]!);
+        }
+      }
     }
     chunk.skyLight.fill(0);
     chunk.blockLight.fill(0);
@@ -844,16 +1240,21 @@ export class World {
   }
 
   /**
-   * Apply host-authoritative block data for one chunk (multiplayer). Clears per-cell metadata;
-   * lighting is settled with neighbors so adjacent replicated chunks stay consistent.
+   * Apply host-authoritative block data for one chunk (multiplayer). Zeros per-cell metadata when
+   * `metadata` is omitted (legacy wire); otherwise copies host flags (e.g. tree no-collision).
    */
   applyAuthoritativeChunk(
     cx: number,
     cy: number,
     blocks: Uint16Array,
     background?: Uint16Array,
+    furnaces?: FurnacePersistedChunk[],
+    chests?: ChestPersistedChunk[],
+    metadata?: Uint8Array,
   ): void {
-    this.applyAuthoritativeChunkBatch([{ cx, cy, blocks, background }]);
+    this.applyAuthoritativeChunkBatch([
+      { cx, cy, blocks, background, furnaces, chests, metadata },
+    ]);
   }
 
   /**
@@ -865,11 +1266,14 @@ export class World {
       cy: number;
       blocks: Uint16Array;
       background?: Uint16Array;
+      furnaces?: FurnacePersistedChunk[];
+      chests?: ChestPersistedChunk[];
+      metadata?: Uint8Array;
     }>,
   ): void {
     const expected = CHUNK_SIZE * CHUNK_SIZE;
     const applied: ChunkCoord[] = [];
-    for (const { cx, cy, blocks, background } of entries) {
+    for (const { cx, cy, blocks, background, furnaces, chests, metadata } of entries) {
       if (blocks.length !== expected) {
         continue;
       }
@@ -886,10 +1290,24 @@ export class World {
       } else {
         chunk.background.fill(0);
       }
-      chunk.metadata.fill(0);
+      if (metadata !== undefined && metadata.length === expected) {
+        chunk.metadata.set(metadata);
+      } else {
+        chunk.metadata.fill(0);
+      }
       chunk.skyLight.fill(0);
       chunk.blockLight.fill(0);
       chunk.dirty = true;
+      if (furnaces !== undefined) {
+        this.applyFurnaceEntitiesForChunk(cx, cy, furnaces);
+      } else {
+        this.removeFurnaceTilesInChunk(cx, cy);
+      }
+      if (chests !== undefined) {
+        this.applyChestEntitiesForChunk(cx, cy, chests);
+      } else {
+        this.removeChestTilesInChunk(cx, cy);
+      }
       applied.push(coord);
     }
     const affected = new Set<string>();
@@ -949,6 +1367,11 @@ export class World {
     return top;
   }
 
+  /** Numeric foreground block id at world cell (air when chunk missing). */
+  getForegroundBlockId(wx: number, wy: number): number {
+    return this.getBlockId(wx, wy);
+  }
+
   private getBlockId(wx: number, wy: number): number {
     const cx = Math.floor(wx / CHUNK_SIZE);
     const cy = Math.floor(wy / CHUNK_SIZE);
@@ -959,6 +1382,435 @@ export class World {
     const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const ly = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     return getBlock(chunk, lx, ly);
+  }
+
+  /** @internal Set after block registry includes `stratum:furnace`. */
+  setFurnaceBlockId(id: number | null): void {
+    this._furnaceBlockId = id;
+  }
+
+  getFurnaceBlockId(): number | null {
+    return this._furnaceBlockId;
+  }
+
+  getFurnaceTile(wx: number, wy: number): FurnaceTileState | undefined {
+    return this._furnaceTiles.get(furnaceCellKey(wx, wy));
+  }
+
+  setFurnaceTile(wx: number, wy: number, state: FurnaceTileState): void {
+    this._furnaceTiles.set(furnaceCellKey(wx, wy), state);
+  }
+
+  removeFurnaceTile(wx: number, wy: number): void {
+    this._furnaceTiles.delete(furnaceCellKey(wx, wy));
+  }
+
+  /**
+   * Spawn drops for furnace buffer (fuel + 10 output slots). Queued smelt jobs are not refunded
+   * (ingredients were already consumed at enqueue).
+   */
+  spawnFurnaceItemDropsAt(wx: number, wy: number): void {
+    const st = this._furnaceTiles.get(furnaceCellKey(wx, wy));
+    if (st === undefined) {
+      return;
+    }
+    const px = (wx + 0.5) * BLOCK_SIZE;
+    const py = (wy + 0.5) * BLOCK_SIZE;
+    if (st.fuel !== null && st.fuel.count > 0) {
+      this.spawnItem(
+        st.fuel.itemId,
+        st.fuel.count,
+        px,
+        py,
+        0,
+        0,
+        st.fuel.damage ?? 0,
+      );
+    }
+    for (const slot of st.outputSlots) {
+      if (slot !== null && slot.count > 0) {
+        this.spawnItem(
+          slot.itemId,
+          slot.count,
+          px,
+          py,
+          0,
+          0,
+          slot.damage ?? 0,
+        );
+      }
+    }
+    this.removeFurnaceTile(wx, wy);
+  }
+
+  getFurnaceEntitiesForChunk(cx: number, cy: number): FurnacePersistedChunk[] {
+    const out: FurnacePersistedChunk[] = [];
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    for (const [key, state] of this._furnaceTiles) {
+      const parts = key.split(",");
+      const wx = Number.parseInt(parts[0] ?? "", 10);
+      const wy = Number.parseInt(parts[1] ?? "", 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      out.push(furnaceTileToPersisted(wx, wy, state));
+    }
+    return out;
+  }
+
+  applyFurnaceEntitiesForChunk(cx: number, cy: number, entries: FurnacePersistedChunk[]): void {
+    this.removeFurnaceTilesInChunk(cx, cy);
+    for (const raw of entries) {
+      const e = normalizeFurnacePersistedChunk(raw as unknown) ?? raw;
+      const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
+      this._furnaceTiles.set(furnaceCellKey(wx, wy), persistedToFurnaceTile(e));
+    }
+  }
+
+  removeFurnaceTilesInChunk(cx: number, cy: number): void {
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    const stale: string[] = [];
+    for (const key of this._furnaceTiles.keys()) {
+      const parts = key.split(",");
+      const wx = Number.parseInt(parts[0] ?? "", 10);
+      const wy = Number.parseInt(parts[1] ?? "", 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      stale.push(key);
+    }
+    for (const k of stale) {
+      this._furnaceTiles.delete(k);
+    }
+  }
+
+  /**
+   * Host/offline: advance smelting queue / fuel / output buffer.
+   */
+  tickFurnaces(
+    dtSec: number,
+    worldTimeMs: number,
+    items: ItemRegistry,
+    smelting: SmeltingRegistry,
+  ): string[] {
+    if (this._furnaceBlockId === null) {
+      return [];
+    }
+    const fid = this._furnaceBlockId;
+    const changed: string[] = [];
+    for (const [key, prev] of [...this._furnaceTiles.entries()]) {
+      const parts = key.split(",");
+      const wx = Number.parseInt(parts[0] ?? "", 10);
+      const wy = Number.parseInt(parts[1] ?? "", 10);
+      if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+        this._furnaceTiles.delete(key);
+        continue;
+      }
+      if (this.getBlock(wx, wy).id !== fid) {
+        this._furnaceTiles.delete(key);
+        continue;
+      }
+      const next = stepFurnaceTile(prev, dtSec, worldTimeMs, items, smelting);
+      if (!furnaceTilesEqual(prev, next)) {
+        changed.push(key);
+      }
+      this._furnaceTiles.set(key, next);
+    }
+    return changed;
+  }
+
+  applyFurnaceSnapshotWorld(wx: number, wy: number, data: FurnacePersistedChunk): void {
+    if (this._furnaceBlockId === null || this.getBlock(wx, wy).id !== this._furnaceBlockId) {
+      return;
+    }
+    const { lx, ly } = worldToLocalBlock(wx, wy);
+    if (data.lx !== lx || data.ly !== ly) {
+      return;
+    }
+    const norm = normalizeFurnacePersistedChunk(data as unknown) ?? data;
+    this._furnaceTiles.set(furnaceCellKey(wx, wy), persistedToFurnaceTile(norm));
+  }
+
+  setChestBlockId(id: number | null): void {
+    this._chestBlockId = id;
+  }
+
+  getChestBlockId(): number | null {
+    return this._chestBlockId;
+  }
+
+  /**
+   * Resizes chest storage at the clicked cell’s anchor to 18 or 36 slots to match paired blocks.
+   * Safe to call when opening the chest UI (fixes load / merge edge cases).
+   */
+  syncChestStorageToLayout(wx: number, wy: number): void {
+    this.ensureChestTileAt(wx, wy);
+  }
+
+  getChestTileAtAnchor(ax: number, ay: number): ChestTileState | undefined {
+    return this._chestTiles.get(chestCellKey(ax, ay));
+  }
+
+  setChestTileAtAnchor(ax: number, ay: number, state: ChestTileState): void {
+    this._chestTiles.set(chestCellKey(ax, ay), state);
+  }
+
+  /** Resolve storage anchor for a chest cell (world coords). */
+  getChestStorageAnchorForCell(wx: number, wy: number): { ax: number; ay: number } | null {
+    if (this._chestBlockId === null || this.getBlockId(wx, wy) !== this._chestBlockId) {
+      return null;
+    }
+    const cid = this._chestBlockId;
+    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
+    return chestStorageAnchor(wx, wy, isChest);
+  }
+
+  destroyChestForPlayerBreak(wx: number, wy: number, dropsLoot: boolean): void {
+    if (this._chestBlockId === null) {
+      return;
+    }
+    const cid = this._chestBlockId;
+    if (this.getBlockId(wx, wy) !== cid) {
+      return;
+    }
+    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
+    const { ax, ay } = chestStorageAnchor(wx, wy, isChest);
+    const st = this._chestTiles.get(chestCellKey(ax, ay));
+    const px = (ax + 0.5) * BLOCK_SIZE;
+    const py = (ay + 0.5) * BLOCK_SIZE;
+    if (st !== undefined) {
+      for (const slot of st.slots) {
+        if (slot !== null && slot.count > 0) {
+          this.spawnItem(slot.itemId, slot.count, px, py);
+        }
+      }
+      this._chestTiles.delete(chestCellKey(ax, ay));
+    }
+    const dbl = chestIsDoubleAtAnchor(ax, ay, isChest);
+    if (dropsLoot) {
+      this.spawnLootForBrokenBlock(cid, ax, ay);
+      if (dbl) {
+        this.spawnLootForBrokenBlock(cid, ax + 1, ay);
+      }
+    }
+    const cells: [number, number][] = dbl ? [[ax, ay], [ax + 1, ay]] : [[ax, ay]];
+    for (const [cx, cy] of cells) {
+      this.setBlockWithoutPlantCascade(cx, cy, 0, { skipChestBreak: true });
+    }
+    for (const [cx, cy] of cells) {
+      this.markChunksDirtyForHorizontalChestNeighbors(cx, cy);
+    }
+  }
+
+  getChestEntitiesForChunk(cx: number, cy: number): ChestPersistedChunk[] {
+    const out: ChestPersistedChunk[] = [];
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    for (const [key, state] of this._chestTiles) {
+      const parts = key.split(",");
+      const wx = Number.parseInt(parts[0] ?? "", 10);
+      const wy = Number.parseInt(parts[1] ?? "", 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      out.push(chestTileToPersisted(wx, wy, state));
+    }
+    return out;
+  }
+
+  applyChestEntitiesForChunk(cx: number, cy: number, entries: ChestPersistedChunk[]): void {
+    this.removeChestTilesInChunk(cx, cy);
+    for (const raw of entries) {
+      const e = normalizeChestPersistedChunk(raw as unknown) ?? raw;
+      const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
+      this._chestTiles.set(chestCellKey(wx, wy), persistedToChestTile(e));
+      this.ensureChestTileAt(wx, wy);
+    }
+  }
+
+  removeChestTilesInChunk(cx: number, cy: number): void {
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    const stale: string[] = [];
+    for (const key of this._chestTiles.keys()) {
+      const parts = key.split(",");
+      const wx = Number.parseInt(parts[0] ?? "", 10);
+      const wy = Number.parseInt(parts[1] ?? "", 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      stale.push(key);
+    }
+    for (const k of stale) {
+      this._chestTiles.delete(k);
+    }
+  }
+
+  applyChestSnapshotWorld(wx: number, wy: number, data: ChestPersistedChunk): void {
+    if (this._chestBlockId === null || this.getBlockId(wx, wy) !== this._chestBlockId) {
+      return;
+    }
+    const { lx, ly } = worldToLocalBlock(wx, wy);
+    if (data.lx !== lx || data.ly !== ly) {
+      return;
+    }
+    const norm = normalizeChestPersistedChunk(data as unknown) ?? data;
+    this._chestTiles.set(chestCellKey(wx, wy), persistedToChestTile(norm));
+    this.ensureChestTileAt(wx, wy);
+  }
+
+  private chestMergeContext(): {
+    chestBlockId: number;
+    getBlockId(x: number, y: number): number;
+    getTile(ax: number, ay: number): ChestTileState | undefined;
+    setTile(ax: number, ay: number, t: ChestTileState): void;
+    deleteTile(ax: number, ay: number): void;
+  } {
+    if (this._chestBlockId === null) {
+      throw new Error("chest merge without block id");
+    }
+    const cid = this._chestBlockId;
+    return {
+      chestBlockId: cid,
+      getBlockId: (x, y) => this.getBlockId(x, y),
+      getTile: (ax, ay) => this._chestTiles.get(chestCellKey(ax, ay)),
+      setTile: (ax, ay, t) => this._chestTiles.set(chestCellKey(ax, ay), t),
+      deleteTile: (ax, ay) => this._chestTiles.delete(chestCellKey(ax, ay)),
+    };
+  }
+
+  /**
+   * Ensures storage at the pair anchor matches single vs double layout (18 vs 36 slots).
+   * Expands with empty slots when paired; shrinks only when extra slots are empty.
+   */
+  private ensureChestTileAt(wx: number, wy: number): void {
+    if (this._chestBlockId === null) {
+      return;
+    }
+    const cid = this._chestBlockId;
+    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
+    const { ax, ay } = chestStorageAnchor(wx, wy, isChest);
+    const k = chestCellKey(ax, ay);
+    const dbl = chestIsDoubleAtAnchor(ax, ay, isChest);
+    const want = dbl ? CHEST_DOUBLE_SLOTS : CHEST_SINGLE_SLOTS;
+
+    const existing = this._chestTiles.get(k);
+    if (existing === undefined) {
+      this._chestTiles.set(k, createEmptyChestTile(want));
+      return;
+    }
+    if (existing.slots.length === want) {
+      return;
+    }
+    if (existing.slots.length < want) {
+      const pad = want - existing.slots.length;
+      this._chestTiles.set(k, {
+        slots: [...existing.slots, ...Array.from({ length: pad }, () => null)],
+      });
+      return;
+    }
+    const overflow = existing.slots.slice(want);
+    const overflowEmpty = overflow.every(
+      (s) => s === null || s === undefined || s.count <= 0,
+    );
+    if (overflowEmpty) {
+      this._chestTiles.set(k, { slots: existing.slots.slice(0, want) });
+    }
+  }
+
+  /** Spill buffer and clear paired chest cell(s) except (wx,wy); caller then writes (wx,wy). */
+  private breakChestBeforeBlockChange(wx: number, wy: number): void {
+    if (this._chestBlockId === null) {
+      return;
+    }
+    const cid = this._chestBlockId;
+    if (this.getBlockId(wx, wy) !== cid) {
+      return;
+    }
+    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
+    const { ax, ay } = chestStorageAnchor(wx, wy, isChest);
+    const k = chestCellKey(ax, ay);
+    const st = this._chestTiles.get(k);
+    const px = (ax + 0.5) * BLOCK_SIZE;
+    const py = (ay + 0.5) * BLOCK_SIZE;
+    if (st !== undefined) {
+      for (const slot of st.slots) {
+        if (slot !== null && slot.count > 0) {
+          this.spawnItem(slot.itemId, slot.count, px, py);
+        }
+      }
+      this._chestTiles.delete(k);
+    }
+    const dbl = chestIsDoubleAtAnchor(ax, ay, isChest);
+    const cells: [number, number][] = dbl ? [[ax, ay], [ax + 1, ay]] : [[ax, ay]];
+    for (const [cx, cy] of cells) {
+      if (cx === wx && cy === wy) {
+        continue;
+      }
+      if (this.getBlockId(cx, cy) === cid) {
+        this.setBlockWithoutPlantCascade(cx, cy, 0, { skipChestBreak: true });
+      }
+    }
+    for (const [cx, cy] of cells) {
+      if (!(cx === wx && cy === wy)) {
+        this.markChunksDirtyForHorizontalChestNeighbors(cx, cy);
+      }
+    }
+  }
+
+  private markChunksDirtyForHorizontalChestNeighbors(wx: number, wy: number): void {
+    const { cx, cy } = worldToChunk(wx, wy);
+    for (const dcx of [-1, 0, 1]) {
+      const ch = this.chunks.getChunk({ cx: cx + dcx, cy });
+      if (ch !== undefined) {
+        ch.dirty = true;
+      }
+    }
+  }
+
+  private syncFurnaceTileAfterBlockChange(wx: number, wy: number, blockId: number): void {
+    const fid = this._furnaceBlockId;
+    if (fid === null) {
+      return;
+    }
+    const k = furnaceCellKey(wx, wy);
+    if (blockId === fid) {
+      if (!this._furnaceTiles.has(k)) {
+        this._furnaceTiles.set(k, createEmptyFurnaceTileState(0));
+      }
+    } else {
+      this._furnaceTiles.delete(k);
+    }
   }
 
   /** @internal Used by Game; prefer high-level API elsewhere. */
@@ -979,8 +1831,37 @@ export class World {
 
   /** @internal Used by Game/EntityManager to animate remote peers. */
   updateRemotePlayers(dt: number): void {
-    for (const player of this.remotePlayers.values()) {
-      player.update(dt);
+    for (const [peerId, player] of this.remotePlayers) {
+      player.stepFixed(dt);
+      const bus = this.bus;
+      if (bus === undefined) {
+        continue;
+      }
+      const vx = player.velocityX;
+      const vy = player.velocityY;
+      const onGround = Math.abs(vy) <= PLAYER_REMOTE_AIR_VY_THRESHOLD;
+      let acc = this.remoteGroundKickAccum.get(peerId) ?? 0;
+      if (!onGround || Math.abs(vx) <= 10) {
+        acc = 0;
+      } else {
+        acc += dt;
+        if (acc >= STEP_INTERVAL) {
+          acc = 0;
+          const bx = Math.floor(player.x / BLOCK_SIZE);
+          const by = Math.floor(player.y / BLOCK_SIZE) - 1;
+          const block = this.getBlock(bx, by);
+          if (!block.water && block.id !== this.airId) {
+            bus.emit({
+              type: "entity:ground-kick",
+              feetWorldX: player.x,
+              feetWorldY: player.y,
+              velocityX: vx,
+              blockId: block.id,
+            } satisfies GameEvent);
+          }
+        }
+      }
+      this.remoteGroundKickAccum.set(peerId, acc);
     }
   }
 
@@ -1002,14 +1883,46 @@ export class World {
     }
   }
 
+  /**
+   * Sync another peer’s mining crack overlay. Creates a minimal {@link RemotePlayer} if we have
+   * not yet received pose for that peer.
+   */
+  updateRemotePlayerBreakFromNetwork(
+    peerId: string,
+    crackStageEncoded: number,
+    wx: number,
+    wy: number,
+    layerWire: 0 | 1,
+  ): void {
+    let existing = this.remotePlayers.get(peerId);
+    if (existing === undefined) {
+      existing = new RemotePlayer(0, 0, true, 0, 0);
+      this.remotePlayers.set(peerId, existing);
+    }
+    existing.setBreakMiningFromNetwork(crackStageEncoded, wx, wy, layerWire);
+  }
+
+  /** When a block is placed or broken authoritatively, drop matching remote crack overlays. */
+  clearRemoteBreakMiningAtWorldCell(
+    wx: number,
+    wy: number,
+    layer: "fg" | "bg",
+  ): void {
+    for (const rp of this.remotePlayers.values()) {
+      rp.clearBreakMiningIfCell(wx, wy, layer);
+    }
+  }
+
   /** @internal Used by Game on net:peer-left. */
   removeRemotePlayer(peerId: string): void {
     this.remotePlayers.delete(peerId);
+    this.remoteGroundKickAccum.delete(peerId);
   }
 
   /** Remove every networked peer (e.g. host disabled multiplayer). */
   clearRemotePlayers(): void {
     this.remotePlayers.clear();
+    this.remoteGroundKickAccum.clear();
   }
 
   /** @internal Used by EntityManager for rendering. */
@@ -1017,7 +1930,4 @@ export class World {
     return this.remotePlayers;
   }
 
-  private makeChunkGenerator(): ChunkGenerator {
-    return this.worldGen.generateChunk.bind(this.worldGen);
-  }
 }

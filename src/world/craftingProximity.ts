@@ -5,10 +5,10 @@ function chebyshev(ax: number, ay: number, bx: number, by: number): number {
   return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }
 
-/** True if any `craftingTableBlockId` foreground tile is within `radiusBlocks` (Chebyshev) of feet. */
-export function isNearCraftingTableBlock(
+/** True if any foreground tile with `blockId` is within `radiusBlocks` (Chebyshev) of feet. */
+export function isNearBlockOfId(
   world: World,
-  craftingTableBlockId: number,
+  blockId: number,
   playerFeetPx: { x: number; y: number },
   radiusBlocks: number,
 ): boolean {
@@ -19,10 +19,20 @@ export function isNearCraftingTableBlock(
       if (chebyshev(pcx, pcy, pcx + dx, pcy + dy) > radiusBlocks) {
         continue;
       }
-      if (world.getBlock(pcx + dx, pcy + dy).id === craftingTableBlockId) {
+      if (world.getBlock(pcx + dx, pcy + dy).id === blockId) {
         return true;
       }
     }
   }
   return false;
+}
+
+/** True if any `craftingTableBlockId` foreground tile is within `radiusBlocks` (Chebyshev) of feet. */
+export function isNearCraftingTableBlock(
+  world: World,
+  craftingTableBlockId: number,
+  playerFeetPx: { x: number; y: number },
+  radiusBlocks: number,
+): boolean {
+  return isNearBlockOfId(world, craftingTableBlockId, playerFeetPx, radiusBlocks);
 }

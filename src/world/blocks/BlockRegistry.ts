@@ -1,7 +1,7 @@
 /**
- * Sequential numeric block ids (air = 0). Lookups throw if missing.
+ * Numeric block ids are **content-defined** (`stratum:numeric_id`), dense from 0 (air).
  */
-import type { BlockDefinitionBase } from "../../core/blockDefinition";
+import type { ParsedBlockDefinition } from "../../mods/parseBlockJson";
 import type { BlockDefinition } from "./BlockDefinition";
 
 export class BlockRegistry {
@@ -15,26 +15,37 @@ export class BlockRegistry {
   }
 
   /**
-   * Register a block; returns assigned id. First call must be `stratum:air` (id 0).
+   * Register the next block in dense order. `parsed.numericId` must equal current `size`
+   * (so the first block is air with id 0).
    */
-  register(def: BlockDefinitionBase): number {
+  registerInOrder(parsed: ParsedBlockDefinition): void {
     const id = this.byId.length;
-    if (id === 0 && def.identifier !== "stratum:air") {
+    const { numericId, ...base } = parsed;
+    if (numericId !== id) {
       throw new Error(
-        `First registered block must be stratum:air (got ${def.identifier})`,
+        `Block '${parsed.identifier}': stratum:numeric_id is ${numericId}, expected ${id} (ids must be dense from 0).`,
       );
     }
-    if (this.byIdentifier.has(def.identifier)) {
-      throw new Error(`Duplicate block identifier: ${def.identifier}`);
+    if (id === 0 && parsed.identifier !== "stratum:air") {
+      throw new Error(
+        `First registered block must be stratum:air (got ${parsed.identifier})`,
+      );
     }
-    const full: BlockDefinition = { ...def, id };
+    if (this.byIdentifier.has(parsed.identifier)) {
+      throw new Error(`Duplicate block identifier: ${parsed.identifier}`);
+    }
+    const full: BlockDefinition = { ...base, id };
     this.byId.push(full);
-    this.byIdentifier.set(def.identifier, full);
-    const ns = def.identifier.split(":")[0];
+    this.byIdentifier.set(full.identifier, full);
+    const ns = full.identifier.split(":")[0];
     if (ns) {
       this.modNamespaces.add(ns);
     }
-    return id;
+  }
+
+  /** For world saves: index = numeric block id, value = identifier (semantic remap on load). */
+  buildIdentifierPalette(): string[] {
+    return this.byId.map((b) => b.identifier);
   }
 
   /** Unique mod namespace prefixes from registered block identifiers (e.g. `stratum`). */

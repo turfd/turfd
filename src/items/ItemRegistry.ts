@@ -36,6 +36,10 @@ export class ItemRegistry {
       toolTier: def.toolTier,
       toolSpeed: def.toolSpeed,
       tags: def.tags,
+      maxDurability: def.maxDurability,
+      fuelBurnSeconds: def.fuelBurnSeconds,
+      eatRestoreHealth: def.eatRestoreHealth,
+      inventoryTooltip: def.inventoryTooltip,
     };
 
     this._byId.set(id, full);
@@ -76,6 +80,15 @@ export class ItemRegistry {
   all(): IterableIterator<ItemDefinition> {
     return this._byId.values();
   }
+
+  /** Largest numeric item id in use (0 if none). */
+  maxRegisteredNumericId(): number {
+    let m = 0;
+    for (const d of this._byId.values()) {
+      m = Math.max(m, d.id as number);
+    }
+    return m;
+  }
 }
 
 /**
@@ -97,11 +110,13 @@ export function registerBlockItems(
 
     items.register({
       key: block.identifier,
+      id: block.id as ItemId,
       textureName,
       displayName: block.displayName ?? block.identifier,
       maxStack: MAX_STACK_DEFAULT,
       placesBlockId: block.id,
-      tags: (block as BlockDefinitionBase).tags,
+      tags: block.tags,
+      fuelBurnSeconds: block.fuelBurnSeconds,
     });
   }
 }

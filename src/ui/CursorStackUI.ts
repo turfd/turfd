@@ -16,6 +16,8 @@ export class CursorStackUI {
   private readonly el: HTMLDivElement;
   private readonly icon: HTMLDivElement;
   private readonly count: HTMLSpanElement;
+  private readonly durWrap: HTMLDivElement;
+  private readonly durFill: HTMLDivElement;
   private readonly itemRegistry: ItemRegistry;
   private readonly getCursorStack: GetCursorStack;
   private readonly getItemIconUrlLookup: GetItemIconUrlLookup;
@@ -40,18 +42,36 @@ export class CursorStackUI {
     const ip = INVENTORY_ITEM_ICON_DISPLAY_PX;
     const wrapPx = ip + 8;
     const half = wrapPx / 2;
-    wrap.style.cssText = `position:fixed;left:0;top:0;pointer-events:none;z-index:110;width:${wrapPx}px;height:${wrapPx}px;display:none;margin:-${half}px 0 0 -${half}px;`;
+    wrap.style.cssText = `position:fixed;left:0;top:0;pointer-events:none;z-index:110;width:${wrapPx}px;height:${wrapPx}px;display:none;margin:-${half}px 0 0 -${half}px;--cursor-dur-w:${ip}px;`;
+
+    const stackCol = document.createElement("div");
+    stackCol.style.cssText =
+      "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;";
+
     const icon = document.createElement("div");
-    icon.style.cssText = `position:absolute;inset:0;width:${ip}px;height:${ip}px;left:50%;top:50%;transform:translate(-50%,-50%);image-rendering:pixelated;`;
+    icon.style.cssText = `width:${ip}px;height:${ip}px;flex-shrink:0;image-rendering:pixelated;`;
+
+    const durWrap = document.createElement("div");
+    durWrap.className = "cursor-stack-durability cursor-stack-durability--hidden";
+    durWrap.setAttribute("aria-hidden", "true");
+    const durFill = document.createElement("div");
+    durFill.className = "cursor-stack-durability-fill";
+    durWrap.appendChild(durFill);
+
+    stackCol.appendChild(icon);
+    stackCol.appendChild(durWrap);
+
     const count = document.createElement("span");
     count.style.cssText =
       "position:absolute;right:0;bottom:0;font-family:M5x7,monospace;font-size:24px;font-weight:normal;font-synthesis:none;-webkit-font-smoothing:none;color:#f2f2f7;text-shadow:1px 1px 0 #0d0d0d;line-height:1;";
-    wrap.appendChild(icon);
+    wrap.appendChild(stackCol);
     wrap.appendChild(count);
     mount.appendChild(wrap);
     this.el = wrap;
     this.icon = icon;
     this.count = count;
+    this.durWrap = durWrap;
+    this.durFill = durFill;
 
     this.onMouseMove = (e: MouseEvent): void => {
       this.el.style.left = `${e.clientX}px`;
@@ -126,9 +146,13 @@ export class CursorStackUI {
   }
 
   private clearStackVisuals(): void {
-    this.icon.style.cssText = `position:absolute;inset:0;width:${INVENTORY_ITEM_ICON_DISPLAY_PX}px;height:${INVENTORY_ITEM_ICON_DISPLAY_PX}px;left:50%;top:50%;transform:translate(-50%,-50%);image-rendering:pixelated;`;
+    const ip = INVENTORY_ITEM_ICON_DISPLAY_PX;
+    this.icon.style.cssText = `width:${ip}px;height:${ip}px;flex-shrink:0;image-rendering:pixelated;`;
     this.icon.removeAttribute("title");
     this.count.textContent = "";
+    this.durWrap.classList.add("cursor-stack-durability--hidden");
+    this.durFill.style.width = "0%";
+    this.durFill.classList.remove("cursor-stack-durability-fill--low");
   }
 
   private applyStackVisuals(
@@ -136,9 +160,11 @@ export class CursorStackUI {
     urlLookup: ItemIconUrlLookup | null,
   ): void {
     const def = this.itemRegistry.getById(stack.itemId);
+    const ip = INVENTORY_ITEM_ICON_DISPLAY_PX;
     if (def === undefined || urlLookup === null) {
-      this.icon.style.cssText = `position:absolute;inset:0;width:${INVENTORY_ITEM_ICON_DISPLAY_PX}px;height:${INVENTORY_ITEM_ICON_DISPLAY_PX}px;left:50%;top:50%;transform:translate(-50%,-50%);image-rendering:pixelated;`;
+      this.icon.style.cssText = `width:${ip}px;height:${ip}px;flex-shrink:0;image-rendering:pixelated;`;
       this.count.textContent = stack.count > 1 ? String(stack.count) : "";
+      this.durWrap.classList.add("cursor-stack-durability--hidden");
       return;
     }
     const style = getItemIconStyleForDefinition(
@@ -146,19 +172,32 @@ export class CursorStackUI {
       urlLookup,
       INVENTORY_ITEM_ICON_DISPLAY_PX,
     );
-    const ip = INVENTORY_ITEM_ICON_DISPLAY_PX;
     this.icon.style.cssText = [
-      "position:absolute",
-      "inset:0",
       `width:${ip}px`,
       `height:${ip}px`,
-      "left:50%",
-      "top:50%",
-      "transform:translate(-50%,-50%)",
+      "flex-shrink:0",
       style,
     ].join(";");
-    this.icon.title = def.displayName;
+    const tip = def.inventoryTooltip;
+    this.icon.title =
+      tip !== undefined && tip.length > 0
+        ? `${def.displayName}\n${tip}`
+        : def.displayName;
     this.count.textContent = stack.count > 1 ? String(stack.count) : "";
+
+    const maxD = def.maxDurability;
+    if (maxD !== undefined && maxD > 0) {
+      this.durWrap.classList.remove("cursor-stack-durability--hidden");
+      const dmg = stack.damage ?? 0;
+      const rem = Math.max(0, maxD - dmg);
+      const pct = (rem / maxD) * 100;
+      this.durFill.style.width = `${pct}%`;
+      this.durFill.classList.toggle("cursor-stack-durability-fill--low", pct <= 25);
+    } else {
+      this.durWrap.classList.add("cursor-stack-durability--hidden");
+      this.durFill.style.width = "0%";
+      this.durFill.classList.remove("cursor-stack-durability-fill--low");
+    }
   }
 
   destroy(): void {

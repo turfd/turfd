@@ -1,10 +1,14 @@
 {
   "format_version": "1.0.0",
   "stratum:block": {
-    "description": { "identifier": "stratum:grass" },
+    "description": {
+      "identifier": "stratum:grass"
+    },
     "components": {
       "stratum:display_name": "Grass",
-      "stratum:texture": { "all": "grass" },
+      "stratum:texture": {
+        "all": "grass"
+      },
       "stratum:solid": true,
       "stratum:transparent": false,
       "stratum:water": false,
@@ -14,7 +18,8 @@
       "stratum:light_absorption": 15,
       "stratum:random_flip_x": true,
       "stratum:material": "dirt",
-      "stratum:loot_table": "stratum:dirt"
+      "stratum:loot_table": "stratum:dirt",
+      "stratum:numeric_id": 2
     }
   }
 }

@@ -1,0 +1,16 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:bread"
+    },
+    "components": {
+      "stratum:display_name": "Bread",
+      "stratum:texture_key": "bread",
+      "stratum:max_stack": 64,
+      "stratum:numeric_id": 81,
+      "stratum:eat_restore_health": 1,
+      "stratum:inventory_tooltip": "Eat to restore half a heart."
+    }
+  }
+}

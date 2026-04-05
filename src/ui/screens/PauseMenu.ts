@@ -1,5 +1,6 @@
 /**
- * Escape: full-screen pause overlay (main-menu styling). Volume lives on the main menu only.
+ * Escape: full-screen pause overlay (main-menu styling). Settings opens from a
+ * secondary action button (same style as Save) and shares the main-menu panel.
  */
 import {
   DAWN_LENGTH_MS,
@@ -12,7 +13,7 @@ import type { GameEvent } from "../../core/types";
 import type { CachedMod } from "../../mods/workshopTypes";
 import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
 import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
-import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
+import { mountSettingsPanel } from "../settings/mountSettingsPanel";
 
 const U_DAWN_END = DAWN_LENGTH_MS / DAY_LENGTH_MS;
 const U_DAY_END = (DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS) / DAY_LENGTH_MS;
@@ -88,7 +89,7 @@ function injectPauseStyles(base: string): void {
     .pm-card {
       width: min(26rem, 100%);
       max-height: min(90vh, 100%);
-      overflow-y: auto;
+      overflow: hidden;
       border-radius: 14px;
       corner-shape: squircle;
       border: 1px solid rgba(255, 255, 255, 0.1);
@@ -100,6 +101,12 @@ function injectPauseStyles(base: string): void {
       transition:
         transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
         opacity 0.26s ease;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .pm-card.pm-card--wide {
+      width: min(44rem, 100%);
     }
     .pm-overlay.pm-overlay--open .pm-card {
       transform: translateY(0);
@@ -111,6 +118,7 @@ function injectPauseStyles(base: string): void {
       flex-direction: column;
       align-items: center;
       margin-bottom: 0.85rem;
+      flex-shrink: 0;
     }
     .pm-logo {
       width: min(120px, 40vw);
@@ -118,12 +126,52 @@ function injectPauseStyles(base: string): void {
       image-rendering: pixelated;
       image-rendering: crisp-edges;
     }
+
+    .pm-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .pm-pane {
+      display: none;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1;
+      overflow-y: auto;
+    }
+    .pm-pane--active {
+      display: flex;
+    }
+    .pm-pane::-webkit-scrollbar { width: 4px; }
+    .pm-pane::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+    }
+
+    .pm-settings-host {
+      flex: 1;
+      min-height: min(48vh, 440px);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: rgba(36, 36, 38, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 14px;
+      corner-shape: squircle;
+    }
+    .pm-settings-host.mm-panel {
+      padding: 1.1rem 1.25rem;
+    }
+
     .pm-title {
       margin: 0 0 1rem;
       font-size: 24px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       text-align: center;
+      flex-shrink: 0;
     }
 
     .pm-actions {
@@ -220,15 +268,6 @@ function injectPauseStyles(base: string): void {
       min-height: 1.2em;
     }
 
-    .pm-hint-note {
-      margin: 0.75rem 0 0;
-      font-family: 'M5x7', monospace;
-      font-size: 16px;
-      line-height: 1.45;
-      color: #8e8e93;
-      text-align: center;
-    }
-
     @media (prefers-reduced-motion: reduce) {
       .pm-overlay,
       .pm-card {
@@ -245,6 +284,7 @@ function injectPauseStyles(base: string): void {
 export class PauseMenu {
   private overlay: HTMLDivElement | null = null;
   private readonly unsubs: (() => void)[] = [];
+  private pauseSettingsAbort: AbortController | null = null;
 
   private adjustingWorldTime = false;
   private networkRole: "offline" | "host" | "client" = "offline";
@@ -262,6 +302,8 @@ export class PauseMenu {
   ): void {
     const base = import.meta.env.BASE_URL;
     injectPauseStyles(base);
+
+    this.pauseSettingsAbort = new AbortController();
 
     const overlay = document.createElement("div");
     overlay.id = "pause-menu";
@@ -284,6 +326,12 @@ export class PauseMenu {
     logo.src = stratumCoreTextureAssetUrl("logo.png");
     logo.alt = "";
     brand.appendChild(logo);
+
+    const body = document.createElement("div");
+    body.className = "pm-body";
+
+    const paneGame = document.createElement("div");
+    paneGame.className = "pm-pane pm-pane--active";
 
     const title = document.createElement("h2");
     title.className = "pm-title";
@@ -316,9 +364,18 @@ export class PauseMenu {
       bus.emit({ type: "ui:quit" } satisfies GameEvent);
     });
 
+    const settingsBtn = document.createElement("button");
+    settingsBtn.type = "button";
+    settingsBtn.className = "pm-btn pm-btn-secondary";
+    settingsBtn.textContent = "Settings";
+    settingsBtn.addEventListener("click", () => {
+      setPauseView("settings");
+    });
+
     actions.appendChild(resumeBtn);
     actions.appendChild(saveBtn);
     actions.appendChild(quitBtn);
+    actions.appendChild(settingsBtn);
 
     const mpSection = document.createElement("div");
     mpSection.className = "pm-section pm-mp-col";
@@ -432,39 +489,55 @@ export class PauseMenu {
     timeSection.appendChild(timeHint);
     applyTimeDisabled();
 
-    const texBtn = document.createElement("button");
-    texBtn.type = "button";
-    texBtn.className = "pm-btn pm-btn-secondary";
-    texBtn.textContent = "Texture packs";
-    texBtn.addEventListener("click", () => {
-      if (texturePacks === undefined) {
-        return;
-      }
-      void openGlobalTexturePacksModal({
-        store: texturePacks.store,
-        getInstalled: texturePacks.getInstalled,
-      });
+    paneGame.append(title, actions, mpSection, timeSection);
+
+    const paneSettings = document.createElement("div");
+    paneSettings.className = "pm-pane";
+    const settingsActions = document.createElement("div");
+    settingsActions.className = "pm-actions";
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "pm-btn pm-btn-secondary";
+    backBtn.textContent = "Back";
+    backBtn.addEventListener("click", () => {
+      setPauseView("game");
     });
-    if (texturePacks === undefined) {
-      texBtn.disabled = true;
-      texBtn.title = "Unavailable";
+    settingsActions.appendChild(backBtn);
+    const settingsHost = document.createElement("div");
+    settingsHost.className = "mm-panel mm-settings-panel pm-settings-host";
+    paneSettings.append(settingsActions, settingsHost);
+
+    function setPauseView(which: "game" | "settings"): void {
+      const gameOn = which === "game";
+      paneGame.classList.toggle("pm-pane--active", gameOn);
+      paneSettings.classList.toggle("pm-pane--active", !gameOn);
+      card.classList.toggle("pm-card--wide", !gameOn);
     }
 
-    const settingsNote = document.createElement("p");
-    settingsNote.className = "pm-hint-note";
-    settingsNote.textContent =
-      "Audio volume and more options are on the main menu (Settings tab).";
+    body.append(paneGame, paneSettings);
 
-    card.appendChild(brand);
-    card.appendChild(title);
-    card.appendChild(actions);
-    card.appendChild(mpSection);
-    card.appendChild(timeSection);
-    card.appendChild(texBtn);
-    card.appendChild(settingsNote);
+    card.append(brand, body);
     overlay.appendChild(card);
     mount.appendChild(overlay);
     this.overlay = overlay;
+
+    if (texturePacks !== undefined) {
+      void mountSettingsPanel(settingsHost, {
+        store: texturePacks.store,
+        getInstalled: texturePacks.getInstalled,
+        bus,
+        applyKeyBindingsLive: true,
+        signal: this.pauseSettingsAbort.signal,
+      });
+    } else {
+      settingsHost.textContent =
+        "Settings are unavailable (no local store). Return to the main menu.";
+      settingsHost.style.fontFamily = "'M5x7', monospace";
+      settingsHost.style.fontSize = "20px";
+      settingsHost.style.color = "#8e8e93";
+      settingsHost.style.textAlign = "center";
+      settingsHost.style.justifyContent = "center";
+    }
 
     this._syncMultiplayerPanel();
   }
@@ -509,6 +582,8 @@ export class PauseMenu {
   }
 
   destroy(): void {
+    this.pauseSettingsAbort?.abort();
+    this.pauseSettingsAbort = null;
     for (const u of this.unsubs) {
       u();
     }

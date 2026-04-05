@@ -13,6 +13,7 @@ import type {
   ModTypeFilter,
   WorkshopModTypeRow,
 } from "../../mods/workshopTypes";
+import { findPackPngBytes } from "../../mods/cachedModPackIcon";
 
 export type WorkshopScreenDeps = {
   bus: EventBus;
@@ -79,6 +80,17 @@ function formatWorkshopListMetaLine(m: ModListEntry): string {
   const downloads = `${formatWorkshopDownloadCount(m.downloadCount)} downloads`;
   const when = formatWorkshopRelativeTime(m.createdAt);
   return when.length > 0 ? `${rating} · ${downloads} · ${when}` : `${rating} · ${downloads}`;
+}
+
+function truncateLibraryDescription(raw: string, maxLen: number): string {
+  const s = raw.replace(/\s+/g, " ").trim();
+  if (s.length === 0) {
+    return "";
+  }
+  if (s.length <= maxLen) {
+    return s;
+  }
+  return `${s.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
 function formatWorkshopFileSize(bytes: number): string {
@@ -152,6 +164,9 @@ export class WorkshopScreen {
     string,
     { latestRecordId: string; latestVersion: string; currentVersion: string }
   >();
+
+  /** Blob URLs for pack icons in My Library; revoked on next library render / unmount. */
+  private readonly libraryBlobUrls: string[] = [];
 
   constructor(deps: WorkshopScreenDeps) {
     this.deps = deps;
@@ -274,6 +289,10 @@ export class WorkshopScreen {
     this.installingModIds.clear();
     this.uninstallingModIds.clear();
     this.detailModId = null;
+    for (const u of this.libraryBlobUrls) {
+      URL.revokeObjectURL(u);
+    }
+    this.libraryBlobUrls.length = 0;
   }
 
   private clearWorkshopActionFeedback(): void {
@@ -1084,19 +1103,137 @@ export class WorkshopScreen {
     }
   }
 
+  private libraryPackRow(
+    c: CachedMod,
+    sectionModType: WorkshopModTypeRow,
+  ): HTMLElement {
+    const displayName = c.manifest.name?.trim() || c.modId;
+    const row = el("div", "mm-bedrock-pack-row mm-workshop-library-pack-row");
+    row.tabIndex = 0;
+    row.setAttribute("role", "link");
+    row.setAttribute("aria-label", `Workshop details: ${displayName}`);
+
+    const openDetail = (): void => {
+      this.deps.bus.emit({
+        type: "workshop:open-detail",
+        recordId: c.recordId,
+      } satisfies GameEvent);
+    };
+    row.addEventListener("click", (ev) => {
+      if ((ev.target as HTMLElement).closest("button")) {
+        return;
+      }
+      openDetail();
+    });
+    row.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        openDetail();
+      }
+    });
+
+    const iconWrap = el("div", "mm-workshop-library-pack-icon-wrap");
+    const png = findPackPngBytes(c.files);
+    if (png !== undefined) {
+      const url = URL.createObjectURL(new Blob([png], { type: "image/png" }));
+      this.libraryBlobUrls.push(url);
+      const img = el("img", "mm-workshop-library-pack-icon") as HTMLImageElement;
+      img.alt = "";
+      img.src = url;
+      iconWrap.appendChild(img);
+    } else {
+      const ph = el("div", "mm-workshop-library-pack-icon-ph");
+      ph.setAttribute("aria-hidden", "true");
+      iconWrap.appendChild(ph);
+    }
+
+    const textCol = el("div", "mm-workshop-library-pack-text");
+    const titleRow = el("div", "mm-workshop-library-pack-title-row");
+    const nameEl = el("span", "mm-bedrock-pack-row-label mm-workshop-library-pack-name");
+    nameEl.textContent = displayName;
+    titleRow.appendChild(nameEl);
+    const badge = el("span", `mm-workshop-badge mm-workshop-badge-${sectionModType}`);
+    badge.textContent = workshopModTypeBadgeLabel(sectionModType);
+    titleRow.appendChild(badge);
+    textCol.appendChild(titleRow);
+
+    const meta = el("div", "mm-workshop-library-pack-meta");
+    meta.textContent = `${c.modId} · v${c.version}`;
+    textCol.appendChild(meta);
+
+    const descRaw = truncateLibraryDescription(c.manifest.description ?? "", 140);
+    if (descRaw.length > 0) {
+      const desc = el("p", "mm-workshop-library-pack-desc");
+      desc.textContent = descRaw;
+      textCol.appendChild(desc);
+    }
+
+    const aside = el("div", "mm-workshop-library-pack-aside");
+    const up = this.libraryUpdateByModId.get(c.modId);
+    if (up !== undefined && semverGt(up.latestVersion, c.version)) {
+      const upd = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+      upd.type = "button";
+      upd.classList.add("mm-workshop-library-action-btn");
+      this.applyInstallButtonShell(upd, c.modId, "install-update");
+      upd.dataset.workshopIdleLabel = `Update → v${up.latestVersion}`;
+      upd.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (upd.disabled || this.installingModIds.has(c.modId)) {
+          return;
+        }
+        this.installingModIds.add(c.modId);
+        this.syncWorkshopModUi(c.modId);
+        this.deps.bus.emit({
+          type: "workshop:install-record-requested",
+          recordId: up.latestRecordId,
+        } satisfies GameEvent);
+      });
+      aside.appendChild(upd);
+    }
+    const un = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+    un.type = "button";
+    un.classList.add("mm-workshop-library-action-btn");
+    this.applyUninstallButtonShell(un, c.modId);
+    un.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (un.disabled || this.uninstallingModIds.has(c.modId)) {
+        return;
+      }
+      this.uninstallingModIds.add(c.modId);
+      this.syncWorkshopModUi(c.modId);
+      this.deps.bus.emit({
+        type: "workshop:uninstall-requested",
+        modId: c.modId,
+        version: c.version,
+      } satisfies GameEvent);
+    });
+    aside.appendChild(un);
+
+    row.appendChild(iconWrap);
+    row.appendChild(textCol);
+    row.appendChild(aside);
+    return row;
+  }
+
   private renderLibrary(): void {
     const wrap = this.exploreWrap;
     if (wrap === null) {
       return;
     }
+    for (const u of this.libraryBlobUrls) {
+      URL.revokeObjectURL(u);
+    }
+    this.libraryBlobUrls.length = 0;
+
     this.detailModId = null;
     this.clearWorkshopActionFeedback();
     this.setModDetailChrome(false);
     wrap.replaceChildren();
 
     const intro = el("div", "mm-workshop-library-intro");
-    const lead = el("p", "mm-workshop-library-lead");
-    lead.textContent = "Packs installed on this device.";
+    const lead = el("p", "mm-bedrock-panel-desc mm-workshop-library-lead");
+    lead.textContent =
+      "Packs installed on this device. Same library as Edit World → Available — click a row for workshop details.";
     intro.appendChild(lead);
     const tips = el("ul", "mm-workshop-library-tips");
     const tipWorld = el("li");
@@ -1124,76 +1261,48 @@ export class WorkshopScreen {
     toolRow.appendChild(checkBtn);
     wrap.appendChild(toolRow);
 
+    const stacks = el("div", "mm-pack-dual-stack mm-workshop-library-stacks");
+    wrap.appendChild(stacks);
+
     const installed = this.deps.getInstalledPacks();
     const behaviors = installed.filter((c) => c.manifest.mod_type === "behavior_pack");
     const resources = installed.filter((c) => c.manifest.mod_type === "resource_pack");
 
-    const addSection = (heading: string, list: readonly CachedMod[]): void => {
-      const h = el("h3", "mm-workshop-library-heading");
-      h.textContent = heading;
-      wrap.appendChild(h);
+    const addSection = (
+      title: string,
+      list: readonly CachedMod[],
+      sectionModType: WorkshopModTypeRow,
+    ): void => {
+      const block = el("div", "mm-pack-stack-block");
+      const h = el("h3", "mm-pack-stack-block-title");
+      h.textContent = title;
+      block.appendChild(h);
+
+      const inner = el("div", "mm-pack-installed-inner mm-workshop-library-well");
       if (list.length === 0) {
-        const empty = el("p", "mm-workshop-library-empty-hint");
+        const empty = el("p", "mm-note");
         empty.textContent =
           "None installed. Browse Explore, or add packs to a world from Solo → Edit World.";
-        wrap.appendChild(empty);
-        return;
-      }
-      const tbl = el("div", "mm-workshop-owned");
-      for (const c of list) {
-        const row = el("div", "mm-workshop-owned-row");
-        const label = el("span", "mm-workshop-owned-label");
-        const strong = el("strong");
-        strong.textContent = `${c.manifest.name} · v${c.version}`;
-        label.appendChild(strong);
-        label.appendChild(document.createTextNode(` · ${c.modId}`));
-        row.appendChild(label);
-        const aside = el("div", "mm-workshop-owned-aside");
-        const up = this.libraryUpdateByModId.get(c.modId);
-        if (up !== undefined && semverGt(up.latestVersion, c.version)) {
-          const upd = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
-          upd.type = "button";
-          upd.classList.add("mm-workshop-library-action-btn");
-          this.applyInstallButtonShell(upd, c.modId, "install-update");
-          upd.dataset.workshopIdleLabel = `Update → v${up.latestVersion}`;
-          upd.addEventListener("click", () => {
-            if (upd.disabled || this.installingModIds.has(c.modId)) {
-              return;
-            }
-            this.installingModIds.add(c.modId);
-            this.syncWorkshopModUi(c.modId);
-            this.deps.bus.emit({
-              type: "workshop:install-record-requested",
-              recordId: up.latestRecordId,
-            } satisfies GameEvent);
-          });
-          aside.appendChild(upd);
+        inner.appendChild(empty);
+      } else {
+        for (const c of list) {
+          inner.appendChild(this.libraryPackRow(c, sectionModType));
         }
-        const un = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
-        un.type = "button";
-        un.classList.add("mm-workshop-library-action-btn");
-        this.applyUninstallButtonShell(un, c.modId);
-        un.addEventListener("click", () => {
-          if (un.disabled || this.uninstallingModIds.has(c.modId)) {
-            return;
-          }
-          this.uninstallingModIds.add(c.modId);
-          this.syncWorkshopModUi(c.modId);
-          this.deps.bus.emit({
-            type: "workshop:uninstall-requested",
-            modId: c.modId,
-            version: c.version,
-          } satisfies GameEvent);
-        });
-        aside.appendChild(un);
-        row.appendChild(aside);
-        tbl.appendChild(row);
       }
-      wrap.appendChild(tbl);
+      block.appendChild(inner);
+      stacks.appendChild(block);
     };
 
-    addSection("Behavior packs", behaviors);
-    addSection("Resource packs", resources);
+    addSection("Behavior packs", behaviors, "behavior_pack");
+    addSection("Resource packs", resources, "resource_pack");
+
+    for (const c of behaviors) {
+      this.syncWorkshopModUi(c.modId);
+    }
+    for (const c of resources) {
+      this.syncWorkshopModUi(c.modId);
+    }
+
     this.updateSubnavHighlight();
   }
 

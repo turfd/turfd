@@ -1,6 +1,25 @@
 /** Utility for serializing and deserializing game messages to/from binary buffers (DataView, UTF-8 strings). */
 
 import { CHUNK_SIZE } from "../../core/constants";
+import {
+  FURNACE_CHUNK_MAGIC,
+  FURNACE_CHUNK_MAGIC_V2,
+  FURNACE_CHUNK_MAGIC_V3,
+  FURNACE_SNAPSHOT_V3_SENTINEL,
+  byteLengthFurnacePersistedV3,
+  readFurnacePersistedV2FromView,
+  readFurnacePersistedV3FromView,
+  readLegacyFurnaceEntry,
+  writeFurnacePersistedV3ToView,
+  type FurnacePersistedChunk,
+} from "../../world/furnace/furnacePersisted";
+import {
+  CHEST_CHUNK_MAGIC,
+  byteLengthChestPersisted,
+  readChestPersistedFromView,
+  writeChestPersistedToView,
+  type ChestPersistedChunk,
+} from "../../world/chest/chestPersisted";
 
 const LE = true;
 
@@ -15,14 +34,21 @@ const CHUNK_DATA_TYPE_BYTE = 1;
 const BLOCK_UPDATE_TYPE_BYTE = 2;
 /** Must match `MessageType.WORLD_SYNC` in `messages.ts`. */
 const WORLD_SYNC_TYPE_BYTE = 8;
+/** Must match `MessageType.FURNACE_SNAPSHOT` in `messages.ts`. */
+const FURNACE_SNAPSHOT_TYPE_BYTE = 0x0e;
+/** Must match `MessageType.CHEST_SNAPSHOT` in `messages.ts`. */
+const CHEST_SNAPSHOT_TYPE_BYTE = 0x0f;
 
 /** Number of blocks per chunk (CHUNK_SIZE × CHUNK_SIZE). */
 const CHUNK_CELLS = CHUNK_SIZE * CHUNK_SIZE;
 /** Number of bytes of block payload in a chunk packet (Uint16 × cells). */
 const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 
+/** Trailing per-cell metadata (`Uint8` × cells) after furnace/chest tails; v10+. */
+const CHUNK_METADATA_MAGIC = 0x54_41_44_4d; // 'TADM' LE — per-cell flags (e.g. WORLDGEN_NO_COLLIDE)
+
 /** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 4;
+export const WIRE_PROTOCOL_VERSION = 12;
 
 /** Max UTF-8 bytes for handshake display name (profile + guest labels). */
 export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;
@@ -51,6 +77,12 @@ export type ChunkDataWirePayload = {
   blocks: Uint16Array;
   /** Present when packet includes back-wall layer (v2). */
   background?: Uint16Array;
+  /** Present when packet includes furnace tile tail (v3). */
+  furnaces?: FurnacePersistedChunk[];
+  /** Present when packet includes chest tile tail (v7). */
+  chests?: ChestPersistedChunk[];
+  /** Present when packet includes per-cell metadata tail (v10); tree no-collision bits, etc. */
+  metadata?: Uint8Array;
 };
 
 export type BlockUpdateWirePayload = {
@@ -59,6 +91,10 @@ export type BlockUpdateWirePayload = {
   blockId: number;
   /** 0 = foreground, 1 = background layer. */
   layer: number;
+  /** u16 on wire when packet length ≥ 14 (protocol v9+). */
+  previousBlockId?: number;
+  /** u8 at offset 14 when packet length ≥ 15 (protocol v11+); per-cell flags (e.g. tree no-collision). */
+  cellMetadata?: number;
 };
 
 export type DecodedWirePayload =
@@ -188,15 +224,166 @@ export class BinarySerializer {
     return { seed, worldTimeMs };
   }
 
+  private static readonly FURNACE_LEGACY_ENTRY_BYTES = 38;
+
+  private static appendFurnaceChunkTail(
+    base: ArrayBuffer,
+    furnaces: readonly FurnacePersistedChunk[],
+  ): ArrayBuffer {
+    let tailBody = 0;
+    for (const f of furnaces) {
+      tailBody += byteLengthFurnacePersistedV3(f);
+    }
+    const tailHeader = 4 + 2;
+    const out = new ArrayBuffer(base.byteLength + tailHeader + tailBody);
+    new Uint8Array(out).set(new Uint8Array(base), 0);
+    const view = new DataView(out);
+    let o = base.byteLength;
+    view.setUint32(o, FURNACE_CHUNK_MAGIC_V3 >>> 0, LE);
+    o += 4;
+    view.setUint16(o, furnaces.length & 0xffff, LE);
+    o += 2;
+    for (const f of furnaces) {
+      o = writeFurnacePersistedV3ToView(view, out, o, f);
+    }
+    return out;
+  }
+
+  private static tryReadFurnaceChunkTail(
+    view: DataView,
+    offset: number,
+    byteLength: number,
+  ): { entries: FurnacePersistedChunk[]; endExclusive: number } | undefined {
+    if (byteLength < offset + 6) {
+      return undefined;
+    }
+    const magic = view.getUint32(offset, LE);
+    if (magic === FURNACE_CHUNK_MAGIC_V3) {
+      const count = view.getUint16(offset + 4, LE);
+      if (count > 1024) {
+        return undefined;
+      }
+      let o = offset + 6;
+      const out: FurnacePersistedChunk[] = [];
+      for (let i = 0; i < count; i++) {
+        const parsed = readFurnacePersistedV3FromView(view, view.buffer, o);
+        if (parsed === undefined) {
+          return undefined;
+        }
+        out.push(parsed[0]);
+        o = parsed[1];
+        if (o > byteLength) {
+          return undefined;
+        }
+      }
+      return { entries: out, endExclusive: o };
+    }
+    if (magic === FURNACE_CHUNK_MAGIC_V2) {
+      const count = view.getUint16(offset + 4, LE);
+      if (count > 1024) {
+        return undefined;
+      }
+      let o = offset + 6;
+      const out: FurnacePersistedChunk[] = [];
+      for (let i = 0; i < count; i++) {
+        const parsed = readFurnacePersistedV2FromView(view, view.buffer, o);
+        if (parsed === undefined) {
+          return undefined;
+        }
+        out.push(parsed[0]);
+        o = parsed[1];
+        if (o > byteLength) {
+          return undefined;
+        }
+      }
+      return { entries: out, endExclusive: o };
+    }
+    if (magic !== FURNACE_CHUNK_MAGIC) {
+      return undefined;
+    }
+    const count = view.getUint16(offset + 4, LE);
+    let o = offset + 6;
+    const need = count * this.FURNACE_LEGACY_ENTRY_BYTES;
+    if (byteLength < o + need || count > 1024) {
+      return undefined;
+    }
+    const out: FurnacePersistedChunk[] = [];
+    for (let i = 0; i < count; i++) {
+      const lx = view.getUint8(o++);
+      const ly = view.getUint8(o++);
+      const [chunk, nextO] = readLegacyFurnaceEntry(view, o, lx, ly);
+      out.push(chunk);
+      o = nextO;
+    }
+    return { entries: out, endExclusive: o };
+  }
+
+  private static appendChestChunkTail(
+    base: ArrayBuffer,
+    chests: readonly ChestPersistedChunk[],
+  ): ArrayBuffer {
+    let tailBody = 0;
+    for (const c of chests) {
+      tailBody += byteLengthChestPersisted(c);
+    }
+    const tailHeader = 4 + 2;
+    const out = new ArrayBuffer(base.byteLength + tailHeader + tailBody);
+    new Uint8Array(out).set(new Uint8Array(base), 0);
+    const view = new DataView(out);
+    let o = base.byteLength;
+    view.setUint32(o, CHEST_CHUNK_MAGIC >>> 0, LE);
+    o += 4;
+    view.setUint16(o, chests.length & 0xffff, LE);
+    o += 2;
+    for (const c of chests) {
+      o = writeChestPersistedToView(view, out, o, c);
+    }
+    return out;
+  }
+
+  private static tryReadChestChunkTail(
+    view: DataView,
+    offset: number,
+    byteLength: number,
+  ): { entries: ChestPersistedChunk[]; endExclusive: number } | undefined {
+    if (byteLength < offset + 6) {
+      return undefined;
+    }
+    if (view.getUint32(offset, LE) !== CHEST_CHUNK_MAGIC) {
+      return undefined;
+    }
+    const count = view.getUint16(offset + 4, LE);
+    if (count > 1024) {
+      return undefined;
+    }
+    let o = offset + 6;
+    const out: ChestPersistedChunk[] = [];
+    for (let i = 0; i < count; i++) {
+      const parsed = readChestPersistedFromView(view, view.buffer, o);
+      if (parsed === undefined) {
+        return undefined;
+      }
+      out.push(parsed[0]);
+      o = parsed[1];
+      if (o > byteLength) {
+        return undefined;
+      }
+    }
+    return { entries: out, endExclusive: o };
+  }
+
   /**
-   * Serialize a 32×32 chunk: foreground blocks + back-wall layer.
-   * Layout: [type][chunkX i32][chunkY i32][blocks u16×N][background u16×N].
+   * Serialize a 32×32 chunk: foreground blocks + back-wall layer + optional furnace tail (v3).
+   * Layout: [type][chunkX i32][chunkY i32][blocks u16×N][background u16×N][optional FURN tail].
    */
   public static serializeChunk(
     chunkX: number,
     chunkY: number,
     blocks: Uint16Array,
     background: Uint16Array,
+    furnaces?: readonly FurnacePersistedChunk[],
+    chests?: readonly ChestPersistedChunk[],
+    metadata?: Uint8Array,
   ): ArrayBuffer {
     if (blocks.length !== CHUNK_CELLS) {
       throw new Error(
@@ -219,7 +406,140 @@ export class BinarySerializer {
       view.setUint16(fgOff + i * 2, blocks[i]!, LE);
       view.setUint16(bgOff + i * 2, background[i]!, LE);
     }
-    return buffer;
+    let outBuf = buffer;
+    if (furnaces !== undefined && furnaces.length > 0) {
+      outBuf = this.appendFurnaceChunkTail(outBuf, furnaces);
+    }
+    if (chests !== undefined && chests.length > 0) {
+      outBuf = this.appendChestChunkTail(outBuf, chests);
+    }
+    if (metadata !== undefined) {
+      if (metadata.length !== CHUNK_CELLS) {
+        throw new Error(
+          `Chunk metadata length ${metadata.length} does not match ${CHUNK_CELLS}`,
+        );
+      }
+      outBuf = this.appendChunkMetadataTail(outBuf, metadata);
+    }
+    return outBuf;
+  }
+
+  private static appendChunkMetadataTail(
+    base: ArrayBuffer,
+    metadata: Uint8Array,
+  ): ArrayBuffer {
+    const out = new ArrayBuffer(base.byteLength + 4 + CHUNK_CELLS);
+    new Uint8Array(out).set(new Uint8Array(base), 0);
+    const view = new DataView(out);
+    let o = base.byteLength;
+    view.setUint32(o, CHUNK_METADATA_MAGIC >>> 0, LE);
+    o += 4;
+    new Uint8Array(out).set(metadata, o);
+    return out;
+  }
+
+  private static tryReadChunkMetadataTail(
+    view: DataView,
+    offset: number,
+    byteLength: number,
+  ): { bytes: Uint8Array; endExclusive: number } | undefined {
+    if (byteLength < offset + 4 + CHUNK_CELLS) {
+      return undefined;
+    }
+    if (view.getUint32(offset, LE) !== CHUNK_METADATA_MAGIC) {
+      return undefined;
+    }
+    const start = offset + 4;
+    const bytes = new Uint8Array(view.buffer, start, CHUNK_CELLS).slice();
+    return { bytes, endExclusive: start + CHUNK_CELLS };
+  }
+
+  /** Single furnace cell at world coords (incremental sync). */
+  public static serializeFurnaceSnapshot(
+    wx: number,
+    wy: number,
+    data: FurnacePersistedChunk,
+  ): ArrayBuffer {
+    const payloadBytes = 1 + byteLengthFurnacePersistedV3(data);
+    const buf = new ArrayBuffer(1 + 4 + 4 + payloadBytes);
+    const view = new DataView(buf);
+    view.setUint8(0, FURNACE_SNAPSHOT_TYPE_BYTE);
+    view.setInt32(1, wx, LE);
+    view.setInt32(5, wy, LE);
+    view.setUint8(9, FURNACE_SNAPSHOT_V3_SENTINEL);
+    writeFurnacePersistedV3ToView(view, buf, 10, data);
+    return buf;
+  }
+
+  public static deserializeFurnaceSnapshot(buffer: ArrayBuffer): {
+    wx: number;
+    wy: number;
+    data: FurnacePersistedChunk;
+  } {
+    const view = new DataView(buffer);
+    if (view.getUint8(0) !== FURNACE_SNAPSHOT_TYPE_BYTE) {
+      throw new Error("Expected FURNACE_SNAPSHOT type byte");
+    }
+    const minLegacy = 1 + 4 + 4 + this.FURNACE_LEGACY_ENTRY_BYTES;
+    if (buffer.byteLength < minLegacy) {
+      throw new Error("Furnace snapshot truncated");
+    }
+    const wx = view.getInt32(1, LE);
+    const wy = view.getInt32(5, LE);
+    if (buffer.byteLength > 9 && view.getUint8(9) === FURNACE_SNAPSHOT_V3_SENTINEL) {
+      const parsed = readFurnacePersistedV3FromView(view, buffer, 10);
+      if (parsed !== undefined && parsed[1] === buffer.byteLength) {
+        return { wx, wy, data: parsed[0] };
+      }
+    }
+    const minV2 = 1 + 4 + 4 + 72;
+    if (buffer.byteLength >= minV2) {
+      const parsed = readFurnacePersistedV2FromView(view, buffer, 9);
+      if (parsed !== undefined && parsed[1] === buffer.byteLength) {
+        return { wx, wy, data: parsed[0] };
+      }
+    }
+    let o = 9;
+    const lx = view.getUint8(o++);
+    const ly = view.getUint8(o++);
+    const [data] = readLegacyFurnaceEntry(view, o, lx, ly);
+    return { wx, wy, data };
+  }
+
+  public static serializeChestSnapshot(
+    wx: number,
+    wy: number,
+    data: ChestPersistedChunk,
+  ): ArrayBuffer {
+    const payloadBytes = byteLengthChestPersisted(data);
+    const buf = new ArrayBuffer(1 + 4 + 4 + payloadBytes);
+    const view = new DataView(buf);
+    view.setUint8(0, CHEST_SNAPSHOT_TYPE_BYTE);
+    view.setInt32(1, wx, LE);
+    view.setInt32(5, wy, LE);
+    writeChestPersistedToView(view, buf, 9, data);
+    return buf;
+  }
+
+  public static deserializeChestSnapshot(buffer: ArrayBuffer): {
+    wx: number;
+    wy: number;
+    data: ChestPersistedChunk;
+  } {
+    const view = new DataView(buffer);
+    if (view.getUint8(0) !== CHEST_SNAPSHOT_TYPE_BYTE) {
+      throw new Error("Expected CHEST_SNAPSHOT type byte");
+    }
+    if (buffer.byteLength < 1 + 4 + 4 + 3) {
+      throw new Error("Chest snapshot truncated");
+    }
+    const wx = view.getInt32(1, LE);
+    const wy = view.getInt32(5, LE);
+    const parsed = readChestPersistedFromView(view, buffer, 9);
+    if (parsed === undefined) {
+      throw new Error("Chest snapshot parse failed");
+    }
+    return { wx, wy, data: parsed[0] };
   }
 
   /** Deserialize CHUNK_DATA (v2 with background, or v1 blocks-only). */
@@ -248,29 +568,69 @@ export class BinarySerializer {
       for (let i = 0; i < CHUNK_CELLS; i++) {
         background[i] = view.getUint16(bgBase + i * 2, LE);
       }
+      const fur = this.tryReadFurnaceChunkTail(view, fullLen, buffer.byteLength);
+      let off = fullLen;
+      let furnaces: FurnacePersistedChunk[] | undefined;
+      if (fur !== undefined) {
+        furnaces = fur.entries;
+        off = fur.endExclusive;
+      }
+      const ch = this.tryReadChestChunkTail(view, off, buffer.byteLength);
+      let chests: ChestPersistedChunk[] | undefined;
+      if (ch !== undefined) {
+        chests = ch.entries;
+        off = ch.endExclusive;
+      }
+      const meta = this.tryReadChunkMetadataTail(view, off, buffer.byteLength);
+      let metadata: Uint8Array | undefined;
+      if (meta !== undefined) {
+        metadata = meta.bytes;
+      }
+      if (
+        furnaces !== undefined ||
+        chests !== undefined ||
+        metadata !== undefined
+      ) {
+        return {
+          chunkX,
+          chunkY,
+          blocks,
+          background,
+          furnaces,
+          chests,
+          metadata,
+        };
+      }
       return { chunkX, chunkY, blocks, background };
     }
     return { chunkX, chunkY, blocks };
   }
 
-  /** Serialize BLOCK_UPDATE: [type][x i32][y i32][blockId u16][layer u8]. */
+  /**
+   * Serialize BLOCK_UPDATE:
+   * [type][x i32][y i32][blockId u16][layer u8][previousBlockId u16][cellMetadata u8] (15 bytes, v11+).
+   */
   public static serializeBlockUpdate(
     x: number,
     y: number,
     blockId: number,
     layer: number,
+    previousBlockId?: number,
+    cellMetadata: number = 0,
   ): ArrayBuffer {
-    const buffer = new ArrayBuffer(1 + 4 + 4 + 2 + 1);
+    const buffer = new ArrayBuffer(15);
     const view = new DataView(buffer);
     view.setUint8(0, BLOCK_UPDATE_TYPE_BYTE);
     view.setInt32(1, x, LE);
     view.setInt32(5, y, LE);
     view.setUint16(9, blockId, LE);
     view.setUint8(11, layer & 0xff);
+    view.setUint16(12, previousBlockId ?? 0, LE);
+    view.setUint8(14, cellMetadata & 0xff);
     return buffer;
   }
 
-  /** Deserialize BLOCK_UPDATE (11-byte legacy = layer 0, 12-byte = layer). */
+  /** Deserialize BLOCK_UPDATE (11-byte legacy … 15-byte = v11 cell metadata tail). */
   public static deserializeBlockUpdate(
     buffer: ArrayBuffer,
   ): BlockUpdateWirePayload {
@@ -288,7 +648,11 @@ export class BinarySerializer {
     const y = view.getInt32(5, LE);
     const blockId = view.getUint16(9, LE);
     const layer = buffer.byteLength >= 12 ? view.getUint8(11) : 0;
-    return { x, y, blockId, layer };
+    const previousBlockId =
+      buffer.byteLength >= 14 ? view.getUint16(12, LE) : undefined;
+    const cellMetadata =
+      buffer.byteLength >= 15 ? view.getUint8(14) : undefined;
+    return { x, y, blockId, layer, previousBlockId, cellMetadata };
   }
 
   /**
