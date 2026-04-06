@@ -60,7 +60,6 @@ import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 import type { EventBus } from "../core/EventBus";
 import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
-import { isTouchUiMode } from "../input/touchUiMode";
 import type { ItemId } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { AtlasLoader } from "../renderer/AtlasLoader";
@@ -484,9 +483,9 @@ export class EntityManager {
         const moving =
           s.onGround && Math.abs(vx) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD;
         const sprinting = moving && this.input.isDown("sprint");
-        const ax = this.input.getCombinedHorizontalMoveAxis();
         const moveIntent =
-          ax > 0.12 ? 1 : ax < -0.12 ? -1 : 0;
+          (this.input.isDown("right") ? 1 : 0) -
+          (this.input.isDown("left") ? 1 : 0);
         const miningBreak =
           s.breakTarget !== null &&
           s.breakProgress < 1 &&
@@ -733,15 +732,6 @@ export class EntityManager {
       return;
     }
     if (this.input.isWorldInputBlocked()) {
-      aim.clear();
-      const lineHidden = this.aimLineSprite;
-      if (lineHidden !== null) {
-        lineHidden.visible = false;
-      }
-      return;
-    }
-
-    if (isTouchUiMode()) {
       aim.clear();
       const lineHidden = this.aimLineSprite;
       if (lineHidden !== null) {

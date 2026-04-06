@@ -281,32 +281,6 @@ export class PlayerInventory {
         : null;
   }
 
-  /**
-   * Pick up exactly `count` items from a slot into an empty cursor (partial pickup).
-   * @param count At least 1; clamped to stack size.
-   */
-  pickUpCount(slot: number, count: number): void {
-    if (slot < 0 || slot >= INVENTORY_SIZE) return;
-    if (this._cursorStack !== null) return;
-    const s = this._slots[slot];
-    if (s === null || s === undefined || s.count <= 0) return;
-    const take = Math.min(s.count, Math.max(1, Math.floor(count)));
-    const remain = s.count - take;
-    this._cursorStack = this.slotWithNormalizedDamage({
-      itemId: s.itemId,
-      count: take,
-      damage: s.damage,
-    });
-    this._slots[slot] =
-      remain > 0
-        ? this.slotWithNormalizedDamage({
-            itemId: s.itemId,
-            count: remain,
-            damage: s.damage,
-          })
-        : null;
-  }
-
   /** Place one item from the cursor into a slot (merge or new stack). */
   placeOneIntoSlot(slot: number): void {
     if (slot < 0 || slot >= INVENTORY_SIZE) return;

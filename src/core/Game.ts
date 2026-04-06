@@ -33,7 +33,6 @@ import {
 import { EntityManager } from "../entities/EntityManager";
 import type { PlayerState } from "../entities/Player";
 import { InputManager } from "../input/InputManager";
-import { isTouchUiMode } from "../input/touchUiMode";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
 import type { IModRepository } from "../mods/IModRepository";
@@ -93,7 +92,6 @@ import { CraftingPanel, type FurnaceUiChromeModel } from "../ui/CraftingPanel";
 import { CursorStackUI } from "../ui/CursorStackUI";
 import { ChatOverlay } from "../ui/ChatOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
-import { MobileTouchControls } from "../ui/MobileTouchControls";
 import { playShiftSlotFlyAnimation } from "../ui/shiftSlotFlyAnimation";
 import { NametagOverlay } from "../ui/NametagOverlay";
 import { UIShell } from "../ui/UIShell";
@@ -266,7 +264,6 @@ export class Game {
   private _blockInteractions: BlockInteractions | null = null;
   private audio: AudioEngine | null = null;
   private inventoryUI: InventoryUI | null = null;
-  private _mobileTouchControls: MobileTouchControls | null = null;
   private _craftingPanel: CraftingPanel | null = null;
   private _itemRegistry: ItemRegistry | null = null;
   private readonly _smeltingRegistry = new SmeltingRegistry();
@@ -694,16 +691,11 @@ export class Game {
 
     this.chunkRenderer = new ChunkRenderer(pipeline, registry, blockAtlas, world);
 
-    const touchUi = isTouchUiMode();
     const input = new InputManager(
       pipeline.getCanvas(),
       playerSettings.keyBindings,
-      { touchGesturesEnabled: touchUi },
     );
     this.input = input;
-    if (touchUi) {
-      this._mobileTouchControls = new MobileTouchControls(this.mount, input);
-    }
 
     this.keyBindingsUnsub = this.bus.on(
       "settings:apply-key-bindings",
@@ -800,22 +792,6 @@ export class Game {
       this.uiShell?.setPauseOverlayOpen(false);
     });
 
-    this.bus.on("ui:toggle-pause", () => {
-      if (this._chatOpen) {
-        this.bus.emit({ type: "ui:chat-set-open", open: false } satisfies GameEvent);
-        return;
-      }
-      if (this.isInventoryOpen) {
-        this.isInventoryOpen = false;
-        this._applyInventoryPanelsOpen(false);
-        this.input?.setWorldInputBlocked(false);
-        return;
-      }
-      this.paused = !this.paused;
-      this.input?.setWorldInputBlocked(this.paused || this.isInventoryOpen);
-      this.uiShell?.setPauseOverlayOpen(this.paused);
-    });
-
     this.bus.on("ui:screenshot", () => {
       this.pipeline?.takeScreenshot();
     });
@@ -826,12 +802,6 @@ export class Game {
       () => this.entityManager!.getPlayer().inventory,
       (slotIndex, slotEl) => {
         this._handleInventoryShiftQuickMove(slotIndex, slotEl);
-      },
-      {
-        onHotbarSelect: (slot) => {
-          this.entityManager?.getPlayer().selectHotbarSlot(slot);
-        },
-        hotbarTouchSelectEnabled: touchUi,
       },
     );
     await inventoryUI.loadTextureIcons();
@@ -1227,8 +1197,6 @@ export class Game {
     this.leafFallParticles = null;
     this.entityManager?.destroy();
     this.entityManager = null;
-    this._mobileTouchControls?.destroy();
-    this._mobileTouchControls = null;
     this.input?.destroy();
     this.input = null;
     this.chunkRenderer?.destroy();

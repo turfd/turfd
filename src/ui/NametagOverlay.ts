@@ -52,17 +52,15 @@ export class NametagOverlay {
    * on the mount; using `getBoundingClientRect()` math (`cr - mr`) drifts on some DPR / fractional
    * layouts while `100%` stays aligned with the same containing block as the canvas.
    */
-  syncLayout(mount: HTMLElement, canvas: HTMLCanvasElement): void {
+  syncLayout(_mount: HTMLElement, _canvas: HTMLCanvasElement): void {
     const layer = this.layer;
     if (layer === null) {
       return;
     }
-    const mr = mount.getBoundingClientRect();
-    const cr = canvas.getBoundingClientRect();
-    layer.style.left = `${cr.left - mr.left}px`;
-    layer.style.top = `${cr.top - mr.top}px`;
-    layer.style.width = `${cr.width}px`;
-    layer.style.height = `${cr.height}px`;
+    layer.style.left = "0";
+    layer.style.top = "0";
+    layer.style.width = "100%";
+    layer.style.height = "100%";
     layer.style.boxSizing = "border-box";
   }
 
@@ -95,7 +93,12 @@ export class NametagOverlay {
 
     const cw = Math.max(1, canvas.width);
     const ch = Math.max(1, canvas.height);
-    const cr = canvas.getBoundingClientRect();
+    // Map camera (buffer px) → overlay (CSS px) using the canvas CSS size.
+    // `clientWidth/Height` tend to be more stable than rect widths under zoom/fractional DPR.
+    const cssW = Math.max(1, canvas.clientWidth);
+    const cssH = Math.max(1, canvas.clientHeight);
+    const cssPerBufX = cssW / cw;
+    const cssPerBufY = cssH / ch;
 
     const placeTag = (id: string, text: string, worldX: number, worldY: number): void => {
       let el = this.tags.get(id);
@@ -124,8 +127,8 @@ export class NametagOverlay {
       const headX = worldX;
       const headY = -worldY - PLAYER_HEIGHT;
       const { x: sx, y: sy } = camera.worldToScreen(headX, headY);
-      const px = (sx / cw) * cr.width;
-      const py = (sy / ch) * cr.height;
+      const px = sx * cssPerBufX;
+      const py = sy * cssPerBufY;
       el.style.left = `${px}px`;
       el.style.top = `${py}px`;
     };

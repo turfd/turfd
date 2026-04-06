@@ -2,8 +2,6 @@
  * In-game HUD: coords, world title, save flash — DOM + EventBus.
  */
 import type { EventBus } from "../../core/EventBus";
-import type { GameEvent } from "../../core/types";
-import { isTouchUiMode } from "../../input/touchUiMode";
 
 export class HUD {
   private container: HTMLDivElement | null = null;
@@ -72,42 +70,12 @@ export class HUD {
     ].join(";");
     saveIndicator.textContent = "World Saved";
 
-    const touchUi = isTouchUiMode();
-    if (touchUi) {
-      const pauseBtn = document.createElement("button");
-      pauseBtn.type = "button";
-      pauseBtn.title = "Pause";
-      pauseBtn.setAttribute("aria-label", "Pause");
-      pauseBtn.textContent = "Pause";
-      pauseBtn.style.cssText = [
-        "position:absolute",
-        "top:max(0.65rem, env(safe-area-inset-top, 0px))",
-        "right:max(0.75rem, env(safe-area-inset-right, 0px))",
-        "pointer-events:auto",
-        "cursor:pointer",
-        "background:rgba(0,0,0,0.35)",
-        "border:1px solid rgba(255,255,255,0.18)",
-        "border-radius:6px",
-        "padding:6px 10px",
-        "color:#fff",
-        "font-size:0.8rem",
-        "font-family:system-ui,sans-serif",
-        "line-height:1",
-      ].join(";");
-      pauseBtn.addEventListener("click", () => {
-        bus.emit({ type: "ui:toggle-pause" } satisfies GameEvent);
-      });
-      wrap.appendChild(pauseBtn);
-    }
-
     const screenshotBtn = document.createElement("button");
     screenshotBtn.title = "Take screenshot";
     screenshotBtn.style.cssText = [
       "position:absolute",
-      "top:max(0.65rem, env(safe-area-inset-top, 0px))",
-      touchUi
-        ? "right:max(3.75rem, calc(env(safe-area-inset-right, 0px) + 3rem))"
-        : "right:0.75rem",
+      "top:0.65rem",
+      "right:0.75rem",
       "pointer-events:auto",
       "cursor:pointer",
       "background:rgba(0,0,0,0.35)",

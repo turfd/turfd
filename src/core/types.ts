@@ -28,8 +28,6 @@ export type GameEvent =
   | { type: "game:saved" }
   | { type: "ui:save" }
   | { type: "ui:close-pause" }
-  /** Toggle pause overlay (e.g. mobile HUD button); same behavior as Escape when in-game. */
-  | { type: "ui:toggle-pause" }
   | { type: "ui:quit" }
   | { type: "ui:toggle-multiplayer" }
   | { type: "ui:session-ended"; message: string }

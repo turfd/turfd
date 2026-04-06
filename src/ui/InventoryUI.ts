@@ -26,17 +26,6 @@ export type ShiftQuickMoveFromOverlayHandler = (
   slotElement: HTMLElement,
 ) => void;
 
-export type InventoryUIOptions = {
-  onHotbarSelect?: (slot: number) => void;
-  /** When true, tapping bottom hotbar slots (inventory closed) selects that slot. */
-  hotbarTouchSelectEnabled?: boolean;
-};
-
-/** Below this hold time (ms), LMB on a slot uses normal click (whole stack). */
-const PARTIAL_TAP_MS = 200;
-/** Total ms from pointer down to full partial pickup amount. */
-const PARTIAL_HOLD_FULL_MS = 1000;
-
 const INV_FONT_STYLE_ID = "stratum-inventory-fonts";
 
 function ensureInventoryFonts(): void {
@@ -103,14 +92,6 @@ export class InventoryUI {
   private prevInventoryKeys: string[] | null = null;
 
   private readonly onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null;
-  private readonly onHotbarSelect: ((slot: number) => void) | null;
-  private readonly hotbarTouchSelectEnabled: boolean;
-  private hotbarTapSlot: number | null = null;
-  private hotbarTapPointerId: number | null = null;
-  private hotbarTapStartMs = 0;
-  private partialHoldStartMs = 0;
-  private partialEnterTimer: ReturnType<typeof setTimeout> | null = null;
-  private partialBarVisible = false;
 
   private static slotKey(
     stack: { itemId: ItemId; count: number; damage?: number } | null,
@@ -235,46 +216,19 @@ export class InventoryUI {
     });
   }
 
-  private readonly onWindowPointerUp = (e: PointerEvent | MouseEvent): void => {
-    const button = e.button;
-    const shiftKey = e.shiftKey;
-    const pointerId =
-      "pointerId" in e && typeof e.pointerId === "number"
-        ? e.pointerId
-        : -1;
-
-    const hotbarPointerMatch =
-      this.hotbarTapPointerId !== null &&
-      (pointerId === this.hotbarTapPointerId ||
-        (pointerId === -1 && e instanceof MouseEvent));
-    if (hotbarPointerMatch) {
-      const slot = this.hotbarTapSlot;
-      const start = this.hotbarTapStartMs;
-      this.hotbarTapPointerId = null;
-      this.hotbarTapSlot = null;
-      if (
-        slot !== null &&
-        !this.inventoryOpen &&
-        this.onHotbarSelect !== null &&
-        button === 0 &&
-        performance.now() - start < 500
-      ) {
-        this.onHotbarSelect(slot);
-      }
-    }
-
+  private readonly onWindowMouseUp = (e: MouseEvent): void => {
     if (this.pointerDownSlot === null) {
       return;
     }
-    if (this.pointerDownButton !== button) {
+    if (this.pointerDownButton !== e.button) {
       return;
     }
     const slot = this.pointerDownSlot;
     const downEl = this.pointerDownSlotEl;
     this.pointerDownSlotEl = null;
-    if (button === 0) {
+    if (e.button === 0) {
       if (!this.dragOccurred) {
-        if (shiftKey) {
+        if (e.shiftKey) {
           if (
             this.onShiftQuickMoveFromOverlay !== null &&
             downEl !== null
@@ -284,70 +238,30 @@ export class InventoryUI {
             this.getInventory().quickMoveFromSlot(slot);
           }
         } else {
-          const inv = this.getInventory();
-          const cur = inv.getCursorStack();
-          if (cur !== null) {
-            inv.handleLmbClick(slot);
-          } else {
-            const elapsed = performance.now() - this.partialHoldStartMs;
-            const stack = inv.getStack(slot);
-            if (stack !== null && stack.count > 0) {
-              if (elapsed < PARTIAL_TAP_MS) {
-                inv.handleLmbClick(slot);
-              } else {
-                const fill = Math.min(1, elapsed / PARTIAL_HOLD_FULL_MS);
-                const take = Math.max(1, Math.floor(stack.count * fill));
-                inv.pickUpCount(slot, take);
-              }
-            } else {
-              inv.handleLmbClick(slot);
-            }
-          }
+          this.getInventory().handleLmbClick(slot);
         }
       }
-    } else if (button === 2) {
+    } else if (e.button === 2) {
       if (!this.dragOccurred && !this.rmbPlacedOnDown) {
         this.getInventory().handleRmbClick(slot);
       }
       this.rmbPlacedOnDown = false;
     }
-    this.hidePartialBar();
     this.pointerDownSlot = null;
     this.pointerDownButton = null;
     this.dragOccurred = false;
   };
-
-  private clearPartialPickupTimer(): void {
-    if (this.partialEnterTimer !== null) {
-      clearTimeout(this.partialEnterTimer);
-      this.partialEnterTimer = null;
-    }
-  }
-
-  private hidePartialBar(): void {
-    this.partialBarVisible = false;
-    this.clearPartialPickupTimer();
-    for (const el of this.root.querySelectorAll(".inv-slot-partial--visible")) {
-      el.classList.remove("inv-slot-partial--visible");
-    }
-    for (const el of this.root.querySelectorAll(".inv-slot-partial__fill")) {
-      (el as HTMLElement).style.width = "0%";
-    }
-  }
 
   constructor(
     mount: HTMLElement,
     itemRegistry: ItemRegistry,
     getInventory: GetInventory,
     onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null = null,
-    options?: InventoryUIOptions,
   ) {
     ensureInventoryFonts();
     this.itemRegistry = itemRegistry;
     this.getInventory = getInventory;
     this.onShiftQuickMoveFromOverlay = onShiftQuickMoveFromOverlay;
-    this.onHotbarSelect = options?.onHotbarSelect ?? null;
-    this.hotbarTouchSelectEnabled = options?.hotbarTouchSelectEnabled ?? false;
 
     const root = document.createElement("div");
     root.id = "inventory-ui-root";
@@ -510,9 +424,7 @@ export class InventoryUI {
     this.panelResizeObserver.observe(panel);
     window.addEventListener("resize", this.onInvWindowResizeForSidePanels, true);
 
-    window.addEventListener("mouseup", this.onWindowPointerUp, true);
-    window.addEventListener("pointerup", this.onWindowPointerUp, true);
-    window.addEventListener("pointercancel", this.onWindowPointerUp, true);
+    window.addEventListener("mouseup", this.onWindowMouseUp, true);
   }
 
   private readonly onInvWindowResizeForSidePanels = (): void => {
@@ -528,91 +440,26 @@ export class InventoryUI {
   }
 
   private bindSlotElement(slot: HTMLDivElement, slotIndex: number): void {
-    slot.addEventListener("pointerdown", (e: PointerEvent) => {
+    slot.addEventListener("mousedown", (e: MouseEvent) => {
       if (!this.inventoryOpen) {
-        if (
-          slotIndex < HOTBAR_SIZE &&
-          this.hotbarTouchSelectEnabled &&
-          this.onHotbarSelect !== null &&
-          e.button === 0
-        ) {
-          this.hotbarTapSlot = slotIndex;
-          this.hotbarTapPointerId = e.pointerId;
-          this.hotbarTapStartMs = performance.now();
-        }
         return;
       }
       if (e.button !== 0 && e.button !== 2) {
         return;
       }
       e.preventDefault();
-      try {
-        slot.setPointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      this.clearPartialPickupTimer();
-      this.hidePartialBar();
       this.pointerDownSlot = slotIndex;
       this.pointerDownSlotEl = slot;
       this.pointerDownButton = e.button;
       this.dragOccurred = false;
-      this.partialHoldStartMs = performance.now();
-      const inv = this.getInventory();
       if (e.button === 2) {
         this.rmbPlacedOnDown = false;
+        const inv = this.getInventory();
         if (inv.getCursorStack() !== null) {
           inv.placeOneIntoSlot(slotIndex);
           this.rmbPlacedOnDown = true;
         }
-      } else {
-        const stack = inv.getStack(slotIndex);
-        if (
-          inv.getCursorStack() === null &&
-          stack !== null &&
-          stack.count > 1
-        ) {
-          this.partialEnterTimer = setTimeout(() => {
-            this.partialEnterTimer = null;
-            if (
-              this.pointerDownSlot !== slotIndex ||
-              this.pointerDownButton !== 0
-            ) {
-              return;
-            }
-            const inv2 = this.getInventory();
-            const st = inv2.getStack(slotIndex);
-            if (
-              inv2.getCursorStack() !== null ||
-              st === null ||
-              st.count <= 1
-            ) {
-              return;
-            }
-            this.partialBarVisible = true;
-            const wrap = slot.querySelector(".inv-slot-partial");
-            if (wrap !== null) {
-              wrap.classList.add("inv-slot-partial--visible");
-            }
-          }, PARTIAL_TAP_MS);
-        }
       }
-    });
-
-    slot.addEventListener("pointermove", (_e: PointerEvent) => {
-      if (!this.inventoryOpen || !this.partialBarVisible) {
-        return;
-      }
-      if (this.pointerDownSlot !== slotIndex) {
-        return;
-      }
-      const fillEl = slot.querySelector<HTMLElement>(".inv-slot-partial__fill");
-      if (fillEl === null) {
-        return;
-      }
-      const elapsed = performance.now() - this.partialHoldStartMs;
-      const t = Math.min(1, Math.max(0, elapsed / PARTIAL_HOLD_FULL_MS));
-      fillEl.style.width = `${t * 100}%`;
     });
 
     slot.addEventListener("dblclick", (e: MouseEvent) => {
@@ -676,15 +523,9 @@ export class InventoryUI {
     dur.appendChild(durFill);
     const count = document.createElement("span");
     count.className = "inv-slot-count";
-    const partial = document.createElement("div");
-    partial.className = "inv-slot-partial";
-    const partialFill = document.createElement("div");
-    partialFill.className = "inv-slot-partial__fill";
-    partial.appendChild(partialFill);
     slot.appendChild(icon);
     slot.appendChild(dur);
     slot.appendChild(count);
-    slot.appendChild(partial);
     return { slot, icon, count };
   }
 
@@ -976,10 +817,7 @@ export class InventoryUI {
   destroy(): void {
     this.hideItemTooltip();
     this.clearHotbarNameTimers();
-    this.clearPartialPickupTimer();
-    window.removeEventListener("mouseup", this.onWindowPointerUp, true);
-    window.removeEventListener("pointerup", this.onWindowPointerUp, true);
-    window.removeEventListener("pointercancel", this.onWindowPointerUp, true);
+    window.removeEventListener("mouseup", this.onWindowMouseUp, true);
     this.root.remove();
   }
 }

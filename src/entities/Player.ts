@@ -408,13 +408,6 @@ export class Player {
     } satisfies GameEvent);
   }
 
-  /** Select hotbar slot 0..HOTBAR_SIZE-1 (e.g. touch hotbar tap). */
-  selectHotbarSlot(slot: number): void {
-    const s =
-      ((Math.floor(slot) % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
-    this.state.hotbarSlot = s;
-  }
-
   update(dt: number, input: InputManager, world: World): void {
     const { state } = this;
 
@@ -439,7 +432,13 @@ export class Player {
     state.coyoteTimeRemaining = Math.max(0, state.coyoteTimeRemaining - dt);
     state.jumpBufferRemaining = Math.max(0, state.jumpBufferRemaining - dt);
 
-    const moveInput = input.getCombinedHorizontalMoveAxis();
+    let moveInput = 0;
+    if (input.isDown("left")) {
+      moveInput -= 1;
+    }
+    if (input.isDown("right")) {
+      moveInput += 1;
+    }
     const sprintHeld = input.isDown("sprint");
     const inWater = playerAabbOverlapsWater(world, state.position);
     const waterMult = inWater ? PLAYER_WATER_SPEED_MULT : 1;
@@ -452,7 +451,7 @@ export class Player {
     const targetVx = moveInput * speed;
     const accel = state.onGround ? GROUND_ACCEL : AIR_ACCEL;
     const decel = state.onGround ? GROUND_DECEL : AIR_DECEL;
-    const maxDelta = (Math.abs(moveInput) > 1e-4 ? accel : decel) * dt;
+    const maxDelta = (moveInput !== 0 ? accel : decel) * dt;
     state.velocity.x = approach(state.velocity.x, targetVx, maxDelta);
 
     if (input.isJustPressed("jump")) {
@@ -572,9 +571,9 @@ export class Player {
       state.velocity.y = 0;
     }
 
-    if (moveInput > 0.08) {
+    if (moveInput > 0) {
       state.facingRight = true;
-    } else if (moveInput < -0.08) {
+    } else if (moveInput < 0) {
       state.facingRight = false;
     } else if (Math.abs(state.velocity.x) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD) {
       state.facingRight = state.velocity.x > 0;
