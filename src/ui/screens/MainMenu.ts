@@ -134,6 +134,12 @@ function injectStyles(base: string): void {
       z-index: 10;
       display: flex;
       flex-direction: column;
+      box-sizing: border-box;
+      /* Safe areas (notch / home indicator); viewport-fit=cover in index.html */
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding-left: env(safe-area-inset-left, 0px);
       pointer-events: none;
       font-family: 'BoldPixels', 'Courier New', monospace;
       font-weight: normal;
@@ -2858,16 +2864,23 @@ function injectStyles(base: string): void {
       }
       .mm-body {
         overflow-y: visible;
-        padding-top: max(0.35rem, env(safe-area-inset-top, 0px));
-        padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+        /* Safe area lives on .mm-root; keep a little spacing only */
+        padding-top: 0.35rem;
+        padding-bottom: 0.5rem;
       }
       .mm-nav {
-        max-height: min(100vh - 4.5rem, 520px);
+        /* 100vh on iOS includes UI chrome — use small viewport height so the column fits the visible screen */
+        max-height: min(520px, calc(100vh - 6.5rem));
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         width: min(220px, 42vw);
         min-width: 0;
         padding: 10px 12px;
+      }
+      @supports (height: 100svh) {
+        .mm-nav {
+          max-height: min(520px, calc(100svh - 6.5rem));
+        }
       }
       .mm-brand-logo {
         max-height: min(44px, 12vh);
@@ -2882,7 +2895,7 @@ function injectStyles(base: string): void {
         min-height: 44px;
       }
       .mm-topbar {
-        padding: max(0.35rem, env(safe-area-inset-top, 0px)) 1rem 0;
+        padding: 0.35rem 1rem 0;
         flex-shrink: 0;
       }
       .mm-content-home {
@@ -2924,6 +2937,12 @@ function injectStyles(base: string): void {
     }
 
     @media (max-width: 900px) {
+      /* Phones / narrow tablets: allow the whole shell to scroll; iOS 100vh is often taller than the visible viewport */
+      .mm-root {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
+      }
       .mm-body {
         flex-direction: column;
         align-items: stretch;
@@ -2931,6 +2950,9 @@ function injectStyles(base: string): void {
       .mm-nav {
         width: 100%;
         min-width: 0;
+        /* Stacked layout: don't trap scroll inside the nav (short-landscape rules above set max-height) */
+        max-height: none;
+        overflow-y: visible;
       }
       .mm-nav-list {
         display: grid;
