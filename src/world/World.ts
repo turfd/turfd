@@ -1831,14 +1831,16 @@ export class World {
 
   /** @internal Used by Game/EntityManager to animate remote peers. */
   updateRemotePlayers(dt: number): void {
+    const nowMs = performance.now();
     for (const [peerId, player] of this.remotePlayers) {
       player.stepFixed(dt);
       const bus = this.bus;
       if (bus === undefined) {
         continue;
       }
-      const vx = player.velocityX;
-      const vy = player.velocityY;
+      const disp = player.getDisplayPose(nowMs);
+      const vx = disp.vx;
+      const vy = disp.vy;
       const onGround = Math.abs(vy) <= PLAYER_REMOTE_AIR_VY_THRESHOLD;
       let acc = this.remoteGroundKickAccum.get(peerId) ?? 0;
       if (!onGround || Math.abs(vx) <= 10) {
@@ -1847,14 +1849,14 @@ export class World {
         acc += dt;
         if (acc >= STEP_INTERVAL) {
           acc = 0;
-          const bx = Math.floor(player.x / BLOCK_SIZE);
-          const by = Math.floor(player.y / BLOCK_SIZE) - 1;
+          const bx = Math.floor(disp.x / BLOCK_SIZE);
+          const by = Math.floor(disp.y / BLOCK_SIZE) - 1;
           const block = this.getBlock(bx, by);
           if (!block.water && block.id !== this.airId) {
             bus.emit({
               type: "entity:ground-kick",
-              feetWorldX: player.x,
-              feetWorldY: player.y,
+              feetWorldX: disp.x,
+              feetWorldY: disp.y,
               velocityX: vx,
               blockId: block.id,
             } satisfies GameEvent);
@@ -1873,13 +1875,28 @@ export class World {
     vx: number,
     vy: number,
     facingRight: boolean,
+    hotbarSlot: number,
+    heldItemId: number,
+    miningVisualFromNetwork: boolean,
   ): void {
     const existing = this.remotePlayers.get(peerId);
     if (existing === undefined) {
       const created = new RemotePlayer(x, y, facingRight, vx, vy);
+      created.hotbarSlot = hotbarSlot;
+      created.heldItemId = heldItemId;
+      created.miningVisualFromNetwork = miningVisualFromNetwork;
       this.remotePlayers.set(peerId, created);
     } else {
-      existing.setTarget(x, y, vx, vy, facingRight);
+      existing.setTarget(
+        x,
+        y,
+        vx,
+        vy,
+        facingRight,
+        hotbarSlot,
+        heldItemId,
+        miningVisualFromNetwork,
+      );
     }
   }
 

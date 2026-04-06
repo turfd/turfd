@@ -43,6 +43,8 @@ export enum MessageType {
   BLOCK_BREAK_PROGRESS = 0x10,
   /** Host → one client: grant items into that client’s inventory (OP /give). */
   GIVE_ITEM_STACK = 0x11,
+  /** Host → one client: authoritative feet spawn (rejoin / saved logout position). */
+  ASSIGNED_SPAWN = 0x12,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -157,6 +159,12 @@ export type PlayerStateMsg = {
   vx: number;
   vy: number;
   facingRight: boolean;
+  /** Selected hotbar index [0, HOTBAR_SIZE). */
+  hotbarSlot: number;
+  /** Item id in that slot, or `0` when empty. */
+  heldItemId: number;
+  /** True while mining a block or during hand-use swing (matches local body + held break pose). */
+  miningVisual: boolean;
 };
 
 /** Host-forwarded client pose so joiners and other clients attribute it to `subjectPeerId`. */
@@ -168,6 +176,9 @@ export type PlayerStateRelayMsg = {
   vx: number;
   vy: number;
   facingRight: boolean;
+  hotbarSlot: number;
+  heldItemId: number;
+  miningVisual: boolean;
 };
 
 export type EntitySpawnMsg = {
@@ -205,6 +216,15 @@ export type GiveItemStackMsg = {
   count: number;
 };
 
+export type AssignedSpawnMsg = {
+  type: MessageType.ASSIGNED_SPAWN;
+  x: number;
+  y: number;
+};
+
+/** Wire: type byte + two float64 (17 bytes). */
+export const ASSIGNED_SPAWN_WIRE_BYTE_LENGTH = 17;
+
 export type NetworkMessage =
   | HandshakeMessage
   | ChunkDataMsg
@@ -217,6 +237,7 @@ export type NetworkMessage =
   | SystemMessageMsg
   | PingMsg
   | GiveItemStackMsg
+  | AssignedSpawnMsg
   | WorldSyncMsg
   | WorldTimeMsg
   | SessionEndedMsg
@@ -313,7 +334,10 @@ function decodePackStackRefs(
 }
 
 /** Wire size of a `PLAYER_STATE` packet (type byte + payload). */
-export const PLAYER_STATE_WIRE_BYTE_LENGTH = 36;
+export const PLAYER_STATE_WIRE_BYTE_LENGTH = 40;
+
+/** `poseFlags` in {@link writePlayerStateWire} — bit 0 = mining / hand-swing visual. */
+export const PLAYER_STATE_FLAG_MINING_VISUAL = 1;
 
 /** Writes `PLAYER_STATE` layout into `view` (byte length {@link PLAYER_STATE_WIRE_BYTE_LENGTH}). */
 export function writePlayerStateWire(
@@ -324,6 +348,9 @@ export function writePlayerStateWire(
   vx: number,
   vy: number,
   facingRight: boolean,
+  hotbarSlot: number,
+  heldItemId: number,
+  miningVisual: boolean,
 ): void {
   view.setUint8(0, MessageType.PLAYER_STATE);
   view.setUint16(1, playerId, LE);
@@ -332,6 +359,12 @@ export function writePlayerStateWire(
   view.setFloat64(19, vx, LE);
   view.setFloat64(27, vy, LE);
   view.setUint8(35, facingRight ? 1 : 0);
+  view.setUint8(36, hotbarSlot & 0xff);
+  view.setUint16(37, heldItemId & 0xffff, LE);
+  view.setUint8(
+    39,
+    miningVisual ? PLAYER_STATE_FLAG_MINING_VISUAL : 0,
+  );
 }
 
 export function encode(msg: NetworkMessage): ArrayBuffer {
@@ -386,6 +419,9 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         msg.vx,
         msg.vy,
         msg.facingRight,
+        msg.hotbarSlot,
+        msg.heldItemId,
+        msg.miningVisual,
       );
       return buf;
     }
@@ -455,6 +491,15 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       v.setUint8(0, MessageType.GIVE_ITEM_STACK);
       v.setUint32(1, msg.itemId >>> 0, LE);
       v.setUint32(5, msg.count >>> 0, LE);
+      return buf;
+    }
+
+    case MessageType.ASSIGNED_SPAWN: {
+      const buf = new ArrayBuffer(ASSIGNED_SPAWN_WIRE_BYTE_LENGTH);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.ASSIGNED_SPAWN);
+      v.setFloat64(1, msg.x, LE);
+      v.setFloat64(9, msg.y, LE);
       return buf;
     }
 
@@ -528,7 +573,7 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       if (sid.byteLength > CHAT_PEER_ID_MAX) {
         throw new Error("PLAYER_STATE_RELAY: subjectPeerId too long");
       }
-      const buf = new ArrayBuffer(1 + 2 + sid.byteLength + 32 + 1);
+      const buf = new ArrayBuffer(1 + 2 + sid.byteLength + 32 + 1 + 4);
       const view = new DataView(buf);
       let o = 0;
       view.setUint8(o++, MessageType.PLAYER_STATE_RELAY);
@@ -544,7 +589,14 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       o += 8;
       view.setFloat64(o, msg.vy, LE);
       o += 8;
-      view.setUint8(o, msg.facingRight ? 1 : 0);
+      view.setUint8(o++, msg.facingRight ? 1 : 0);
+      view.setUint8(o++, msg.hotbarSlot & 0xff);
+      view.setUint16(o, msg.heldItemId & 0xffff, LE);
+      o += 2;
+      view.setUint8(
+        o,
+        msg.miningVisual ? PLAYER_STATE_FLAG_MINING_VISUAL : 0,
+      );
       return buf;
     }
 
@@ -657,7 +709,16 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       };
     }
 
-    case MessageType.PLAYER_STATE:
+    case MessageType.PLAYER_STATE: {
+      let hotbarSlot = 0;
+      let heldItemId = 0;
+      let miningVisual = false;
+      if (v.byteLength >= 40) {
+        hotbarSlot = v.getUint8(36);
+        heldItemId = v.getUint16(37, LE);
+        miningVisual =
+          (v.getUint8(39) & PLAYER_STATE_FLAG_MINING_VISUAL) !== 0;
+      }
       return {
         type: MessageType.PLAYER_STATE,
         playerId: v.getUint16(1, LE),
@@ -666,7 +727,11 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         vx: v.getFloat64(19, LE),
         vy: v.getFloat64(27, LE),
         facingRight: v.getUint8(35) !== 0,
+        hotbarSlot,
+        heldItemId,
+        miningVisual,
       };
+    }
 
     case MessageType.ENTITY_SPAWN:
       return {
@@ -734,6 +799,17 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         type: MessageType.GIVE_ITEM_STACK,
         itemId: v.getUint32(1, LE),
         count: v.getUint32(5, LE),
+      };
+    }
+
+    case MessageType.ASSIGNED_SPAWN: {
+      if (v.byteLength < ASSIGNED_SPAWN_WIRE_BYTE_LENGTH) {
+        throw new Error("ASSIGNED_SPAWN: buffer too short");
+      }
+      return {
+        type: MessageType.ASSIGNED_SPAWN,
+        x: v.getFloat64(1, LE),
+        y: v.getFloat64(9, LE),
       };
     }
 
@@ -816,6 +892,18 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       const vy = v.getFloat64(o, LE);
       o += 8;
       const facingRight = v.getUint8(o) !== 0;
+      o += 1;
+      let hotbarSlot = 0;
+      let heldItemId = 0;
+      let miningVisual = false;
+      if (v.byteLength >= o + 4) {
+        hotbarSlot = v.getUint8(o);
+        o += 1;
+        heldItemId = v.getUint16(o, LE);
+        o += 2;
+        miningVisual =
+          (v.getUint8(o) & PLAYER_STATE_FLAG_MINING_VISUAL) !== 0;
+      }
       return {
         type: MessageType.PLAYER_STATE_RELAY,
         subjectPeerId,
@@ -824,6 +912,9 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         vx,
         vy,
         facingRight,
+        hotbarSlot,
+        heldItemId,
+        miningVisual,
       };
     }
 

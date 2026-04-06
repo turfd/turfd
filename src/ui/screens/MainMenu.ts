@@ -327,6 +327,38 @@ function injectStyles(base: string): void {
       flex-direction: column;
     }
 
+    @keyframes mm-content-out {
+      from {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+      to {
+        opacity: 0;
+        transform: translateY(-10px) scale(0.988);
+      }
+    }
+    @keyframes mm-content-in {
+      from {
+        opacity: 0;
+        transform: translateY(14px) scale(0.985);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    .mm-content.mm-content-exit {
+      animation: mm-content-out 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
+      pointer-events: none;
+    }
+    .mm-content.mm-content-enter {
+      animation: mm-content-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      pointer-events: none;
+    }
+    .mm-root.mm-root--content-transition .mm-nav {
+      pointer-events: none;
+    }
+
     /* -- Generic panel ---------------------------------------------------- */
     .mm-panel {
       background: var(--mm-surface);
@@ -2820,6 +2852,16 @@ function injectStyles(base: string): void {
     }
     @media (prefers-reduced-motion: reduce) {
       .mm-nav-btn, .mm-btn, .mm-discord, .mm-world-row { transition: none; }
+      .mm-content.mm-content-exit,
+      .mm-content.mm-content-enter {
+        animation: none !important;
+        opacity: 1;
+        transform: none;
+        pointer-events: auto;
+      }
+      .mm-root.mm-root--content-transition .mm-nav {
+        pointer-events: auto;
+      }
       .mm-workshop-spinner,
       .mm-workshop-spinner--btn {
         animation: none;
@@ -3005,10 +3047,12 @@ export class MainMenu {
               // Deselect → return to home
               activeTab = null;
               btn.classList.remove("mm-nav-btn-active");
-              renderHome();
+              transitionContent(() => {
+                renderHome();
+              });
             } else {
               setActiveTab(tab);
-              renderTab(tab);
+              transitionContent(() => performTabRender(tab));
             }
           });
         }
@@ -3104,6 +3148,104 @@ export class MainMenu {
         nameInput.focus();
       }
 
+      let contentTransitionToken = 0;
+      const MM_CONTENT_OUT_FALLBACK_MS = 240;
+      const MM_CONTENT_IN_FALLBACK_MS = 400;
+
+      function setContentTransitionBusy(busy: boolean): void {
+        root.classList.toggle("mm-root--content-transition", busy);
+      }
+
+      function transitionContent(runSwap: () => void | Promise<void>): void {
+        const myToken = ++contentTransitionToken;
+        const reduceMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+
+        const endTransition = (): void => {
+          if (myToken !== contentTransitionToken) return;
+          setContentTransitionBusy(false);
+          content.classList.remove("mm-content-exit", "mm-content-enter");
+        };
+
+        const onSwapError = (err: unknown): void => {
+          console.error("[MainMenu] Screen transition failed:", err);
+          endTransition();
+        };
+
+        setContentTransitionBusy(true);
+
+        if (reduceMotion) {
+          void Promise.resolve(runSwap()).then(endTransition, onSwapError);
+          return;
+        }
+
+        content.classList.remove("mm-content-enter", "mm-content-exit");
+        void content.offsetWidth;
+        content.classList.add("mm-content-exit");
+
+        let outDone = false;
+        let outTimer = 0;
+        const onOutAnimEnd = (ev: AnimationEvent): void => {
+          if (myToken !== contentTransitionToken) return;
+          if (ev.target !== content) return;
+          if (ev.animationName !== "mm-content-out") return;
+          completeOut();
+        };
+
+        const completeOut = (): void => {
+          if (outDone) return;
+          outDone = true;
+          window.clearTimeout(outTimer);
+          content.removeEventListener("animationend", onOutAnimEnd);
+          if (myToken !== contentTransitionToken) return;
+          content.classList.remove("mm-content-exit");
+
+          void Promise.resolve(runSwap())
+            .then(
+              () => {
+                if (myToken !== contentTransitionToken) return;
+
+                content.classList.remove("mm-content-enter");
+                void content.offsetWidth;
+                content.classList.add("mm-content-enter");
+
+                let inDone = false;
+                let inTimer = 0;
+                const onInAnimEnd = (ev: AnimationEvent): void => {
+                  if (myToken !== contentTransitionToken) return;
+                  if (ev.target !== content) return;
+                  if (ev.animationName !== "mm-content-in") return;
+                  completeIn();
+                };
+
+                const completeIn = (): void => {
+                  if (inDone) return;
+                  inDone = true;
+                  window.clearTimeout(inTimer);
+                  content.removeEventListener("animationend", onInAnimEnd);
+                  if (myToken !== contentTransitionToken) return;
+                  content.classList.remove("mm-content-enter");
+                  endTransition();
+                };
+
+                content.addEventListener("animationend", onInAnimEnd);
+                inTimer = window.setTimeout(
+                  completeIn,
+                  MM_CONTENT_IN_FALLBACK_MS,
+                );
+              },
+              onSwapError,
+            );
+        };
+
+        content.addEventListener("animationend", onOutAnimEnd);
+        outTimer = window.setTimeout(
+          completeOut,
+          MM_CONTENT_OUT_FALLBACK_MS,
+        );
+      }
+
       // -- Render functions --------------------------------------------------
 
       function renderHome(): void {
@@ -3152,13 +3294,13 @@ export class MainMenu {
         content.appendChild(wnPanel);
       }
 
-      function renderTab(tab: NavTab): void {
+      async function performTabRender(tab: NavTab): Promise<void> {
         content.classList.remove("mm-content-home");
         content.classList.add("mm-content-tab");
         if (tab === "solo") renderSolo();
         else if (tab === "online") renderOnline();
         else if (tab === "workshop") renderWorkshop();
-        else if (tab === "settings") void renderSettings();
+        else if (tab === "settings") await renderSettings();
         else if (tab === "profile") renderProfile();
       }
 

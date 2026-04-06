@@ -6,65 +6,66 @@ export const PLAYER_WIDTH = 14;
 export const PLAYER_HEIGHT = 28;
 
 /**
- * Packed walk sheet under `resource_packs/.../textures/` (see {@link PLAYER_WALK_ATLAS_IMAGE_REL}).
- * Aseprite export: `frames` `1 0.png` … `1 4.png` — sheet 85×40, cells 17×40 (same layout as `meta.image` in JSON).
+ * Single horizontal strip: 7×(20×40) = 140×40 — idle, walk×4, jump, break.
+ * 1-based art order: frame 1 idle, 2–5 walk, 6 jump, 7 break → 0-based indices below.
+ *
+ * Optional sidecar: {@link PLAYER_BODY_ATLAS_JSON_REL} — if present and valid, overrides these rects.
  */
-export const PLAYER_WALK_ATLAS_IMAGE_REL = "GUI/player/walking.png";
+export const PLAYER_BODY_ATLAS_IMAGE_REL = "GUI/player/sprite_sheet.png";
 
-export const PLAYER_WALK_ATLAS_FRAMES: readonly Readonly<{
+/**
+ * Optional `{ "frames": [{ "x","y","w","h" }, ...] }` next to the PNG (same folder in the resource pack).
+ */
+export const PLAYER_BODY_ATLAS_JSON_REL = "GUI/player/body_atlas.json";
+
+/**
+ * Default rects for `sprite_sheet.png` at 140×40 (uniform 20×40 cells, no gutters).
+ */
+export const PLAYER_BODY_ATLAS_FRAMES: readonly Readonly<{
   x: number;
   y: number;
   w: number;
   h: number;
 }>[] = [
-  { x: 0, y: 0, w: 17, h: 40 }, // 1 0.png — idle
-  { x: 17, y: 0, w: 17, h: 40 }, // 1 1.png
-  { x: 34, y: 0, w: 17, h: 40 }, // 1 2.png
-  { x: 51, y: 0, w: 17, h: 40 }, // 1 3.png
-  { x: 68, y: 0, w: 17, h: 40 }, // 1 4.png
+  { x: 0, y: 0, w: 20, h: 40 },
+  { x: 20, y: 0, w: 20, h: 40 },
+  { x: 40, y: 0, w: 20, h: 40 },
+  { x: 60, y: 0, w: 20, h: 40 },
+  { x: 80, y: 0, w: 20, h: 40 },
+  { x: 100, y: 0, w: 20, h: 40 },
+  { x: 120, y: 0, w: 20, h: 40 },
 ] as const;
 
-export const PLAYER_WALK_FRAME_COUNT = PLAYER_WALK_ATLAS_FRAMES.length;
+/** Minimum slices required for idle / walk / jump / break indices below. */
+export const PLAYER_BODY_REQUIRED_FRAME_COUNT = 7;
 
-/** 0-based index of the standing idle pose (`1 0.png`). */
-export const PLAYER_WALK_IDLE_FRAME_INDEX = 0;
+/** Standing idle — art frame 1. */
+export const PLAYER_BODY_IDLE_FRAME_INDEX = 0;
 
-/** Walk-cycle indices left-to-right after idle (`1 1` … `1 4`). */
-export const PLAYER_WALK_CYCLE_FRAME_INDICES: readonly number[] = [1, 2, 3, 4];
+/** Walk loop — art frames 2–5. */
+export const PLAYER_BODY_WALK_CYCLE_INDICES: readonly number[] = [1, 2, 3, 4];
 
-/** Mining pose: alternates with idle frame while holding break on a block (`breaking.png`). */
-export const PLAYER_BREAKING_ATLAS_IMAGE_REL = "GUI/player/breaking.png";
+/** Jump (ascent and descent use the same cel) — art frame 6. */
+export const PLAYER_BODY_JUMP_UP_FRAME_INDEX = 5;
+export const PLAYER_BODY_JUMP_DOWN_FRAME_INDEX = 5;
 
-/** Single cell from `breaking.png` — match idle walk cell (`1 0`) for alignment. */
-export const PLAYER_BREAKING_ATLAS_FRAMES: readonly Readonly<{
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}>[] = [{ x: 0, y: 0, w: 17, h: 40 }] as const;
+/** Mining / skid pose — art frame 7; alternates with idle while breaking. */
+export const PLAYER_BODY_MINING_FRAME_INDEX = 6;
 
-/** AnimatedSprite speed for idle ↔ breaking two-frame loop (see {@link PLAYER_WALK_ANIM_SPEED}). */
+/** AnimatedSprite speed for idle ↔ mining two-frame loop (see {@link PLAYER_WALK_ANIM_SPEED}). */
 export const PLAYER_BREAKING_ANIM_SPEED = 0.14;
 
 /**
- * Extra offset for the mining pose frame only (`breaking.png` vs idle walk cell).
- * In source texels, multiplied by the player uniform scale each frame; sign is for the unmirrored sprite
- * (`facingRight === false`). When facing right, the body uses negative `scale.x`, so the feet-position
- * nudge is applied with the opposite sign to match the mirror.
+ * Extra offset for the mining pose frame only (second frame of the mining loop).
+ * Set non-zero if that cell’s feet don’t line up with idle in the sheet.
  */
-export const PLAYER_BREAKING_MINING_FRAME_OFFSET_X_TEXELS = -2;
+export const PLAYER_BREAKING_MINING_FRAME_OFFSET_X_TEXELS = 0;
 export const PLAYER_BREAKING_MINING_FRAME_OFFSET_Y_TEXELS = 0;
 
-/** Single-frame jump pose (`jump.png`). */
-export const PLAYER_JUMP_ATLAS_IMAGE_REL = "GUI/player/jump.png";
-
-/** Must match `GUI/player/jump.png` pixel size (full sheet = single frame). */
-export const PLAYER_JUMP_ATLAS_FRAMES: readonly Readonly<{
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}>[] = [{ x: 0, y: 0, w: 21, h: 32 }] as const;
+/**
+ * After a successful place or item use, play the same mining-style body + held-item swing for this long.
+ */
+export const PLAYER_HAND_SWING_VISUAL_DURATION_SEC = 0.32;
 
 /**
  * Remotes: treat vertical speed above this (px/s) as airborne for jump sprite (no `onGround` on wire).
@@ -93,6 +94,18 @@ export const PLAYER_REMOTE_SPRINT_VEL_THRESHOLD = 155;
 export const PLAYER_REMOTE_ANIM_VEL_SMOOTH_PER_SEC = 12;
 
 /**
+ * Remote peers: render pose this many ms behind wall-clock so we can interpolate between network samples
+ * (reduces jitter and avoids velocity extrapolation into walls).
+ */
+export const REMOTE_PLAYER_INTERP_DELAY_MS = 110;
+
+/** Drop snapshot history older than this (ms) to bound memory. */
+export const REMOTE_PLAYER_SNAPSHOT_MAX_AGE_MS = 550;
+
+/** Max buffered pose samples per remote peer. */
+export const REMOTE_PLAYER_SNAPSHOT_MAX_COUNT = 24;
+
+/**
  * Applied after fitting the walk sheet to the hitbox. Hitbox ({@link PLAYER_WIDTH} × {@link PLAYER_HEIGHT}) is unchanged.
  * `1.5` ≈ ¾ of the prior “2×” display size.
  */
@@ -108,6 +121,61 @@ export const PLAYER_SPRITE_FEET_OFFSET_PX = 0;
  * Extra nudge from sheet texels × draw scale (see {@link PLAYER_SPRITE_FEET_OFFSET_PX} for fixed px).
  */
 export const PLAYER_SPRITE_FEET_PAD_TEXELS = 0;
+
+/**
+ * Selected hotbar item: offset from the body anchor (bottom-center), in body texture pixels.
+ * Code multiplies X by `body.scale.x` (signed) so the grip moves to the mirrored side when the
+ * character flips; negate this constant if the tool sits on the wrong side for your sheet.
+ */
+export const PLAYER_HELD_ITEM_HAND_OFFSET_X_TEXELS = 7;
+export const PLAYER_HELD_ITEM_HAND_OFFSET_Y_TEXELS = -18;
+
+/**
+ * Magnitude of screen-X nudge toward the character’s forward side (`facingRight` → +X, else −X).
+ */
+export const PLAYER_HELD_ITEM_FACING_SIDE_NUDGE_X_PX = 8;
+
+/**
+ * Outward from torso along screen X (signed in code by facing: +X when `facingRight`, −X when facing left).
+ */
+export const PLAYER_HELD_ITEM_OUTWARD_NUDGE_X_PX = 6;
+export const PLAYER_HELD_ITEM_OUTWARD_NUDGE_Y_PX = 7;
+
+/** When airborne, nudge held item up (−Y) for both facings. */
+export const PLAYER_HELD_ITEM_AIR_JUMP_NUDGE_Y_PX = -2;
+
+/**
+ * While breaking blocks, on the mining two-frame loop’s swing cel (`currentFrame === 1`):
+ * nudge the held item toward facing (+screen X when `facingRight`) and up (−Y).
+ */
+export const PLAYER_HELD_BREAK_FRAME_NUDGE_FORWARD_PX = 2;
+export const PLAYER_HELD_BREAK_FRAME_NUDGE_UP_PX = 2;
+
+/**
+ * On the mining swing frame: extra rotation (radians, + = clockwise in Pixi). Not pixel units—
+ * tip motion ≈ angle × distance from the grip anchor. Set to `0` to disable; negate if tilt is wrong.
+ */
+export const PLAYER_HELD_BREAK_FRAME_ROTATION_RAD = 0.08;
+
+/** Extra scale for the held icon relative to the body uniform scale (1 ≈ same texel size as body art). */
+export const PLAYER_HELD_ITEM_SCALE_MULTIPLIER = 1;
+
+/** Placeable block / tile items (`placesBlockId`): in-hand scale vs other items. */
+export const PLAYER_HELD_PLACEABLE_BLOCK_REL_SCALE = 0.5;
+
+/** Extra down (+Y) in container px for held placeable blocks only (both facings). */
+export const PLAYER_HELD_PLACEABLE_BLOCK_NUDGE_Y_PX = 2;
+
+/** In-hand rotation for `toolType === "axe"` (radians; positive = clockwise in Pixi). */
+export const PLAYER_HELD_AXE_ROTATION_RAD = Math.PI / 2;
+
+/** Extra screen-X nudge for axes; sign follows facing the same way as outward X. */
+export const PLAYER_HELD_AXE_NUDGE_X_PX = 4;
+export const PLAYER_HELD_AXE_NUDGE_Y_PX = 0;
+
+/** Grip point on the item texture (normalized 0–1). */
+export const PLAYER_HELD_ITEM_ANCHOR_X = 0.35;
+export const PLAYER_HELD_ITEM_ANCHOR_Y = 0.55;
 
 /**
  * Camera follow: positive values shift the view target upward in world space so the player
@@ -168,9 +236,9 @@ export const BLOCK_STEP_KICK_LIFETIME_SEC = 0.36;
 /** Ambient canopy leaf fall: max concurrent sprites (Minecraft-like density). */
 export const LEAF_FALL_MAX_PARTICLES = 96;
 /** Spawn attempts per fixed tick (each samples a random loaded chunk / cell). */
-export const LEAF_FALL_SPAWN_TRIES_PER_TICK = 14;
+export const LEAF_FALL_SPAWN_TRIES_PER_TICK = 40;
 /** When a candidate leaf cell qualifies, probability to actually spawn one particle. */
-export const LEAF_FALL_SPAWN_CHANCE = 0.82;
+export const LEAF_FALL_SPAWN_CHANCE = 1;
 /**
  * Fraction of spawn rolls that may use any leaf block (not only canopy-edge cells).
  * Matches “ambient around foliage” feel; rest still prefer exposed underside.

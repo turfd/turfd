@@ -295,17 +295,18 @@ export class WorldGenerator {
         const wy = originWy + ly;
         const h = this.hash2(wx * 131 + 17, wy * 91 + 9);
         const r = h % 1000;
-        if (r < 180) {
+        /* Short/tall grass bands widened (~28% / ~10% of grass tiles) vs older 18%/7%. */
+        if (r < 280) {
           chunk.blocks[aboveIdx] = this.shortGrassId;
-        } else if (r < 250 && ly + 2 < CHUNK_SIZE) {
+        } else if (r < 380 && ly + 2 < CHUNK_SIZE) {
           const above2Idx = localIndex(lx, ly + 2);
           if (chunk.blocks[above2Idx] === this.airId) {
             chunk.blocks[aboveIdx] = this.tallGrassBottomId;
             chunk.blocks[above2Idx] = this.tallGrassTopId;
           }
-        } else if (r < 300) {
+        } else if (r < 430) {
           chunk.blocks[aboveIdx] = this.dandelionId;
-        } else if (r < 340) {
+        } else if (r < 470) {
           chunk.blocks[aboveIdx] = this.poppyId;
         }
       }

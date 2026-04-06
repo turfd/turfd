@@ -18,6 +18,8 @@ export type FurnaceUiChromeModel = {
   readonly cookProgressSec: number;
   readonly activeSmeltingRecipeId: string | null;
   readonly cookTimeSecForActive: number;
+  /** Sum of `batches` per smelting JSON recipe id across the FIFO queue (remaining smelts). */
+  readonly queuedBatchesByRecipeId: Readonly<Record<string, number>>;
 };
 
 export interface CraftingPanelDeps {
@@ -75,8 +77,6 @@ export class CraftingPanel {
   private tagCycleTimer: ReturnType<typeof setInterval> | null = null;
   private readonly tooltipEl: HTMLDivElement;
   private tooltipTargetRow: HTMLElement | null = null;
-  /** Furnace tab: next click smelts this many batches (×1 → ×2 after each success; shift uses max and resets to ×1). */
-  private readonly furnaceNextBatchByRecipeId = new Map<string, number>();
 
   constructor(
     mount: HTMLElement,
@@ -256,28 +256,6 @@ export class CraftingPanel {
     this.unsubResult = this.bus.on("craft:result", (e) => {
       if (e.ok) {
         this.flashHint("");
-        if (
-          e.recipeId !== undefined &&
-          this.open &&
-          this.activeCategory === "Furnace"
-        ) {
-          const recipe = this.deps.getRecipes().find((r) => r.id === e.recipeId);
-          if (recipe !== undefined && recipe.category === "Furnace") {
-            const inv = this.deps.getInventory();
-            const maxB = this.deps.maxCraftableBatches(recipe, inv);
-            const cap = maxB <= 0 ? 1 : maxB;
-            if (e.shiftKey) {
-              this.furnaceNextBatchByRecipeId.set(recipe.id, 1);
-            } else {
-              const prev = this.furnaceNextBatchByRecipeId.get(recipe.id) ?? 1;
-              this.furnaceNextBatchByRecipeId.set(
-                recipe.id,
-                Math.min(prev + 1, cap),
-              );
-            }
-            this.refreshFurnaceSmeltMultLabels(inv);
-          }
-        }
       } else {
         this.flashHint(e.reason);
       }
@@ -343,17 +321,7 @@ export class CraftingPanel {
     }
     const maxB = this.deps.maxCraftableBatches(recipe, invNow);
     const shift = ev.shiftKey;
-    let batches: number;
-    if (recipe.category === "Furnace") {
-      if (shift) {
-        batches = maxB;
-      } else {
-        const staged = this.furnaceNextBatchByRecipeId.get(recipe.id) ?? 1;
-        batches = Math.max(1, Math.min(staged, Math.max(1, maxB)));
-      }
-    } else {
-      batches = shift ? maxB : 1;
-    }
+    const batches = shift ? maxB : 1;
     if (batches <= 0) {
       return;
     }
@@ -420,11 +388,25 @@ export class CraftingPanel {
         this.hintTimer = null;
       }
       this.hintEl.textContent = "";
-      this.furnaceNextBatchByRecipeId.clear();
     }
   }
 
-  private refreshFurnaceSmeltMultLabels(inv: PlayerInventory): void {
+  /** Remaining smelt batches in the nearest furnace queue for this recipe (0 if none / no UI model). */
+  private furnaceQueuedBatchesForRecipe(recipe: RecipeDefinition): number {
+    if (recipe.category !== "Furnace" || recipe.smeltingSourceId === undefined) {
+      return 0;
+    }
+    const m = this.deps.getFurnaceUiModel();
+    return m?.queuedBatchesByRecipeId[recipe.smeltingSourceId] ?? 0;
+  }
+
+  /** ×N on furnace rows = remaining queued smelts for that recipe (×1 when queue empty = one per click). */
+  private furnaceSmeltMultText(recipe: RecipeDefinition): string {
+    const q = this.furnaceQueuedBatchesForRecipe(recipe);
+    return q > 0 ? `×${String(q)}` : "×1";
+  }
+
+  private refreshFurnaceSmeltMultLabels(): void {
     if (!this.open || this.activeCategory !== "Furnace") {
       return;
     }
@@ -439,14 +421,7 @@ export class CraftingPanel {
       if (mult === null) {
         continue;
       }
-      const maxB = this.deps.maxCraftableBatches(recipe, inv);
-      let n = this.furnaceNextBatchByRecipeId.get(recipe.id) ?? 1;
-      if (maxB <= 0) {
-        n = 1;
-      } else {
-        n = Math.max(1, Math.min(n, maxB));
-      }
-      mult.textContent = `×${String(n)}`;
+      mult.textContent = this.furnaceSmeltMultText(recipe);
     }
   }
 
@@ -458,7 +433,6 @@ export class CraftingPanel {
     if (!this.open) {
       return;
     }
-    const inv = this.deps.getInventory();
     const k = this.stationProximityKey();
     if (this.lastStationProximityKey !== k) {
       this.lastStationProximityKey = k;
@@ -467,12 +441,13 @@ export class CraftingPanel {
       this.rebuildList();
     } else {
       this.updateAffordability();
+      this.updateFurnaceIngredientCounts();
       this.refreshTagCycleIcons();
       this.refreshTooltipIfOpen();
       this.refreshFurnaceChrome();
       this.updateFurnaceRowProgress();
       if (this.activeCategory === "Furnace") {
-        this.refreshFurnaceSmeltMultLabels(inv);
+        this.refreshFurnaceSmeltMultLabels();
       }
     }
   }
@@ -578,10 +553,14 @@ export class CraftingPanel {
     inv: PlayerInventory,
   ): void {
     const avail = this.deps.getRecipeIngredientAvailability(recipe, inv);
+    const q = this.furnaceQueuedBatchesForRecipe(recipe);
     const cells = row.querySelectorAll<HTMLElement>(".inv-craft-ing");
     cells.forEach((cell, idx) => {
       const s = avail[idx];
-      const unmet = s === undefined || s.have < s.need;
+      const unmet =
+        recipe.category === "Furnace" && q > 0
+          ? false
+          : s === undefined || s.have < s.need;
       cell.classList.toggle("inv-craft-ing--unmet", unmet);
     });
   }
@@ -593,14 +572,43 @@ export class CraftingPanel {
   ): void {
     const touches = this.deps.recipeTouchesInventory(recipe, inv);
     const full = this.deps.canCraftOneBatch(recipe, inv);
+    const q = this.furnaceQueuedBatchesForRecipe(recipe);
     row.classList.remove("inv-craft-row--dimmed", "inv-craft-row--partial");
     if (full) {
+      return;
+    }
+    if (recipe.category === "Furnace" && q > 0) {
       return;
     }
     if (touches) {
       row.classList.add("inv-craft-row--partial");
     } else {
       row.classList.add("inv-craft-row--dimmed");
+    }
+  }
+
+  /** Live-update ore/input counts while smelting (queue ticks down: 10 → 9 → …). */
+  private updateFurnaceIngredientCounts(): void {
+    if (!this.open || this.activeCategory !== "Furnace") {
+      return;
+    }
+    const rows = this.listEl.children;
+    for (let i = 0; i < rows.length; i++) {
+      const recipe = this.renderedRecipes[i];
+      if (recipe === undefined || recipe.category !== "Furnace") {
+        continue;
+      }
+      const q = this.furnaceQueuedBatchesForRecipe(recipe);
+      const row = rows[i] as HTMLElement;
+      const countEls = row.querySelectorAll<HTMLElement>(".inv-craft-ing-count");
+      for (let j = 0; j < recipe.ingredients.length; j++) {
+        const ing = recipe.ingredients[j]!;
+        const el = countEls[j];
+        if (el === undefined) {
+          continue;
+        }
+        el.textContent = q > 0 ? String(q) : String(ing.count);
+      }
     }
   }
 
@@ -718,14 +726,21 @@ export class CraftingPanel {
     heading.className = "inv-craft-tooltip-heading";
     heading.textContent = "Ingredients";
     this.tooltipEl.appendChild(heading);
+    const qTip = this.furnaceQueuedBatchesForRecipe(recipe);
     for (let i = 0; i < recipe.ingredients.length; i++) {
       const ing = recipe.ingredients[i]!;
       const line = document.createElement("div");
       line.className = "inv-craft-tooltip-line";
       const { need, have } = slots[i] ?? { need: 0, have: 0 };
       const label = this.formatIngredientLabel(ing);
-      line.textContent = `${label} ×${String(need)} — have ${String(have)}`;
-      if (have < need) {
+      const queuedNote =
+        recipe.category === "Furnace" && qTip > 0
+          ? ` — ${String(qTip)} batch(es) in furnace`
+          : "";
+      line.textContent = `${label} ×${String(need)} — have ${String(have)}${queuedNote}`;
+      const missing =
+        recipe.category === "Furnace" && qTip > 0 ? false : have < need;
+      if (missing) {
         line.classList.add("inv-craft-tooltip-line--missing");
       }
       this.tooltipEl.appendChild(line);
@@ -887,6 +902,8 @@ export class CraftingPanel {
       const ingRow = document.createElement("div");
       ingRow.className = "inv-craft-ingredients";
       const ingAvail = this.deps.getRecipeIngredientAvailability(recipe, inv);
+      const qRow =
+        cat === "Furnace" ? this.furnaceQueuedBatchesForRecipe(recipe) : 0;
       for (let ii = 0; ii < recipe.ingredients.length; ii++) {
         const ing = recipe.ingredients[ii]!;
         let ingDef =
@@ -902,7 +919,11 @@ export class CraftingPanel {
         const cell = document.createElement("div");
         cell.className = "inv-craft-ing";
         const slotAvail = ingAvail[ii];
-        if (slotAvail === undefined || slotAvail.have < slotAvail.need) {
+        const ingUnmet =
+          qRow > 0
+            ? false
+            : slotAvail === undefined || slotAvail.have < slotAvail.need;
+        if (ingUnmet) {
           cell.classList.add("inv-craft-ing--unmet");
         }
         const ingSlot = document.createElement("div");
@@ -919,7 +940,7 @@ export class CraftingPanel {
         ingSlot.appendChild(ic);
         const cnt = document.createElement("span");
         cnt.className = "inv-craft-ing-count";
-        cnt.textContent = String(ing.count);
+        cnt.textContent = qRow > 0 ? String(qRow) : String(ing.count);
         cell.appendChild(ingSlot);
         cell.appendChild(cnt);
         ingRow.appendChild(cell);
@@ -928,14 +949,7 @@ export class CraftingPanel {
       const mult = document.createElement("div");
       mult.className = "inv-craft-mult";
       if (cat === "Furnace") {
-        const maxB = this.deps.maxCraftableBatches(recipe, inv);
-        let n = this.furnaceNextBatchByRecipeId.get(recipe.id) ?? 1;
-        if (maxB <= 0) {
-          n = 1;
-        } else {
-          n = Math.max(1, Math.min(n, maxB));
-        }
-        mult.textContent = `×${String(n)}`;
+        mult.textContent = this.furnaceSmeltMultText(recipe);
       } else {
         mult.textContent = `× ${String(recipe.output.count)}`;
       }

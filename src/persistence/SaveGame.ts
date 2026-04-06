@@ -23,6 +23,13 @@ export class SaveGame {
   private readonly getModerationForSave:
     | (() => WorldModerationPersisted | undefined)
     | null;
+  /**
+   * When set (host), merges multiplayer guest logout positions into `multiplayerLastPositions`
+   * then clears the pending map (see Game).
+   */
+  private readonly mergeMultiplayerLastPositions:
+    | ((into: Record<string, { x: number; y: number }>) => void)
+    | null;
   private autoSaveId: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -35,6 +42,9 @@ export class SaveGame {
     getWorldTimeMs: () => number,
     capturePreview?: () => string | null,
     getModerationForSave?: () => WorldModerationPersisted | undefined,
+    mergeMultiplayerLastPositions?: (
+      into: Record<string, { x: number; y: number }>,
+    ) => void,
   ) {
     this.store = store;
     this.world = world;
@@ -45,6 +55,7 @@ export class SaveGame {
     this.getWorldTimeMs = getWorldTimeMs;
     this.capturePreview = capturePreview ?? null;
     this.getModerationForSave = getModerationForSave ?? null;
+    this.mergeMultiplayerLastPositions = mergeMultiplayerLastPositions ?? null;
   }
 
   async init(): Promise<void> {
@@ -68,6 +79,10 @@ export class SaveGame {
       previewImageDataUrl = shot;
     }
     const moderationPatch = this.getModerationForSave?.();
+    const mpMerged: Record<string, { x: number; y: number }> = {
+      ...(existing?.multiplayerLastPositions ?? {}),
+    };
+    this.mergeMultiplayerLastPositions?.(mpMerged);
     const meta: WorldMetadata = {
       uuid: this.worldUuid,
       name: existing?.name ?? this.worldName,
@@ -89,6 +104,9 @@ export class SaveGame {
       moderation: moderationPatch ?? existing?.moderation,
       playerInventory: this.player.inventory.serialize(),
       blockIdPalette: this.world.getRegistry().buildIdentifierPalette(),
+      ...(Object.keys(mpMerged).length > 0
+        ? { multiplayerLastPositions: mpMerged }
+        : {}),
     };
     await this.store.saveWorld(meta);
     this.bus.emit({ type: "game:saved" } satisfies GameEvent);

@@ -20,6 +20,7 @@ import {
   PLAYER_WATER_SWIM_HOLD_UP_ACCEL,
   PLAYER_WIDTH,
   PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT,
+  PLAYER_HAND_SWING_VISUAL_DURATION_SEC,
   REACH_BLOCKS,
   STEP_INTERVAL,
   WORLD_Y_MAX,
@@ -108,6 +109,10 @@ export type PlayerState = {
   coyoteTimeRemaining: number;
   /** Jump leniency: queue jump input for a short time before landing. */
   jumpBufferRemaining: number;
+  /**
+   * After place / item use: seconds left to show the same mining-style body + held-item swing as breaking.
+   */
+  handSwingRemainSec: number;
 };
 
 function feetToScreenAABB(pos: { x: number; y: number }): AABB {
@@ -288,6 +293,7 @@ export class Player {
     stepAccum: 0,
     coyoteTimeRemaining: 0,
     jumpBufferRemaining: 0,
+    handSwingRemainSec: 0,
   };
 
   public readonly inventory: PlayerInventory;
@@ -336,6 +342,7 @@ export class Player {
     this.state.coyoteTimeRemaining = 0;
     this.state.jumpBufferRemaining = 0;
     this.state.health = PLAYER_MAX_HEALTH;
+    this.state.handSwingRemainSec = 0;
     this.fallDistanceBlocks = 0;
   }
 
@@ -355,6 +362,11 @@ export class Player {
     }
     const h = Math.floor(amount);
     this.state.health = Math.min(PLAYER_MAX_HEALTH, this.state.health + h);
+  }
+
+  /** Same mining-style swing as breaking blocks (body + held item), for place / use feedback. */
+  private startHandSwingVisual(): void {
+    this.state.handSwingRemainSec = PLAYER_HAND_SWING_VISUAL_DURATION_SEC;
   }
 
   /** Restore position, hotbar, and inventory from persistence. */
@@ -582,6 +594,7 @@ export class Player {
       state.breakTarget = null;
       state.breakAccum = 0;
       state.breakProgress = 0;
+      state.handSwingRemainSec = 0;
     }
 
     const { wx, wy } = mouseToBlock(
@@ -740,6 +753,7 @@ export class Player {
             if (wb !== undefined && world.setBlock(wx, wy, this.airId)) {
               this.inventory.setStack(hotbarSlot, { itemId: wb.id, count: 1 });
               placeHandled = true;
+              this.startHandSwingVisual();
               this.audio.playSfx(getPlaceSound("generic"), {
                 pitchVariance: 20,
               });
@@ -767,6 +781,7 @@ export class Player {
             if (world.setBlock(wx, wy + 1, wheat0)) {
               if (this.inventory.consumeOneFromSlot(hotbarSlot)) {
                 placeHandled = true;
+                this.startHandSwingVisual();
                 this.audio.playSfx(getPlaceSound("grass"), {
                   pitchVariance: 25,
                 });
@@ -794,6 +809,7 @@ export class Player {
                 }
                 if (world.setBlock(wx, wy, farmlandDryId)) {
                   this.inventory.applyToolUseFromMining(hotbarSlot);
+                  this.startHandSwingVisual();
                   this.audio.playSfx(getPlaceSound("dirt"), {
                     pitchVariance: 30,
                   });
@@ -822,6 +838,7 @@ export class Player {
                 if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
                   world.setBackgroundBlock(wx, wy, 0);
                 } else {
+                  this.startHandSwingVisual();
                   this.audio.playSfx(getPlaceSound(placedDef.material), {
                     pitchVariance: 30,
                   });
@@ -870,7 +887,8 @@ export class Player {
                   overlaps(playerAabb, aabbUpper);
                 if (!overlapsAnyPlayer) {
                   for (const remote of world.getRemotePlayers().values()) {
-                    const remoteAabb = feetToScreenAABB({ x: remote.x, y: remote.y });
+                    const feet = remote.getAuthorityFeet();
+                    const remoteAabb = feetToScreenAABB({ x: feet.x, y: feet.y });
                     if (
                       overlaps(remoteAabb, aabbLower) ||
                       overlaps(remoteAabb, aabbUpper)
@@ -896,6 +914,7 @@ export class Player {
                     world.setBlock(wx, wy + 1, 0);
                   } else {
                     const placed = this.registry.getById(placesBlockId);
+                    this.startHandSwingVisual();
                     this.audio.playSfx(getPlaceSound(placed.material), {
                       pitchVariance: 30,
                     });
@@ -915,7 +934,8 @@ export class Player {
                 let overlapsAnyPlayer = overlaps(playerAabb, blockAabb);
                 if (!overlapsAnyPlayer) {
                   for (const remote of world.getRemotePlayers().values()) {
-                    const remoteAabb = feetToScreenAABB({ x: remote.x, y: remote.y });
+                    const feet = remote.getAuthorityFeet();
+                    const remoteAabb = feetToScreenAABB({ x: feet.x, y: feet.y });
                     if (overlaps(remoteAabb, blockAabb)) {
                       overlapsAnyPlayer = true;
                       break;
@@ -949,6 +969,7 @@ export class Player {
                         });
                       }
                     }
+                    this.startHandSwingVisual();
                     this.audio.playSfx(
                       getPlaceSound(placedDefForSfx.material),
                       {
@@ -999,6 +1020,7 @@ export class Player {
           this.inventory.consumeOneFromSlot(hotbarSlot)
         ) {
           this.heal(eatHp);
+          this.startHandSwingVisual();
           this.audio.playSfx(getPlaceSound("generic"), {
             pitchVariance: 18,
           });
@@ -1026,6 +1048,7 @@ export class Player {
         this.inventory.consumeOneFromSlot(hotbarSlot)
       ) {
         this.heal(eatHpFar);
+        this.startHandSwingVisual();
         this.audio.playSfx(getPlaceSound("generic"), {
           pitchVariance: 18,
         });
@@ -1066,6 +1089,8 @@ export class Player {
     } else {
       state.stepAccum = 0;
     }
+
+    state.handSwingRemainSec = Math.max(0, state.handSwingRemainSec - dt);
 
     const blockX = Math.floor(state.position.x / BLOCK_SIZE);
     const blockY = Math.floor(state.position.y / BLOCK_SIZE);

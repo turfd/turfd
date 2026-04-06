@@ -73,6 +73,8 @@ export type WorldMetadata = {
    * Used to remap chunk cells when `stratum:numeric_id` assignments change.
    */
   blockIdPalette?: readonly string[];
+  /** Host-only: last feet position when each multiplayer guest left (`id:…` / `name:…` keys). */
+  multiplayerLastPositions?: Record<string, { x: number; y: number }>;
 };
 
 export type ChunkRecord = {

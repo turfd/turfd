@@ -373,6 +373,11 @@ export class AtlasLoader {
     return t;
   }
 
+  /** Like {@link getTexture} but returns null when the frame is not packed in this atlas. */
+  getTextureOrNull(frameName: string): Texture | null {
+    return resolveTextureMapKey(this.textureMap, frameName) ?? null;
+  }
+
   /**
    * Returns `[base, alt_1, alt_2, …]` for textures with discovered alts,
    * or a single-element array for textures without alts.

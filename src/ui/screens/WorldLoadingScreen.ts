@@ -64,7 +64,7 @@ function injectLoadingStyles(base: string): void {
       --mm-ink: #f2f2f7;
       --mm-ink-mid: #aeaeb2;
       --mm-ink-soft: #8e8e93;
-      --mm-surface: rgba(44, 44, 46, 0.82);
+      --mm-surface: rgba(44, 44, 46, 0.78);
       --mm-surface-deep: rgba(36, 36, 38, 0.9);
       --mm-border: rgba(255, 255, 255, 0.1);
       --mm-border-strong: rgba(255, 255, 255, 0.16);
@@ -72,6 +72,7 @@ function injectLoadingStyles(base: string): void {
       --mm-radius-sm: 10px;
       --mm-radius-md: 14px;
       --mm-radius-lg: 18px;
+      --mm-shell-max: min(900px, 96vw);
       position: fixed;
       inset: 0;
       z-index: 1100;
@@ -91,10 +92,10 @@ function injectLoadingStyles(base: string): void {
       /* Let the menu-style world backdrop read through; darken edges for contrast */
       background:
         radial-gradient(
-          ellipse 100% 80% at 50% 38%,
-          rgba(14, 15, 18, 0.14) 0%,
-          rgba(10, 11, 13, 0.42) 55%,
-          rgba(6, 7, 9, 0.78) 100%
+          ellipse 120% 85% at 50% 36%,
+          rgba(18, 20, 26, 0.12) 0%,
+          rgba(10, 11, 14, 0.48) 52%,
+          rgba(5, 6, 9, 0.82) 100%
         );
     }
 
@@ -121,7 +122,9 @@ function injectLoadingStyles(base: string): void {
 
     .stratum-loading-shell {
       width: 100%;
-      max-width: min(440px, 100%);
+      max-width: var(--mm-shell-max, min(900px, 96vw));
+      container-type: inline-size;
+      container-name: loading-shell;
     }
 
     .stratum-loading-card {
@@ -129,12 +132,20 @@ function injectLoadingStyles(base: string): void {
       border-radius: var(--mm-radius-lg, 18px);
       corner-shape: squircle;
       border: 1px solid var(--mm-border, rgba(255, 255, 255, 0.1));
-      background: var(--mm-surface, rgba(44, 44, 46, 0.82));
-      padding: 1.25rem 1.35rem 1.2rem;
+      background: linear-gradient(
+        165deg,
+        rgba(52, 52, 56, 0.88) 0%,
+        var(--mm-surface, rgba(44, 44, 46, 0.78)) 45%,
+        rgba(38, 38, 42, 0.86) 100%
+      );
+      padding: 1.35rem 1.55rem 1.35rem;
       box-sizing: border-box;
+      backdrop-filter: blur(18px) saturate(1.15);
+      -webkit-backdrop-filter: blur(18px) saturate(1.15);
       box-shadow:
-        0 4px 24px rgba(0, 0, 0, 0.22),
-        0 20px 56px rgba(0, 0, 0, 0.28);
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 4px 28px rgba(0, 0, 0, 0.26),
+        0 24px 64px rgba(0, 0, 0, 0.32);
       transform: translateY(12px);
       opacity: 0;
       transition:
@@ -158,8 +169,10 @@ function injectLoadingStyles(base: string): void {
       display: flex;
       flex-direction: row;
       align-items: center;
-      gap: 1rem;
-      margin-bottom: 1.1rem;
+      gap: 1.05rem;
+      margin-bottom: 1.15rem;
+      padding-bottom: 1.05rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
     }
 
     .stratum-loading-logo {
@@ -217,11 +230,20 @@ function injectLoadingStyles(base: string): void {
     }
 
     .stratum-loading-progress {
-      margin-top: 1.15rem;
+      margin-top: 1.2rem;
+    }
+
+    .stratum-loading-progress-row {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 0.9rem;
+      min-width: 0;
     }
 
     .stratum-loading-track {
-      width: 100%;
+      flex: 1;
+      min-width: 0;
       height: 10px;
       border-radius: var(--mm-radius-sm, 10px);
       border: 1px solid var(--mm-border-strong, rgba(255, 255, 255, 0.16));
@@ -249,12 +271,16 @@ function injectLoadingStyles(base: string): void {
     }
 
     .stratum-loading-percent {
-      margin-top: 0.4rem;
+      margin: 0;
+      min-width: 3.25ch;
       min-height: 1.35em;
       text-align: right;
       font-family: 'M5x7', monospace;
       font-size: calc(15px + var(--mm-m5-nudge, 4px));
+      font-variant-numeric: tabular-nums;
       color: var(--mm-ink-soft, #8e8e93);
+      flex-shrink: 0;
+      line-height: 1.2;
     }
 
     .stratum-loading-stage--error {
@@ -262,28 +288,62 @@ function injectLoadingStyles(base: string): void {
     }
 
     .stratum-loading-tip-panel {
-      margin-top: 1.15rem;
-      padding-top: 1rem;
-      border-top: 1px solid var(--mm-border, rgba(255, 255, 255, 0.1));
+      margin-top: 1.2rem;
+      padding: 0.85rem 1rem;
+      border-radius: var(--mm-radius-md, 14px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(0, 0, 0, 0.2);
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 0.85rem;
+      min-width: 0;
     }
 
     .stratum-loading-tip-label {
-      margin: 0 0 0.35rem;
+      margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: 12px;
       text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: var(--mm-ink-soft, #8e8e93);
-      text-align: left;
+      letter-spacing: 0.14em;
+      color: rgba(180, 200, 230, 0.95);
+      text-align: center;
+      flex-shrink: 0;
+      padding: 0.28rem 0.55rem;
+      border-radius: var(--mm-radius-sm, 10px);
+      background: rgba(100, 150, 220, 0.14);
+      border: 1px solid rgba(120, 170, 235, 0.22);
+      line-height: 1.2;
     }
 
     .stratum-loading-tip {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: calc(16px + var(--mm-m5-nudge, 4px));
-      line-height: 1.5;
+      font-size: calc(15px + var(--mm-m5-nudge, 4px));
+      line-height: 1.45;
+      letter-spacing: 0.02em;
       color: var(--mm-ink-mid, #aeaeb2);
       text-align: left;
+      flex: 1;
+      min-width: 0;
+    }
+
+    @container loading-shell (min-width: 780px) {
+      .stratum-loading-tip {
+        white-space: nowrap;
+      }
+    }
+
+    @container loading-shell (max-width: 779px) {
+      .stratum-loading-tip-panel {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.55rem;
+      }
+
+      .stratum-loading-tip-label {
+        align-self: flex-start;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -371,6 +431,8 @@ export class WorldLoadingScreen {
 
     const progressWrap = document.createElement("div");
     progressWrap.className = "stratum-loading-progress";
+    const progressRow = document.createElement("div");
+    progressRow.className = "stratum-loading-progress-row";
     const track = document.createElement("div");
     track.className = "stratum-loading-track";
     this.barFillEl = document.createElement("div");
@@ -379,8 +441,9 @@ export class WorldLoadingScreen {
     this.percentEl = document.createElement("div");
     this.percentEl.className = "stratum-loading-percent";
     this.percentEl.textContent = "0%";
-    progressWrap.appendChild(track);
-    progressWrap.appendChild(this.percentEl);
+    progressRow.appendChild(track);
+    progressRow.appendChild(this.percentEl);
+    progressWrap.appendChild(progressRow);
 
     const tipPanel = document.createElement("div");
     tipPanel.className = "stratum-loading-tip-panel";

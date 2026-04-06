@@ -65,6 +65,7 @@ import type {
   RoomPublishMeta,
   SupabaseSignalAdapter,
 } from "../network/SupabaseSignalAdapter";
+import { multiplayerPersistKey } from "../network/multiplayerPersist";
 import { PlayerStateBroadcaster } from "../network/PlayerStateBroadcaster";
 import type { RoomCode } from "../network/roomCode";
 import { normalizeRoomCode, peerIdToRoomCode, roomCodeToPeerId } from "../network/roomCode";
@@ -120,7 +121,11 @@ import {
 import { createEmptyFurnaceTileState } from "../world/furnace/FurnaceTileState";
 import { SmeltingRegistry } from "../world/SmeltingRegistry";
 import { registerSmeltingRecipesInRegistry } from "../world/smeltingAsCraftingRecipes";
-import { MsgType } from "../network/protocol/messages";
+import {
+  MsgType,
+  type PlayerStateMsg,
+  type PlayerStateRelayMsg,
+} from "../network/protocol/messages";
 import type { HeldTorchLighting } from "../renderer/lighting/LightingComposer";
 import type { ItemId } from "./itemDefinition";
 import type { RecipeDefinition } from "./recipe";
@@ -186,6 +191,10 @@ export type GameLoadProgress = {
   total?: number;
 };
 
+type PendingRemotePlayerPacket =
+  | { kind: "direct"; senderPeerId: string; msg: PlayerStateMsg }
+  | { kind: "relay"; msg: PlayerStateRelayMsg };
+
 export class Game {
   readonly bus: EventBus;
   private readonly loop: GameLoop;
@@ -230,6 +239,15 @@ export class Game {
     chests?: ChestPersistedChunk[];
     metadata?: Uint8Array;
   }> = [];
+  /** Joining client: pose packets received before `World` exists (see `_flushPendingRemotePlayerPackets`). */
+  private readonly _pendingRemotePlayerPackets: PendingRemotePlayerPacket[] = [];
+  /** Client: host spawn assignment before local player is fully spawned. */
+  private _pendingAssignedSpawn: { x: number; y: number } | null = null;
+  /** Host: merge into world metadata on next save (logout positions). */
+  private readonly _multiplayerLogoutSpawns = new Map<
+    string,
+    { x: number; y: number }
+  >();
 
   private pipeline: RenderPipeline | null = null;
   private blockAtlasLoader: AtlasLoader | null = null;
@@ -332,6 +350,9 @@ export class Game {
     vx: 0,
     vy: 0,
     facingRight: false,
+    hotbarSlot: 0,
+    heldItemId: 0,
+    miningVisual: false,
   };
 
   private readonly _recipeRegistry = new RecipeRegistry();
@@ -372,6 +393,10 @@ export class Game {
       s.vx = local.velocity.x;
       s.vy = local.velocity.y;
       s.facingRight = local.facingRight;
+      const pose = em.getLocalPlayerNetworkPoseExtras();
+      s.hotbarSlot = pose.hotbarSlot;
+      s.heldItemId = pose.heldItemId;
+      s.miningVisual = pose.miningVisual;
       return s;
     });
     this.loop = new GameLoop({
@@ -657,6 +682,7 @@ export class Game {
       world.recomputeChunkLight(cx, cy);
     }
     this._flushPendingAuthoritativeChunks();
+    this._flushPendingRemotePlayerPackets();
 
     this._blockInteractions = new BlockInteractions(world, registry, this.bus);
     this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
@@ -707,6 +733,12 @@ export class Game {
         this._shouldPersistModeration()
           ? this._moderation.toPersisted()
           : undefined,
+      (into) => {
+        for (const [k, v] of this._multiplayerLogoutSpawns) {
+          into[k] = v;
+        }
+        this._multiplayerLogoutSpawns.clear();
+      },
     );
     progressCallback?.({
       stage: "Finalizing",
@@ -972,6 +1004,12 @@ export class Game {
       player.spawnAt(0, ((surfaceY ?? 1) + 1) * BLOCK_SIZE);
     }
 
+    if (this._pendingAssignedSpawn !== null) {
+      const ps = this._pendingAssignedSpawn;
+      this._pendingAssignedSpawn = null;
+      this._applyAssignedSpawn(ps.x, ps.y);
+    }
+
     const spawnBx = Math.floor(player.state.position.x / BLOCK_SIZE);
     const spawnBy = Math.floor(player.state.position.y / BLOCK_SIZE);
     world.resetStreamCentre(spawnBx, spawnBy);
@@ -1066,6 +1104,11 @@ export class Game {
       return;
     }
     this.started = true;
+    if (this._pendingAssignedSpawn !== null) {
+      const ps = this._pendingAssignedSpawn;
+      this._pendingAssignedSpawn = null;
+      this._applyAssignedSpawn(ps.x, ps.y);
+    }
     this.bus.emit({ type: "game:started" } satisfies GameEvent);
     window.addEventListener("resize", this.scheduleWindowResizedEvent);
     window.addEventListener("pagehide", this._pageHideClearListedRoom);
@@ -1229,6 +1272,13 @@ export class Game {
 
   private _wireCoreNetworkEvents(): void {
     this.networkUnsubs.push(
+      this.bus.on("net:handshake-success", () => {
+        // Otherwise `_hasLast` can match the current pose (e.g. after offline play) and no
+        // PLAYER_STATE is sent until the player moves — remotes never get an initial pose.
+        this._playerStateBroadcaster.invalidateSnapshot();
+      }),
+    );
+    this.networkUnsubs.push(
       this.bus.on("net:message", (e) => {
         const msg = e.message;
         const stNet = this.adapter.state;
@@ -1349,6 +1399,18 @@ export class Game {
           this._worldTime.sync(msg.worldTimeMs);
           return;
         }
+        if (msg.type === MsgType.ASSIGNED_SPAWN) {
+          if (!this.started) {
+            this._pendingAssignedSpawn = { x: msg.x, y: msg.y };
+            return;
+          }
+          if (this.entityManager === null) {
+            this._pendingAssignedSpawn = { x: msg.x, y: msg.y };
+            return;
+          }
+          this._applyAssignedSpawn(msg.x, msg.y);
+          return;
+        }
         if (msg.type === MsgType.BLOCK_UPDATE && this.world !== null) {
           if (msg.layer === 1) {
             this.world.setBackgroundBlock(msg.x, msg.y, msg.blockId);
@@ -1395,8 +1457,20 @@ export class Game {
           }
           return;
         }
-        if (msg.type === MsgType.PLAYER_STATE_RELAY && this.world !== null) {
-          if (stNet.status === "connected" && stNet.role === "client") {
+        if (msg.type === MsgType.PLAYER_STATE_RELAY) {
+          if (
+            stNet.status === "connected" &&
+            stNet.role === "client" &&
+            this.world === null
+          ) {
+            this._pendingRemotePlayerPackets.push({ kind: "relay", msg });
+            return;
+          }
+          if (
+            this.world !== null &&
+            stNet.status === "connected" &&
+            stNet.role === "client"
+          ) {
             this.world.updateRemotePlayer(
               msg.subjectPeerId,
               msg.x,
@@ -1404,11 +1478,22 @@ export class Game {
               msg.vx,
               msg.vy,
               msg.facingRight,
+              msg.hotbarSlot,
+              msg.heldItemId,
+              msg.miningVisual,
             );
           }
           return;
         }
-        if (msg.type === MsgType.PLAYER_STATE && this.world !== null) {
+        if (msg.type === MsgType.PLAYER_STATE) {
+          if (this.world === null) {
+            this._pendingRemotePlayerPackets.push({
+              kind: "direct",
+              senderPeerId: e.peerId,
+              msg,
+            });
+            return;
+          }
           this.world.updateRemotePlayer(
             e.peerId,
             msg.x,
@@ -1416,6 +1501,9 @@ export class Game {
             msg.vx,
             msg.vy,
             msg.facingRight,
+            msg.hotbarSlot,
+            msg.heldItemId,
+            msg.miningVisual,
           );
           if (stNet.status === "connected" && stNet.role === "host") {
             const localId = this.adapter.getLocalPeerId();
@@ -1428,6 +1516,9 @@ export class Game {
                 vx: msg.vx,
                 vy: msg.vy,
                 facingRight: msg.facingRight,
+                hotbarSlot: msg.hotbarSlot,
+                heldItemId: msg.heldItemId,
+                miningVisual: msg.miningVisual,
               });
             }
           }
@@ -1490,6 +1581,29 @@ export class Game {
             text: line,
           });
         }
+        const wLeave = this.world;
+        const sg = this.saveGame;
+        if (
+          wLeave !== null &&
+          sg !== null &&
+          st.status === "connected" &&
+          st.role === "host"
+        ) {
+          const rp = wLeave.getRemotePlayers().get(e.peerId);
+          const rosterEntry = this._sessionRoster.get(e.peerId);
+          if (rp !== undefined && rosterEntry !== undefined) {
+            const feet = rp.getAuthorityFeet();
+            const key = multiplayerPersistKey(
+              rosterEntry.accountId,
+              rosterEntry.displayName,
+            );
+            this._multiplayerLogoutSpawns.set(key, {
+              x: feet.x,
+              y: feet.y,
+            });
+            void sg.save();
+          }
+        }
         this.world?.removeRemotePlayer(e.peerId);
         this._sessionRoster.delete(e.peerId);
         this._mutedPeerIds.delete(e.peerId);
@@ -1511,8 +1625,9 @@ export class Game {
             worldTimeMs: this._worldTime.ms,
           });
           void (async () => {
+            let meta: WorldMetadata | undefined;
             try {
-              const meta = await this.store.loadWorld(this.worldUuid);
+              meta = await this.store.loadWorld(this.worldUuid);
               const r = resolveWorldWorkshopStacks(meta, this._modRepository);
               this.adapter.send(newPeer, {
                 type: MsgType.PACK_STACK,
@@ -1522,12 +1637,31 @@ export class Game {
               });
             } catch (err) {
               console.error(err);
+              meta = undefined;
               this.adapter.send(newPeer, {
                 type: MsgType.PACK_STACK,
                 behaviorRefs: [],
                 resourceRefs: [],
                 requirePacksBeforeJoin: false,
               });
+            }
+            const rosterJoin = this._sessionRoster.get(newPeer);
+            if (
+              rosterJoin !== undefined &&
+              meta?.multiplayerLastPositions !== undefined
+            ) {
+              const key = multiplayerPersistKey(
+                rosterJoin.accountId,
+                rosterJoin.displayName,
+              );
+              const sp = meta.multiplayerLastPositions[key];
+              if (sp !== undefined) {
+                this.adapter.send(newPeer, {
+                  type: MsgType.ASSIGNED_SPAWN,
+                  x: sp.x,
+                  y: sp.y,
+                });
+              }
             }
           })();
           const world = this.world;
@@ -1554,6 +1688,7 @@ export class Game {
           const em = this.entityManager;
           if (world !== null && em !== null && localId !== null) {
             const st = em.getPlayer().state;
+            const pose = em.getLocalPlayerNetworkPoseExtras();
             this.adapter.send(newPeer, {
               type: MsgType.PLAYER_STATE,
               playerId: 0,
@@ -1562,6 +1697,9 @@ export class Game {
               vx: st.velocity.x,
               vy: st.velocity.y,
               facingRight: st.facingRight,
+              hotbarSlot: pose.hotbarSlot,
+              heldItemId: pose.heldItemId,
+              miningVisual: pose.miningVisual,
             });
             for (const [pid, rp] of world.getRemotePlayers()) {
               if (pid === newPeer) {
@@ -1593,6 +1731,75 @@ export class Game {
     }
     w.applyAuthoritativeChunkBatch(this._pendingAuthoritativeChunks);
     this._pendingAuthoritativeChunks.length = 0;
+  }
+
+  private _flushPendingRemotePlayerPackets(): void {
+    const w = this.world;
+    if (w === null || this._pendingRemotePlayerPackets.length === 0) {
+      return;
+    }
+    const st = this.adapter.state;
+    for (const p of this._pendingRemotePlayerPackets) {
+      if (p.kind === "relay") {
+        const m = p.msg;
+        w.updateRemotePlayer(
+          m.subjectPeerId,
+          m.x,
+          m.y,
+          m.vx,
+          m.vy,
+          m.facingRight,
+          m.hotbarSlot,
+          m.heldItemId,
+          m.miningVisual,
+        );
+        continue;
+      }
+      const m = p.msg;
+      w.updateRemotePlayer(
+        p.senderPeerId,
+        m.x,
+        m.y,
+        m.vx,
+        m.vy,
+        m.facingRight,
+        m.hotbarSlot,
+        m.heldItemId,
+        m.miningVisual,
+      );
+      if (st.status === "connected" && st.role === "host") {
+        const localId = this.adapter.getLocalPeerId();
+        if (localId !== null && p.senderPeerId !== localId) {
+          this.adapter.broadcastExcept(p.senderPeerId as PeerId, {
+            type: MsgType.PLAYER_STATE_RELAY,
+            subjectPeerId: p.senderPeerId,
+            x: m.x,
+            y: m.y,
+            vx: m.vx,
+            vy: m.vy,
+            facingRight: m.facingRight,
+            hotbarSlot: m.hotbarSlot,
+            heldItemId: m.heldItemId,
+            miningVisual: m.miningVisual,
+          });
+        }
+      }
+    }
+    this._pendingRemotePlayerPackets.length = 0;
+  }
+
+  private _applyAssignedSpawn(x: number, y: number): void {
+    const em = this.entityManager;
+    if (em === null) {
+      return;
+    }
+    const pl = em.getPlayer().state;
+    pl.position.x = x;
+    pl.position.y = y;
+    pl.prevPosition.x = x;
+    pl.prevPosition.y = y;
+    pl.velocity.x = 0;
+    pl.velocity.y = 0;
   }
 
   private _wirePauseNetworkHandlers(): void {
@@ -2148,6 +2355,11 @@ export class Game {
       head !== undefined
         ? this._smeltingRegistry.findRecipeByJsonId(head.smeltingRecipeId)?.cookTimeSec ?? 0
         : 0;
+    const queuedBatchesByRecipeId: Record<string, number> = {};
+    for (const e of tile.queue) {
+      queuedBatchesByRecipeId[e.smeltingRecipeId] =
+        (queuedBatchesByRecipeId[e.smeltingRecipeId] ?? 0) + e.batches;
+    }
     return {
       outputSlots: tile.outputSlots,
       fuel: tile.fuel,
@@ -2155,6 +2367,7 @@ export class Game {
       cookProgressSec: tile.cookProgressSec,
       activeSmeltingRecipeId: head?.smeltingRecipeId ?? null,
       cookTimeSecForActive,
+      queuedBatchesByRecipeId,
     };
   }
 
@@ -3133,7 +3346,7 @@ export class Game {
       this.input.updateMouseWorldPos(this.pipeline.getCamera());
     }
 
-    this.entityManager?.syncPlayerGraphic(alpha, dtSec);
+    this.entityManager?.syncPlayerGraphic(alpha, dtSec, now);
 
     if (
       this._nametagOverlay !== null &&
@@ -3147,6 +3360,7 @@ export class Game {
         this.pipeline.getCanvas(),
         this.pipeline.getCamera(),
         alpha,
+        now,
         {
           prevX: s.prevPosition.x,
           prevY: s.prevPosition.y,

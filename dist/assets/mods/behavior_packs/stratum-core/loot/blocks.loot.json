@@ -174,17 +174,17 @@
     },
     "stratum:short_grass": {
       "entries": [
-        { "itemKey": "stratum:short_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:wheat_seeds", "countMin": 1, "countMax": 1, "chance": 0.15 }
       ]
     },
     "stratum:tall_grass_bottom": {
       "entries": [
-        { "itemKey": "stratum:tall_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:wheat_seeds", "countMin": 1, "countMax": 1, "chance": 0.15 }
       ]
     },
     "stratum:tall_grass_top": {
       "entries": [
-        { "itemKey": "stratum:tall_grass", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:wheat_seeds", "countMin": 1, "countMax": 1, "chance": 0.15 }
       ]
     },
     "stratum:bedrock": {

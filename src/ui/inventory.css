@@ -454,6 +454,11 @@
   overflow: hidden;
 }
 
+/* Recipe sidebar closed (e.g. chest open): drop mount from layout so inventory+chest center. */
+#inventory-ui-root .inv-crafting-mount:not(:has(.inv-crafting-sidebar--open)) {
+  display: none;
+}
+
 #inventory-ui-root .inv-overlay.inv-overlay--open {
   opacity: 1;
   visibility: visible;
@@ -480,7 +485,7 @@
 }
 
 #inventory-ui-root .inv-overlay.inv-overlay--open .inv-panel {
-  transform: translateY(0) translateX(-12px);
+  transform: translateY(0);
   opacity: 1;
 }
 

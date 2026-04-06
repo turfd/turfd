@@ -286,6 +286,9 @@ export class PeerJSAdapter implements INetworkAdapter {
         msg.vx,
         msg.vy,
         msg.facingRight,
+        msg.hotbarSlot,
+        msg.heldItemId,
+        msg.miningVisual,
       );
       return this._playerStateScratch;
     }

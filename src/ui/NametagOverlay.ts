@@ -3,6 +3,7 @@
  */
 import { PLAYER_HEIGHT } from "../core/constants";
 import type { Camera } from "../renderer/Camera";
+import type { RemotePlayer } from "../world/entities/RemotePlayer";
 
 const BASE_URL = import.meta.env.BASE_URL;
 
@@ -65,12 +66,14 @@ export class NametagOverlay {
 
   /**
    * @param alpha Interpolation factor for local player.
+   * @param nowMs Wall time for remote {@link RemotePlayer.getDisplayPose}.
    */
   update(
     mount: HTMLElement,
     canvas: HTMLCanvasElement,
     camera: Camera,
     alpha: number,
+    nowMs: number,
     local: {
       prevX: number;
       prevY: number;
@@ -78,10 +81,7 @@ export class NametagOverlay {
       y: number;
       displayName: string;
     },
-    remotes: ReadonlyMap<
-      string,
-      { prevX: number; prevY: number; x: number; y: number }
-    >,
+    remotes: ReadonlyMap<string, RemotePlayer>,
     roster: ReadonlyMap<string, NametagRosterEntry>,
     localPeerId: string | null,
   ): void {
@@ -149,9 +149,8 @@ export class NametagOverlay {
       stale.delete(peerId);
       const entry = roster.get(peerId);
       const label = entry?.displayName ?? peerId;
-      const rx = rp.prevX + (rp.x - rp.prevX) * alpha;
-      const ry = rp.prevY + (rp.y - rp.prevY) * alpha;
-      placeTag(peerId, label, rx, ry);
+      const d = rp.getDisplayPose(nowMs);
+      placeTag(peerId, label, d.x, d.y);
     }
 
     for (const id of stale) {

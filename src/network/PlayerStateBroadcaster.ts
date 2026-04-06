@@ -10,6 +10,9 @@ type PlayerStateSnapshot = {
   vx: number;
   vy: number;
   facingRight: boolean;
+  hotbarSlot: number;
+  heldItemId: number;
+  miningVisual: boolean;
 };
 
 /**
@@ -28,6 +31,9 @@ export class PlayerStateBroadcaster {
   private _lastVx = 0;
   private _lastVy = 0;
   private _lastFacing = false;
+  private _lastHotbarSlot = 0;
+  private _lastHeldItemId = 0;
+  private _lastMiningVisual = false;
   private _active = false;
 
   constructor(adapter: INetworkAdapter, getState: StateProvider) {
@@ -38,6 +44,7 @@ export class PlayerStateBroadcaster {
   /** Enable broadcasting; actual sends happen when {@link tick} is called from the game loop. */
   start(): void {
     this._active = true;
+    this.invalidateSnapshot();
   }
 
   stop(): void {
@@ -76,7 +83,10 @@ export class PlayerStateBroadcaster {
       snap.y === this._lastY &&
       snap.vx === this._lastVx &&
       snap.vy === this._lastVy &&
-      snap.facingRight === this._lastFacing
+      snap.facingRight === this._lastFacing &&
+      snap.hotbarSlot === this._lastHotbarSlot &&
+      snap.heldItemId === this._lastHeldItemId &&
+      snap.miningVisual === this._lastMiningVisual
     ) {
       return;
     }
@@ -89,6 +99,9 @@ export class PlayerStateBroadcaster {
       vx: snap.vx,
       vy: snap.vy,
       facingRight: snap.facingRight,
+      hotbarSlot: snap.hotbarSlot,
+      heldItemId: snap.heldItemId,
+      miningVisual: snap.miningVisual,
     });
 
     this._hasLast = true;
@@ -98,5 +111,8 @@ export class PlayerStateBroadcaster {
     this._lastVx = snap.vx;
     this._lastVy = snap.vy;
     this._lastFacing = snap.facingRight;
+    this._lastHotbarSlot = snap.hotbarSlot;
+    this._lastHeldItemId = snap.heldItemId;
+    this._lastMiningVisual = snap.miningVisual;
   }
 }

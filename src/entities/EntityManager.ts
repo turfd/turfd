@@ -13,28 +13,46 @@ import {
 import type { AudioEngine } from "../audio/AudioEngine";
 import {
   BLOCK_SIZE,
+  HOTBAR_SIZE,
   PLAYER_HEIGHT,
+  PLAYER_BODY_ATLAS_FRAMES,
+  PLAYER_BODY_ATLAS_IMAGE_REL,
+  PLAYER_BODY_ATLAS_JSON_REL,
+  PLAYER_BODY_REQUIRED_FRAME_COUNT,
+  PLAYER_BODY_IDLE_FRAME_INDEX,
+  PLAYER_BODY_JUMP_DOWN_FRAME_INDEX,
+  PLAYER_BODY_JUMP_UP_FRAME_INDEX,
+  PLAYER_BODY_MINING_FRAME_INDEX,
+  PLAYER_BODY_WALK_CYCLE_INDICES,
   PLAYER_BREAKING_ANIM_SPEED,
-  PLAYER_BREAKING_ATLAS_FRAMES,
-  PLAYER_BREAKING_ATLAS_IMAGE_REL,
   PLAYER_BREAKING_MINING_FRAME_OFFSET_X_TEXELS,
   PLAYER_BREAKING_MINING_FRAME_OFFSET_Y_TEXELS,
+  PLAYER_HELD_ITEM_ANCHOR_X,
+  PLAYER_HELD_ITEM_ANCHOR_Y,
+  PLAYER_HELD_ITEM_FACING_SIDE_NUDGE_X_PX,
+  PLAYER_HELD_ITEM_HAND_OFFSET_X_TEXELS,
+  PLAYER_HELD_ITEM_AIR_JUMP_NUDGE_Y_PX,
+  PLAYER_HELD_BREAK_FRAME_NUDGE_FORWARD_PX,
+  PLAYER_HELD_BREAK_FRAME_NUDGE_UP_PX,
+  PLAYER_HELD_BREAK_FRAME_ROTATION_RAD,
+  PLAYER_HELD_ITEM_OUTWARD_NUDGE_X_PX,
+  PLAYER_HELD_ITEM_OUTWARD_NUDGE_Y_PX,
+  PLAYER_HELD_ITEM_HAND_OFFSET_Y_TEXELS,
+  PLAYER_HELD_ITEM_SCALE_MULTIPLIER,
+  PLAYER_HELD_AXE_NUDGE_X_PX,
+  PLAYER_HELD_AXE_NUDGE_Y_PX,
+  PLAYER_HELD_AXE_ROTATION_RAD,
+  PLAYER_HELD_PLACEABLE_BLOCK_NUDGE_Y_PX,
+  PLAYER_HELD_PLACEABLE_BLOCK_REL_SCALE,
   PLAYER_MOVE_ANIM_VEL_THRESHOLD,
   PLAYER_REMOTE_SPRINT_VEL_THRESHOLD,
   PLAYER_SPRITE_FEET_OFFSET_PX,
   PLAYER_SPRITE_FEET_PAD_TEXELS,
   PLAYER_SPRITE_SCALE_MULTIPLIER,
   PLAYER_SPRINT_ANIM_SPEED_MULT,
-  PLAYER_JUMP_ATLAS_FRAMES,
-  PLAYER_JUMP_ATLAS_IMAGE_REL,
   PLAYER_REMOTE_AIR_VY_THRESHOLD,
   PLAYER_REMOTE_ANIM_VEL_SMOOTH_PER_SEC,
   PLAYER_WALK_ANIM_SPEED,
-  PLAYER_WALK_ATLAS_FRAMES,
-  PLAYER_WALK_ATLAS_IMAGE_REL,
-  PLAYER_WALK_CYCLE_FRAME_INDICES,
-  PLAYER_WALK_FRAME_COUNT,
-  PLAYER_WALK_IDLE_FRAME_INDEX,
   PLAYER_WIDTH,
   REACH_BLOCKS,
 } from "../core/constants";
@@ -42,12 +60,14 @@ import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 import type { EventBus } from "../core/EventBus";
 import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
+import type { ItemId } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { AtlasLoader } from "../renderer/AtlasLoader";
 import type { RenderPipeline } from "../renderer/RenderPipeline";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { World } from "../world/World";
 import { Player } from "./Player";
+import { z } from "zod";
 
 function sliceAtlasFrames(
   sheet: Texture,
@@ -79,11 +99,48 @@ function sliceAtlasFrames(
   return out;
 }
 
-function sliceWalkFrames(sheet: Texture): Texture[] {
-  return sliceAtlasFrames(sheet, PLAYER_WALK_ATLAS_FRAMES);
+const playerBodyAtlasJsonZ = z.object({
+  frames: z.array(
+    z.object({
+      x: z.number().int().nonnegative(),
+      y: z.number().int().nonnegative(),
+      w: z.number().int().positive(),
+      h: z.number().int().positive(),
+    }),
+  ),
+});
+
+function sliceBodyFrames(
+  sheet: Texture,
+  rects: readonly Readonly<{ x: number; y: number; w: number; h: number }>[],
+): Texture[] {
+  return sliceAtlasFrames(sheet, rects);
 }
 
-type WalkAnimModeRef = { v: "idle" | "walk" | "breaking" };
+async function tryFetchPlayerBodyAtlasRects(): Promise<
+  readonly Readonly<{ x: number; y: number; w: number; h: number }>[] | null
+> {
+  const url = stratumCoreTextureAssetUrl(PLAYER_BODY_ATLAS_JSON_REL);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      return null;
+    }
+    const raw: unknown = await res.json();
+    const parsed = playerBodyAtlasJsonZ.safeParse(raw);
+    if (
+      !parsed.success ||
+      parsed.data.frames.length < PLAYER_BODY_REQUIRED_FRAME_COUNT
+    ) {
+      return null;
+    }
+    return parsed.data.frames;
+  } catch {
+    return null;
+  }
+}
+
+type WalkAnimModeRef = { v: "idle" | "walk" | "breaking" | "skid" };
 
 type WalkAnimTextures = {
   readonly idle: Texture[];
@@ -95,9 +152,14 @@ type SurfaceModeRef = { v: "ground" | "air" };
 
 function layoutPlayerSprite(sprite: AnimatedSprite, uniformScale: number): void {
   sprite.anchor.set(0.5, 1);
+  // Sub-pixel motion stays smooth; texture uses nearest-neighbor (no root snapping — that read as jitter).
+  sprite.roundPixels = false;
   const feetNudge =
     PLAYER_SPRITE_FEET_OFFSET_PX + PLAYER_SPRITE_FEET_PAD_TEXELS * uniformScale;
-  sprite.position.set(PLAYER_WIDTH * 0.5, PLAYER_HEIGHT + feetNudge);
+  sprite.position.set(
+    Math.round(PLAYER_WIDTH * 0.5),
+    Math.round(PLAYER_HEIGHT + feetNudge),
+  );
   sprite.scale.set(uniformScale, uniformScale);
 }
 
@@ -119,7 +181,10 @@ function applyPlayerSpriteFeetPosition(
   const oy = onBreakingCell
     ? PLAYER_BREAKING_MINING_FRAME_OFFSET_Y_TEXELS * uniformScale
     : 0;
-  sprite.position.set(PLAYER_WIDTH * 0.5 + ox, PLAYER_HEIGHT + feetNudge + oy);
+  sprite.position.set(
+    Math.round(PLAYER_WIDTH * 0.5 + ox),
+    Math.round(PLAYER_HEIGHT + feetNudge + oy),
+  );
 }
 
 function syncWalkAnimation(
@@ -129,9 +194,25 @@ function syncWalkAnimation(
   facingRight: boolean,
   baseScale: number,
   walkAnim: WalkAnimTextures | null,
+  skidding: boolean,
+  skidTextures: Texture[] | null,
 ): void {
   if (walkAnim === null) {
     return;
+  }
+  if (skidding && skidTextures !== null && skidTextures.length > 0) {
+    if (walkAnim.mode.v !== "skid") {
+      walkAnim.mode.v = "skid";
+      sprite.textures = skidTextures;
+      sprite.gotoAndStop(0);
+    }
+    sprite.stop();
+    sprite.scale.x = facingRight ? -baseScale : baseScale;
+    sprite.scale.y = baseScale;
+    return;
+  }
+  if (walkAnim.mode.v === "skid") {
+    walkAnim.mode.v = "idle";
   }
   if (moving) {
     if (walkAnim.mode.v !== "walk") {
@@ -165,10 +246,14 @@ function syncPlayerBodyAnimation(
   facingRight: boolean,
   baseScale: number,
   walkAnim: WalkAnimTextures | null,
-  jumpTextures: Texture[] | null,
+  velocityY: number,
+  jumpUpTextures: Texture[] | null,
+  jumpDownTextures: Texture[] | null,
   surface: SurfaceModeRef,
   breakingTextures: Texture[] | null,
   miningActive: boolean,
+  skidding: boolean,
+  skidTextures: Texture[] | null,
 ): void {
   if (
     miningActive &&
@@ -194,14 +279,21 @@ function syncPlayerBodyAnimation(
     walkAnim.mode.v = "idle";
   }
 
-  if (!onGround && jumpTextures !== null && jumpTextures.length > 0) {
+  if (
+    !onGround &&
+    jumpUpTextures !== null &&
+    jumpDownTextures !== null &&
+    jumpUpTextures.length > 0 &&
+    jumpDownTextures.length > 0
+  ) {
     if (surface.v === "ground") {
       surface.v = "air";
       if (walkAnim !== null) {
         walkAnim.mode.v = "idle";
       }
     }
-    sprite.textures = jumpTextures;
+    sprite.textures =
+      velocityY < 0 ? jumpUpTextures : jumpDownTextures;
     sprite.gotoAndStop(0);
     sprite.stop();
     sprite.scale.x = facingRight ? -baseScale : baseScale;
@@ -226,6 +318,8 @@ function syncPlayerBodyAnimation(
     facingRight,
     baseScale,
     walkAnim,
+    skidding,
+    skidTextures,
   );
 }
 
@@ -240,13 +334,18 @@ export class EntityManager {
   /** World-space root for the local player (hitbox top-left). */
   private playerGraphic: Container | null = null;
   private localPlayerAnim: AnimatedSprite | null = null;
+  /** Sibling of the local body sprite; draw order via `zIndex` (body over tool when facing left). */
+  private localHeldItemSprite: Sprite | null = null;
   private localPlayerPlaceholder: Graphics | null = null;
-  /** Full atlas columns after trim (length {@link PLAYER_WALK_FRAME_COUNT}). */
-  private playerWalkAtlasFrames: Texture[] | null = null;
+  /** Sliced cells from {@link PLAYER_BODY_ATLAS_IMAGE_REL} (≥ {@link PLAYER_BODY_REQUIRED_FRAME_COUNT}). */
+  private playerBodyAtlasFrames: Texture[] | null = null;
   private playerIdleAnimTextures: Texture[] | null = null;
   private playerWalkCycleTextures: Texture[] | null = null;
-  private playerJumpAnimTextures: Texture[] | null = null;
-  /** Two frames: idle walk pose + `breaking.png` (loops while mining). */
+  private playerJumpUpAnimTextures: Texture[] | null = null;
+  private playerJumpDownAnimTextures: Texture[] | null = null;
+  /** Single-frame skid / brake pose (same cell as mining swing; static while reversing). */
+  private playerSkidAnimTextures: Texture[] | null = null;
+  /** Two frames: idle + mining pose (loops while mining). */
   private playerBreakingAnimTextures: Texture[] | null = null;
   private readonly localWalkAnimMode: WalkAnimModeRef = { v: "idle" };
   private readonly localSurfaceMode: SurfaceModeRef = { v: "ground" };
@@ -282,6 +381,10 @@ export class EntityManager {
   /** Call after {@link RenderPipeline.init} so `layerEntities` is mounted. */
   initVisual(pipeline: RenderPipeline): void {
     const root = new Container();
+    root.sortableChildren = true;
+    // Sprite extends past the 14×28 hitbox; don’t let world cull clip the edges while mining.
+    root.cullable = false;
+    root.cullableChildren = false;
     const placeholder = new Graphics();
     placeholder.rect(0, 0, PLAYER_WIDTH, PLAYER_HEIGHT);
     placeholder.fill({ color: 0x00ffff });
@@ -306,12 +409,31 @@ export class EntityManager {
     return this.player;
   }
 
+  /** Pose extras for `PLAYER_STATE` / host snapshots (matches local held + mining body logic). */
+  getLocalPlayerNetworkPoseExtras(): {
+    hotbarSlot: number;
+    heldItemId: number;
+    miningVisual: boolean;
+  } {
+    const s = this.player.state;
+    const slot = ((s.hotbarSlot % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
+    const stack = this.player.inventory.getStack(slot);
+    const heldItemId =
+      stack !== null && stack.count > 0 ? stack.itemId : 0;
+    const miningBreak =
+      s.breakTarget !== null &&
+      s.breakProgress < 1 &&
+      !this.input.isWorldInputBlocked();
+    const miningVisual = miningBreak || s.handSwingRemainSec > 0;
+    return { hotbarSlot: slot, heldItemId, miningVisual };
+  }
+
   update(dt: number): void {
     this.player.update(dt, this.input, this.world);
   }
 
   /** Sync placeholder rects to player + remote player world positions (call each render). */
-  syncPlayerGraphic(alpha: number, dtSec: number): void {
+  syncPlayerGraphic(alpha: number, dtSec: number, nowMs: number): void {
     const root = this.playerGraphic;
     if (root !== null) {
       const s = this.player.state;
@@ -325,14 +447,28 @@ export class EntityManager {
         const moving =
           s.onGround && Math.abs(vx) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD;
         const sprinting = moving && this.input.isDown("sprint");
-        const idle = this.playerIdleAnimTextures;
-        const cycle = this.playerWalkCycleTextures;
-        const jump = this.playerJumpAnimTextures;
-        const breaking = this.playerBreakingAnimTextures;
-        const mining =
+        const moveIntent =
+          (this.input.isDown("right") ? 1 : 0) -
+          (this.input.isDown("left") ? 1 : 0);
+        const miningBreak =
           s.breakTarget !== null &&
           s.breakProgress < 1 &&
           !this.input.isWorldInputBlocked();
+        const miningVisual =
+          miningBreak || s.handSwingRemainSec > 0;
+        const skidding =
+          s.onGround &&
+          !miningVisual &&
+          Math.abs(vx) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD &&
+          moveIntent !== 0 &&
+          Math.sign(vx) !== 0 &&
+          Math.sign(moveIntent) !== Math.sign(vx);
+        const idle = this.playerIdleAnimTextures;
+        const cycle = this.playerWalkCycleTextures;
+        const jumpUp = this.playerJumpUpAnimTextures;
+        const jumpDown = this.playerJumpDownAnimTextures;
+        const breaking = this.playerBreakingAnimTextures;
+        const skid = this.playerSkidAnimTextures;
         if (idle !== null && cycle !== null && cycle.length > 0) {
           syncPlayerBodyAnimation(
             anim,
@@ -346,14 +482,18 @@ export class EntityManager {
               cycle,
               mode: this.localWalkAnimMode,
             },
-            jump,
+            s.velocity.y,
+            jumpUp,
+            jumpDown,
             this.localSurfaceMode,
             breaking,
-            mining,
+            miningVisual,
+            skidding,
+            skid,
           );
         }
         const breakingLoopActive =
-          mining &&
+          miningVisual &&
           breaking !== null &&
           breaking.length >= 2 &&
           anim.textures === breaking;
@@ -363,6 +503,23 @@ export class EntityManager {
           breakingLoopActive,
           s.facingRight,
         );
+
+        const held = this.localHeldItemSprite;
+        if (held !== null) {
+          const slot =
+            ((s.hotbarSlot % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
+          const stack = this.player.inventory.getStack(slot);
+          const heldItemId =
+            stack !== null && stack.count > 0 ? stack.itemId : 0;
+          this.syncHeldItemVisual(
+            held,
+            anim,
+            s.facingRight,
+            miningVisual,
+            s.onGround,
+            heldItemId,
+          );
+        }
       }
     }
 
@@ -388,14 +545,22 @@ export class EntityManager {
         this.remoteWalkAnimMode.set(peerId, { v: "idle" });
         this.remoteSurfaceMode.set(peerId, { v: "ground" });
       }
-      const rx = rp.prevX + (rp.x - rp.prevX) * alpha;
-      const ry = rp.prevY + (rp.y - rp.prevY) * alpha;
-      remoteRoot.position.set(rx - PLAYER_WIDTH / 2, -ry - PLAYER_HEIGHT);
+      const disp = rp.getDisplayPose(nowMs);
+      remoteRoot.position.set(disp.x - PLAYER_WIDTH / 2, -disp.y - PLAYER_HEIGHT);
 
-      const body = remoteRoot.children[0];
-      if (body instanceof AnimatedSprite) {
-        const rawVx = rp.velocityX;
-        const rawVy = rp.velocityY;
+      let remoteBody: AnimatedSprite | null = null;
+      let remoteHeld: Sprite | null = null;
+      for (const ch of remoteRoot.children) {
+        if (ch instanceof AnimatedSprite) {
+          remoteBody = ch;
+        } else if (ch instanceof Sprite) {
+          remoteHeld = ch;
+        }
+      }
+      if (remoteBody !== null) {
+        const body = remoteBody;
+        const rawVx = disp.vx;
+        const rawVy = disp.vy;
         const k = Math.min(1, PLAYER_REMOTE_ANIM_VEL_SMOOTH_PER_SEC * dtSec);
         let sx = this.remoteAnimVelX.get(peerId) ?? rawVx;
         let sy = this.remoteAnimVelY.get(peerId) ?? rawVy;
@@ -418,26 +583,33 @@ export class EntityManager {
           surf = { v: "ground" };
           this.remoteSurfaceMode.set(peerId, surf);
         }
-        const jump = this.playerJumpAnimTextures;
+        const jumpUp = this.playerJumpUpAnimTextures;
+        const jumpDown = this.playerJumpDownAnimTextures;
         const breaking = this.playerBreakingAnimTextures;
-        const mining = rp.getBreakMining() !== null;
+        const skid = this.playerSkidAnimTextures;
+        const miningVisual =
+          rp.miningVisualFromNetwork || rp.getBreakMining() !== null;
         if (idle !== null && cycle !== null && cycle.length > 0 && mode !== undefined) {
           syncPlayerBodyAnimation(
             body,
             onGroundApprox,
             moving,
             sprinting,
-            rp.facingRight,
+            disp.facingRight,
             this.playerSpriteBaseScale,
             { idle, cycle, mode },
-            jump,
+            sy,
+            jumpUp,
+            jumpDown,
             surf,
             breaking,
-            mining,
+            miningVisual,
+            false,
+            skid,
           );
         }
         const breakingLoopActive =
-          mining &&
+          miningVisual &&
           breaking !== null &&
           breaking.length >= 2 &&
           body.textures === breaking;
@@ -445,8 +617,18 @@ export class EntityManager {
           body,
           this.playerSpriteBaseScale,
           breakingLoopActive,
-          rp.facingRight,
+          disp.facingRight,
         );
+        if (remoteHeld !== null) {
+          this.syncHeldItemVisual(
+            remoteHeld,
+            body,
+            disp.facingRight,
+            miningVisual,
+            onGroundApprox,
+            rp.heldItemId,
+          );
+        }
       }
     }
 
@@ -594,14 +776,24 @@ export class EntityManager {
 
   private createRemotePlayerRoot(): Container {
     const c = new Container();
+    c.sortableChildren = true;
+    c.cullable = false;
+    c.cullableChildren = false;
     const idle = this.playerIdleAnimTextures;
     if (
       idle !== null &&
       this.playerWalkCycleTextures !== null &&
       this.playerWalkCycleTextures.length > 0 &&
-      this.playerWalkAtlasFrames !== null &&
-      this.playerWalkAtlasFrames.length === PLAYER_WALK_FRAME_COUNT
+      this.playerBodyAtlasFrames !== null &&
+      this.playerBodyAtlasFrames.length >= PLAYER_BODY_REQUIRED_FRAME_COUNT
     ) {
+      const held = new Sprite(Texture.WHITE);
+      held.visible = false;
+      held.roundPixels = false;
+      held.zIndex = -1;
+      if (held.texture.source !== undefined) {
+        held.texture.source.scaleMode = "nearest";
+      }
       const anim = new AnimatedSprite({
         textures: idle,
         animationSpeed: PLAYER_WALK_ANIM_SPEED,
@@ -613,6 +805,8 @@ export class EntityManager {
       }
       layoutPlayerSprite(anim, this.playerSpriteBaseScale);
       anim.gotoAndStop(0);
+      anim.zIndex = 0;
+      c.addChild(held);
       c.addChild(anim);
     } else {
       const g = new Graphics();
@@ -627,13 +821,13 @@ export class EntityManager {
   private refreshRemotePlayerBodies(): void {
     const idle = this.playerIdleAnimTextures;
     const cycle = this.playerWalkCycleTextures;
-    const atlas = this.playerWalkAtlasFrames;
+    const atlas = this.playerBodyAtlasFrames;
     if (
       idle === null ||
       cycle === null ||
       cycle.length === 0 ||
       atlas === null ||
-      atlas.length !== PLAYER_WALK_FRAME_COUNT
+      atlas.length < PLAYER_BODY_REQUIRED_FRAME_COUNT
     ) {
       return;
     }
@@ -643,6 +837,14 @@ export class EntityManager {
         continue;
       }
       first?.destroy();
+      root.sortableChildren = true;
+      const held = new Sprite(Texture.WHITE);
+      held.visible = false;
+      held.roundPixels = false;
+      held.zIndex = -1;
+      if (held.texture.source !== undefined) {
+        held.texture.source.scaleMode = "nearest";
+      }
       const anim = new AnimatedSprite({
         textures: idle,
         animationSpeed: PLAYER_WALK_ANIM_SPEED,
@@ -654,7 +856,9 @@ export class EntityManager {
       }
       layoutPlayerSprite(anim, this.playerSpriteBaseScale);
       anim.gotoAndStop(0);
-      root.addChildAt(anim, 0);
+      anim.zIndex = 0;
+      root.addChild(held);
+      root.addChild(anim);
       let mode = this.remoteWalkAnimMode.get(peerId);
       if (mode === undefined) {
         mode = { v: "idle" };
@@ -664,9 +868,10 @@ export class EntityManager {
       }
       const rp = this.world.getRemotePlayers().get(peerId);
       if (rp !== undefined) {
-        const vx = rp.velocityX;
+        const disp = rp.getDisplayPose(performance.now());
+        const vx = disp.vx;
         const onGroundApprox =
-          Math.abs(rp.velocityY) <= PLAYER_REMOTE_AIR_VY_THRESHOLD;
+          Math.abs(disp.vy) <= PLAYER_REMOTE_AIR_VY_THRESHOLD;
         const moving =
           onGroundApprox &&
           Math.abs(vx) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD;
@@ -678,30 +883,125 @@ export class EntityManager {
           this.remoteSurfaceMode.set(peerId, surf);
         }
         const breaking = this.playerBreakingAnimTextures;
-        const mining = rp.getBreakMining() !== null;
+        const skid = this.playerSkidAnimTextures;
+        const miningVisual =
+          rp.miningVisualFromNetwork || rp.getBreakMining() !== null;
         syncPlayerBodyAnimation(
           anim,
           onGroundApprox,
           moving,
           sprinting,
-          rp.facingRight,
+          disp.facingRight,
           this.playerSpriteBaseScale,
           { idle, cycle, mode },
-          this.playerJumpAnimTextures,
+          disp.vy,
+          this.playerJumpUpAnimTextures,
+          this.playerJumpDownAnimTextures,
           surf,
           breaking,
-          mining,
+          miningVisual,
+          false,
+          skid,
         );
       }
     }
   }
 
+  private syncHeldItemVisual(
+    held: Sprite,
+    anim: AnimatedSprite,
+    facingRight: boolean,
+    miningVisual: boolean,
+    onGroundApprox: boolean,
+    heldItemId: number,
+  ): void {
+    const breaking = this.playerBreakingAnimTextures;
+    const breakingLoopActive =
+      miningVisual &&
+      breaking !== null &&
+      breaking.length >= 2 &&
+      anim.textures === breaking;
+    let tex: Texture | null = null;
+    let heldPlaceableBlock = false;
+    /** Axe art mirrors opposite to pick/shovel for correct blade direction in-hand. */
+    let heldToolOppositeMirror = false;
+    if (heldItemId !== 0) {
+      const def = this.itemRegistry.getById(heldItemId as ItemId);
+      if (def !== undefined) {
+        tex = this.itemTextureAtlas.getTextureOrNull(def.textureName);
+        heldPlaceableBlock = def.placesBlockId !== undefined;
+        heldToolOppositeMirror = def.toolType === "axe";
+      }
+    }
+    if (tex === null || tex === Texture.EMPTY) {
+      held.visible = false;
+      held.rotation = 0;
+      return;
+    }
+    held.texture = tex;
+    const src = tex.source;
+    if (src !== undefined) {
+      src.scaleMode = "nearest";
+    }
+    held.anchor.set(PLAYER_HELD_ITEM_ANCHOR_X, PLAYER_HELD_ITEM_ANCHOR_Y);
+    const k =
+      PLAYER_HELD_ITEM_SCALE_MULTIPLIER *
+      (heldPlaceableBlock ? PLAYER_HELD_PLACEABLE_BLOCK_REL_SCALE : 1);
+    const bx = anim.scale.x;
+    const heldSx =
+      (heldToolOppositeMirror
+        ? facingRight
+          ? bx
+          : -bx
+        : facingRight
+          ? -bx
+          : bx) * k;
+    const heldFacingFlipX = facingRight ? 1 : -1;
+    held.scale.set(heldSx * heldFacingFlipX, anim.scale.y * k);
+    const faceScreenX = facingRight ? 1 : -1;
+    const airJumpHeld = !onGroundApprox;
+    const onHeldBreakSwingFrame =
+      breakingLoopActive && anim.currentFrame === 1;
+    const baseHeldRotation = heldToolOppositeMirror
+      ? faceScreenX * PLAYER_HELD_AXE_ROTATION_RAD
+      : 0;
+    const breakSwingRotation = onHeldBreakSwingFrame
+      ? faceScreenX * PLAYER_HELD_BREAK_FRAME_ROTATION_RAD
+      : 0;
+    held.rotation = baseHeldRotation + breakSwingRotation;
+    const breakForward = onHeldBreakSwingFrame
+      ? faceScreenX * PLAYER_HELD_BREAK_FRAME_NUDGE_FORWARD_PX
+      : 0;
+    const breakUp = onHeldBreakSwingFrame
+      ? -PLAYER_HELD_BREAK_FRAME_NUDGE_UP_PX
+      : 0;
+    held.position.set(
+      anim.position.x +
+        PLAYER_HELD_ITEM_HAND_OFFSET_X_TEXELS * anim.scale.x +
+        faceScreenX * PLAYER_HELD_ITEM_FACING_SIDE_NUDGE_X_PX +
+        faceScreenX * PLAYER_HELD_ITEM_OUTWARD_NUDGE_X_PX +
+        (heldToolOppositeMirror ? faceScreenX * PLAYER_HELD_AXE_NUDGE_X_PX : 0) +
+        breakForward,
+      anim.position.y +
+        PLAYER_HELD_ITEM_HAND_OFFSET_Y_TEXELS * anim.scale.y +
+        PLAYER_HELD_ITEM_OUTWARD_NUDGE_Y_PX +
+        (airJumpHeld ? PLAYER_HELD_ITEM_AIR_JUMP_NUDGE_Y_PX : 0) +
+        (heldToolOppositeMirror ? PLAYER_HELD_AXE_NUDGE_Y_PX : 0) +
+        (heldPlaceableBlock ? PLAYER_HELD_PLACEABLE_BLOCK_NUDGE_Y_PX : 0) +
+        breakUp,
+    );
+    held.zIndex = -1;
+    anim.zIndex = 0;
+    held.visible = true;
+  }
+
   private async loadPlayerSprites(): Promise<void> {
-    const walkUrl = stratumCoreTextureAssetUrl(PLAYER_WALK_ATLAS_IMAGE_REL);
-    const jumpUrl = stratumCoreTextureAssetUrl(PLAYER_JUMP_ATLAS_IMAGE_REL);
+    const sheetUrl = stratumCoreTextureAssetUrl(PLAYER_BODY_ATLAS_IMAGE_REL);
     try {
+      const rects =
+        (await tryFetchPlayerBodyAtlasRects()) ?? PLAYER_BODY_ATLAS_FRAMES;
       const sheet =
-        (await Assets.load<Texture>(walkUrl)) ?? Assets.get<Texture>(walkUrl);
+        (await Assets.load<Texture>(sheetUrl)) ?? Assets.get<Texture>(sheetUrl);
       if (
         sheet === undefined ||
         sheet === Texture.EMPTY ||
@@ -710,25 +1010,41 @@ export class EntityManager {
         return;
       }
       sheet.source.scaleMode = "nearest";
-      const frames = sliceWalkFrames(sheet);
-      if (frames.length !== PLAYER_WALK_FRAME_COUNT) {
+      sheet.source.autoGenerateMipmaps = false;
+      const frames = sliceBodyFrames(sheet, rects);
+      if (frames.length < PLAYER_BODY_REQUIRED_FRAME_COUNT) {
         return;
       }
-      const idleTex = frames[PLAYER_WALK_IDLE_FRAME_INDEX];
+      const idleTex = frames[PLAYER_BODY_IDLE_FRAME_INDEX];
       if (idleTex === undefined) {
         return;
       }
       const cycle: Texture[] = [];
-      for (const idx of PLAYER_WALK_CYCLE_FRAME_INDICES) {
+      for (const idx of PLAYER_BODY_WALK_CYCLE_INDICES) {
         const t = frames[idx];
         if (t === undefined) {
           return;
         }
         cycle.push(t);
       }
-      this.playerWalkAtlasFrames = frames;
+      const miningTex = frames[PLAYER_BODY_MINING_FRAME_INDEX];
+      const jumpUpTex = frames[PLAYER_BODY_JUMP_UP_FRAME_INDEX];
+      const jumpDownTex = frames[PLAYER_BODY_JUMP_DOWN_FRAME_INDEX];
+      if (
+        miningTex === undefined ||
+        jumpUpTex === undefined ||
+        jumpDownTex === undefined
+      ) {
+        return;
+      }
+
+      this.playerBodyAtlasFrames = frames;
       this.playerIdleAnimTextures = [idleTex];
       this.playerWalkCycleTextures = cycle;
+      this.playerJumpUpAnimTextures = [jumpUpTex];
+      this.playerJumpDownAnimTextures = [jumpDownTex];
+      this.playerSkidAnimTextures = [miningTex];
+      this.playerBreakingAnimTextures = [idleTex, miningTex];
       this.localWalkAnimMode.v = "idle";
       this.localSurfaceMode.v = "ground";
 
@@ -739,70 +1055,12 @@ export class EntityManager {
         maxH = Math.max(maxH, f.height);
       }
 
-      let jumpFrames: Texture[] | null = null;
-      try {
-        const jumpSheet =
-          (await Assets.load<Texture>(jumpUrl)) ??
-          Assets.get<Texture>(jumpUrl);
-        if (
-          jumpSheet !== undefined &&
-          jumpSheet !== Texture.EMPTY &&
-          jumpSheet.source !== undefined
-        ) {
-          jumpSheet.source.scaleMode = "nearest";
-          const sliced = sliceAtlasFrames(jumpSheet, PLAYER_JUMP_ATLAS_FRAMES);
-          if (sliced.length === PLAYER_JUMP_ATLAS_FRAMES.length) {
-            jumpFrames = sliced;
-            for (const f of sliced) {
-              maxW = Math.max(maxW, f.width);
-              maxH = Math.max(maxH, f.height);
-            }
-          }
-        }
-      } catch {
-        jumpFrames = null;
-      }
-      this.playerJumpAnimTextures = jumpFrames;
-
-      let breakingLoop: Texture[] | null = null;
-      try {
-        const breakUrl = stratumCoreTextureAssetUrl(
-          PLAYER_BREAKING_ATLAS_IMAGE_REL,
-        );
-        const breakSheet =
-          (await Assets.load<Texture>(breakUrl)) ??
-          Assets.get<Texture>(breakUrl);
-        if (
-          breakSheet !== undefined &&
-          breakSheet !== Texture.EMPTY &&
-          breakSheet.source !== undefined
-        ) {
-          breakSheet.source.scaleMode = "nearest";
-          const sliced = sliceAtlasFrames(
-            breakSheet,
-            PLAYER_BREAKING_ATLAS_FRAMES,
-          );
-          if (sliced.length === PLAYER_BREAKING_ATLAS_FRAMES.length) {
-            const b0 = sliced[0];
-            if (b0 !== undefined) {
-              breakingLoop = [idleTex, b0];
-              maxW = Math.max(maxW, b0.width);
-              maxH = Math.max(maxH, b0.height);
-            }
-          }
-        }
-      } catch {
-        breakingLoop = null;
-      }
-      this.playerBreakingAnimTextures = breakingLoop;
-
       if (maxW <= 0 || maxH <= 0) {
         return;
       }
-      const uniformScale =
+      this.playerSpriteBaseScale =
         Math.min(PLAYER_WIDTH / maxW, PLAYER_HEIGHT / maxH) *
         PLAYER_SPRITE_SCALE_MULTIPLIER;
-      this.playerSpriteBaseScale = uniformScale;
 
       const root = this.playerGraphic;
       if (root === null) {
@@ -817,10 +1075,21 @@ export class EntityManager {
         loop: true,
         autoPlay: false,
       });
-      layoutPlayerSprite(anim, uniformScale);
+      layoutPlayerSprite(anim, this.playerSpriteBaseScale);
       anim.gotoAndStop(0);
+      anim.zIndex = 0;
       root.addChild(anim);
       this.localPlayerAnim = anim;
+
+      const held = new Sprite(Texture.WHITE);
+      held.visible = false;
+      held.roundPixels = false;
+      held.zIndex = -1;
+      if (held.texture.source !== undefined) {
+        held.texture.source.scaleMode = "nearest";
+      }
+      root.addChildAt(held, 0);
+      this.localHeldItemSprite = held;
 
       this.refreshRemotePlayerBodies();
     } catch {
@@ -859,11 +1128,14 @@ export class EntityManager {
       this.playerGraphic = null;
     }
     this.localPlayerAnim = null;
+    this.localHeldItemSprite = null;
     this.localPlayerPlaceholder = null;
-    this.playerWalkAtlasFrames = null;
+    this.playerBodyAtlasFrames = null;
     this.playerIdleAnimTextures = null;
     this.playerWalkCycleTextures = null;
-    this.playerJumpAnimTextures = null;
+    this.playerJumpUpAnimTextures = null;
+    this.playerJumpDownAnimTextures = null;
+    this.playerSkidAnimTextures = null;
     this.playerBreakingAnimTextures = null;
     this.localWalkAnimMode.v = "idle";
     this.localSurfaceMode.v = "ground";
