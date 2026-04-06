@@ -5,19 +5,25 @@ import {
   FURNACE_CHUNK_MAGIC,
   FURNACE_CHUNK_MAGIC_V2,
   FURNACE_CHUNK_MAGIC_V3,
+  FURNACE_CHUNK_MAGIC_V4,
   FURNACE_SNAPSHOT_V3_SENTINEL,
-  byteLengthFurnacePersistedV3,
+  FURNACE_SNAPSHOT_V4_SENTINEL,
+  byteLengthFurnacePersistedV4,
   readFurnacePersistedV2FromView,
   readFurnacePersistedV3FromView,
+  readFurnacePersistedV4FromView,
   readLegacyFurnaceEntry,
-  writeFurnacePersistedV3ToView,
+  writeFurnacePersistedV4ToView,
   type FurnacePersistedChunk,
 } from "../../world/furnace/furnacePersisted";
 import {
   CHEST_CHUNK_MAGIC,
-  byteLengthChestPersisted,
-  readChestPersistedFromView,
-  writeChestPersistedToView,
+  CHEST_CHUNK_MAGIC_V2,
+  CHEST_SNAPSHOT_V2_SENTINEL,
+  byteLengthChestPersistedV2,
+  readChestPersistedV1FromView,
+  readChestPersistedV2FromView,
+  writeChestPersistedV2ToView,
   type ChestPersistedChunk,
 } from "../../world/chest/chestPersisted";
 
@@ -48,7 +54,7 @@ const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 const CHUNK_METADATA_MAGIC = 0x54_41_44_4d; // 'TADM' LE — per-cell flags (e.g. WORLDGEN_NO_COLLIDE)
 
 /** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 12;
+export const WIRE_PROTOCOL_VERSION = 13;
 
 /** Max UTF-8 bytes for handshake display name (profile + guest labels). */
 export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;
@@ -232,19 +238,19 @@ export class BinarySerializer {
   ): ArrayBuffer {
     let tailBody = 0;
     for (const f of furnaces) {
-      tailBody += byteLengthFurnacePersistedV3(f);
+      tailBody += byteLengthFurnacePersistedV4(f);
     }
     const tailHeader = 4 + 2;
     const out = new ArrayBuffer(base.byteLength + tailHeader + tailBody);
     new Uint8Array(out).set(new Uint8Array(base), 0);
     const view = new DataView(out);
     let o = base.byteLength;
-    view.setUint32(o, FURNACE_CHUNK_MAGIC_V3 >>> 0, LE);
+    view.setUint32(o, FURNACE_CHUNK_MAGIC_V4 >>> 0, LE);
     o += 4;
     view.setUint16(o, furnaces.length & 0xffff, LE);
     o += 2;
     for (const f of furnaces) {
-      o = writeFurnacePersistedV3ToView(view, out, o, f);
+      o = writeFurnacePersistedV4ToView(view, out, o, f);
     }
     return out;
   }
@@ -258,6 +264,26 @@ export class BinarySerializer {
       return undefined;
     }
     const magic = view.getUint32(offset, LE);
+    if (magic === FURNACE_CHUNK_MAGIC_V4) {
+      const count = view.getUint16(offset + 4, LE);
+      if (count > 1024) {
+        return undefined;
+      }
+      let o = offset + 6;
+      const out: FurnacePersistedChunk[] = [];
+      for (let i = 0; i < count; i++) {
+        const parsed = readFurnacePersistedV4FromView(view, view.buffer, o);
+        if (parsed === undefined) {
+          return undefined;
+        }
+        out.push(parsed[0]);
+        o = parsed[1];
+        if (o > byteLength) {
+          return undefined;
+        }
+      }
+      return { entries: out, endExclusive: o };
+    }
     if (magic === FURNACE_CHUNK_MAGIC_V3) {
       const count = view.getUint16(offset + 4, LE);
       if (count > 1024) {
@@ -324,19 +350,19 @@ export class BinarySerializer {
   ): ArrayBuffer {
     let tailBody = 0;
     for (const c of chests) {
-      tailBody += byteLengthChestPersisted(c);
+      tailBody += byteLengthChestPersistedV2(c);
     }
     const tailHeader = 4 + 2;
     const out = new ArrayBuffer(base.byteLength + tailHeader + tailBody);
     new Uint8Array(out).set(new Uint8Array(base), 0);
     const view = new DataView(out);
     let o = base.byteLength;
-    view.setUint32(o, CHEST_CHUNK_MAGIC >>> 0, LE);
+    view.setUint32(o, CHEST_CHUNK_MAGIC_V2 >>> 0, LE);
     o += 4;
     view.setUint16(o, chests.length & 0xffff, LE);
     o += 2;
     for (const c of chests) {
-      o = writeChestPersistedToView(view, out, o, c);
+      o = writeChestPersistedV2ToView(view, out, o, c);
     }
     return out;
   }
@@ -349,7 +375,28 @@ export class BinarySerializer {
     if (byteLength < offset + 6) {
       return undefined;
     }
-    if (view.getUint32(offset, LE) !== CHEST_CHUNK_MAGIC) {
+    const chestMagic = view.getUint32(offset, LE);
+    if (chestMagic === CHEST_CHUNK_MAGIC_V2) {
+      const count = view.getUint16(offset + 4, LE);
+      if (count > 1024) {
+        return undefined;
+      }
+      let o = offset + 6;
+      const out: ChestPersistedChunk[] = [];
+      for (let i = 0; i < count; i++) {
+        const parsed = readChestPersistedV2FromView(view, view.buffer, o);
+        if (parsed === undefined) {
+          return undefined;
+        }
+        out.push(parsed[0]);
+        o = parsed[1];
+        if (o > byteLength) {
+          return undefined;
+        }
+      }
+      return { entries: out, endExclusive: o };
+    }
+    if (chestMagic !== CHEST_CHUNK_MAGIC) {
       return undefined;
     }
     const count = view.getUint16(offset + 4, LE);
@@ -359,7 +406,7 @@ export class BinarySerializer {
     let o = offset + 6;
     const out: ChestPersistedChunk[] = [];
     for (let i = 0; i < count; i++) {
-      const parsed = readChestPersistedFromView(view, view.buffer, o);
+      const parsed = readChestPersistedV1FromView(view, view.buffer, o);
       if (parsed === undefined) {
         return undefined;
       }
@@ -460,14 +507,14 @@ export class BinarySerializer {
     wy: number,
     data: FurnacePersistedChunk,
   ): ArrayBuffer {
-    const payloadBytes = 1 + byteLengthFurnacePersistedV3(data);
+    const payloadBytes = 1 + byteLengthFurnacePersistedV4(data);
     const buf = new ArrayBuffer(1 + 4 + 4 + payloadBytes);
     const view = new DataView(buf);
     view.setUint8(0, FURNACE_SNAPSHOT_TYPE_BYTE);
     view.setInt32(1, wx, LE);
     view.setInt32(5, wy, LE);
-    view.setUint8(9, FURNACE_SNAPSHOT_V3_SENTINEL);
-    writeFurnacePersistedV3ToView(view, buf, 10, data);
+    view.setUint8(9, FURNACE_SNAPSHOT_V4_SENTINEL);
+    writeFurnacePersistedV4ToView(view, buf, 10, data);
     return buf;
   }
 
@@ -486,6 +533,12 @@ export class BinarySerializer {
     }
     const wx = view.getInt32(1, LE);
     const wy = view.getInt32(5, LE);
+    if (buffer.byteLength > 9 && view.getUint8(9) === FURNACE_SNAPSHOT_V4_SENTINEL) {
+      const parsed = readFurnacePersistedV4FromView(view, buffer, 10);
+      if (parsed !== undefined && parsed[1] === buffer.byteLength) {
+        return { wx, wy, data: parsed[0] };
+      }
+    }
     if (buffer.byteLength > 9 && view.getUint8(9) === FURNACE_SNAPSHOT_V3_SENTINEL) {
       const parsed = readFurnacePersistedV3FromView(view, buffer, 10);
       if (parsed !== undefined && parsed[1] === buffer.byteLength) {
@@ -511,13 +564,14 @@ export class BinarySerializer {
     wy: number,
     data: ChestPersistedChunk,
   ): ArrayBuffer {
-    const payloadBytes = byteLengthChestPersisted(data);
+    const payloadBytes = 1 + byteLengthChestPersistedV2(data);
     const buf = new ArrayBuffer(1 + 4 + 4 + payloadBytes);
     const view = new DataView(buf);
     view.setUint8(0, CHEST_SNAPSHOT_TYPE_BYTE);
     view.setInt32(1, wx, LE);
     view.setInt32(5, wy, LE);
-    writeChestPersistedToView(view, buf, 9, data);
+    view.setUint8(9, CHEST_SNAPSHOT_V2_SENTINEL);
+    writeChestPersistedV2ToView(view, buf, 10, data);
     return buf;
   }
 
@@ -535,7 +589,14 @@ export class BinarySerializer {
     }
     const wx = view.getInt32(1, LE);
     const wy = view.getInt32(5, LE);
-    const parsed = readChestPersistedFromView(view, buffer, 9);
+    if (buffer.byteLength > 9 && view.getUint8(9) === CHEST_SNAPSHOT_V2_SENTINEL) {
+      const parsed = readChestPersistedV2FromView(view, buffer, 10);
+      if (parsed === undefined || parsed[1] !== buffer.byteLength) {
+        throw new Error("Chest snapshot parse failed");
+      }
+      return { wx, wy, data: parsed[0] };
+    }
+    const parsed = readChestPersistedV1FromView(view, buffer, 9);
     if (parsed === undefined) {
       throw new Error("Chest snapshot parse failed");
     }

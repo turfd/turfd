@@ -65,6 +65,12 @@ export interface ItemDefinition {
 
   /** Optional second line under the display name in inventory slot tooltips. */
   readonly inventoryTooltip?: string;
+
+  /**
+   * When true, inventory/crafting/cursor icons clip the block texture to a stair silhouette
+   * (shape 0: missing top-left corner), matching in-world stair geometry.
+   */
+  readonly stairItemIconClip?: boolean;
 }
 
 /** A counted quantity of one item type. */

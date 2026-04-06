@@ -296,6 +296,7 @@ export class BlockInteractions {
     const { wx, wy, blockId } = e;
 
     if (blockId === 0 || blockId === this.airId) {
+      this.cancelSaplingGrowAt(wx, wy);
       this.scanLeafDecayAround(wx, wy);
     }
 
@@ -435,6 +436,19 @@ export class BlockInteractions {
       WHEAT_GROW_MIN_SEC +
       unixRandom01() * (WHEAT_GROW_MAX_SEC - WHEAT_GROW_MIN_SEC);
     this.schedule(wx, wy, "wheat-grow", delay);
+  }
+
+  /** Drop queued sapling timers for this cell (e.g. sapling broken or replaced). */
+  private cancelSaplingGrowAt(wx: number, wy: number): void {
+    const key = eventKey(wx, wy, "sapling-grow");
+    this.pending.delete(key);
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const ev = this.queue[i]!;
+      if (ev.kind === "sapling-grow" && ev.wx === wx && ev.wy === wy) {
+        this.queue.splice(i, 1);
+        this.pending.delete(eventKey(ev.wx, ev.wy, ev.kind));
+      }
+    }
   }
 
   private schedule(
@@ -620,36 +634,33 @@ export class BlockInteractions {
 
   private growOakTree(wx: number, wy: number): void {
     const trunkHeight = 4;
-    const canopyCy = wy + 5;
+    // Match WorldGenerator: first trunk at sapling Y (surfaceY+1); crown one cell above old trunk top.
+    const canopyCy = wy + 4;
     const radiusX = 2;
     const radiusY = 2;
-
-    this.world.setBlock(wx, wy, this.airId);
 
     forEachDeciduousBushCell(wx, canopyCy, radiusX, radiusY, (cx, cy) => {
       this.placeTreeBlock(cx, cy, this.oakLeavesId);
     });
 
     for (let dy = 0; dy < trunkHeight; dy++) {
-      this.placeTreeBlock(wx, wy + dy + 1, this.oakLogId);
+      this.placeTreeBlock(wx, wy + dy, this.oakLogId);
     }
 
   }
 
   private growBirchTree(wx: number, wy: number): void {
     const trunkHeight = 5;
-    const canopyCy = wy + 6;
+    const canopyCy = wy + 5;
     const radiusX = 2;
     const radiusY = 2;
-
-    this.world.setBlock(wx, wy, this.airId);
 
     forEachDeciduousBushCell(wx, canopyCy, radiusX, radiusY, (cx, cy) => {
       this.placeTreeBlock(cx, cy, this.birchLeavesId);
     });
 
     for (let dy = 0; dy < trunkHeight; dy++) {
-      this.placeTreeBlock(wx, wy + dy + 1, this.birchLogId);
+      this.placeTreeBlock(wx, wy + dy, this.birchLogId);
     }
 
   }
@@ -659,14 +670,15 @@ export class BlockInteractions {
     const canopyStartDy = 2;
     const canopyLayers: readonly number[] = [0, 1, 1, 2, 2, 3, 3];
 
-    this.world.setBlock(wx, wy, this.airId);
+    // Sapling sits at surfaceY+1; worldgen uses surfaceY + canopyStartDy for canopy base.
+    const surfaceY = wy - 1;
+    const canopyBottom = surfaceY + canopyStartDy;
 
-    const canopyBottom = wy + canopyStartDy;
     forEachSpruceBushCell(wx, canopyBottom, canopyLayers, (cx, cy) => {
       this.placeTreeBlock(cx, cy, this.spruceLeavesId);
     });
 
-    for (let dy = 1; dy <= trunkHeight; dy++) {
+    for (let dy = 0; dy < trunkHeight; dy++) {
       this.placeTreeBlock(wx, wy + dy, this.spruceLogId);
     }
 

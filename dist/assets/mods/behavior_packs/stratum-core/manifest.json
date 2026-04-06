@@ -56,9 +56,18 @@
     "birch-log.json",
     "birch_leaves.json",
     "birch-planks.json",
-    "birch-sapling.json"
+    "birch-sapling.json",
+    "oak-plank-stairs.json",
+    "spruce-plank-stairs.json",
+    "birch-plank-stairs.json",
+    "oak-log-stairs.json",
+    "spruce-log-stairs.json",
+    "birch-log-stairs.json",
+    "oak_door.json",
+    "oak_door_top.json"
   ],
   "items": [
+    "oak_door.json",
     "bread.json",
     "bucket.json",
     "water_bucket.json",

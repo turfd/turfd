@@ -22,6 +22,14 @@ import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import type { EventBus } from "../core/EventBus";
 import type { ItemId, ItemStack } from "../core/itemDefinition";
 import type { ILootResolver } from "../core/loot";
+import {
+  ITEM_ID_LAYOUT_REVISION_CURRENT,
+  ITEM_ID_LAYOUT_REVISION_STAIRS,
+  migrateChestPersistedChunk,
+  migrateChestPersistedChunkFromRevision1,
+  migrateFurnacePersistedChunk,
+  migrateFurnacePersistedChunkFromRevision1,
+} from "../items/itemIdLayoutMigration";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { ChunkRecord, IndexedDBStore } from "../persistence/IndexedDBStore";
 import type { BlockRegistry } from "./blocks/BlockRegistry";
@@ -37,11 +45,23 @@ import {
 } from "./chunk/Chunk";
 import { computeBlockLight, computeSkyLight } from "./lighting/LightPropagation";
 import {
+  chunkToWorldOrigin,
   localIndex,
   worldToChunk,
   worldToLocalBlock,
   type ChunkCoord,
 } from "./chunk/ChunkCoord";
+import {
+  anyPlayerOverlapsDoorProximity,
+  doorAnchorBottomWy,
+  doorProximityOverlapBest,
+  doorRenderHingeRightFromProximity,
+  type DoorPlayerSample,
+} from "./door/doorWorld";
+import {
+  doorHingeRightFromMeta,
+  doorLatchedOpenFromMeta,
+} from "./door/doorMetadata";
 import { GeneratorContext } from "./gen/GeneratorContext";
 import { WorldGenerator } from "./gen/WorldGenerator";
 import { resimulateWaterFromSources, tickWaterFlow } from "./water/WaterSimulation";
@@ -159,6 +179,9 @@ export class World {
   private _chestBlockId: number | null = null;
   private readonly _chestTiles = new Map<string, ChestTileState>();
 
+  /** Required to (de)serialize chest/furnace tiles with stable item keys; set before {@link init}. */
+  private _itemRegistry: ItemRegistry | null = null;
+
   private _waterSimTick = 0;
   private _waterBlockId: number | null = null;
   /** When true, next {@link tickWaterSystems} rebuilds flowing water from remaining sources. */
@@ -166,6 +189,12 @@ export class World {
 
   /** When set, chunk loads remap stored numeric ids through identifiers (`WorldMetadata.blockIdPalette`). */
   private readonly _blockLoadPalette: readonly string[] | undefined;
+  /**
+   * When true, chest/furnace tiles loaded from {@link IndexedDBStore.loadChunk} may remap persisted
+   * standalone item ids (see {@link ITEM_ID_LAYOUT_REVISION_CURRENT}). Network chunk apply skips this.
+   */
+  private readonly _needsItemIdLayoutMigration: boolean;
+  private readonly _itemIdLayoutMigrationKind: "legacy" | "rev1Minus2" | "none";
 
   /**
    * When &gt; 0, {@link setBlock} / {@link setBlockWithoutPlantCascade} use a fast path for
@@ -175,6 +204,13 @@ export class World {
   private readonly _bulkFgChunkKeys = new Set<string>();
   private readonly _bulkFgSkyWx = new Set<number>();
 
+  /** World keys `${wx},${bottomWy}` for door bottom cells (see {@link doorAnchorBottomWy}). */
+  private readonly _doorBottomKeys = new Set<string>();
+  /** Screen-space player samples for door proximity (set before and after local physics each tick). */
+  private readonly _doorPlayerSamples: DoorPlayerSample[] = [];
+  /** Last door render signature per bottom key — drives chunk mesh dirty when open state or swing hinge changes. */
+  private readonly _doorRenderSig = new Map<string, string>();
+
   constructor(
     registry: BlockRegistry,
     seed: number,
@@ -183,6 +219,7 @@ export class World {
     lootResolver: ILootResolver,
     bus?: EventBus,
     persistedBlockIdPalette?: readonly string[],
+    itemIdLayoutRevision?: number,
   ) {
     this.registry = registry;
     this.chunks = new ChunkManager();
@@ -200,6 +237,29 @@ export class World {
       persistedBlockIdPalette !== undefined && persistedBlockIdPalette.length > 0
         ? [...persistedBlockIdPalette]
         : undefined;
+    const rev = itemIdLayoutRevision ?? 0;
+    if (rev >= ITEM_ID_LAYOUT_REVISION_CURRENT) {
+      this._itemIdLayoutMigrationKind = "none";
+      this._needsItemIdLayoutMigration = false;
+    } else if (rev >= ITEM_ID_LAYOUT_REVISION_STAIRS) {
+      this._itemIdLayoutMigrationKind = "rev1Minus2";
+      this._needsItemIdLayoutMigration = true;
+    } else {
+      this._itemIdLayoutMigrationKind = "legacy";
+      this._needsItemIdLayoutMigration = true;
+    }
+  }
+
+  /** Call once after items are registered (before chunk IO that reads chest/furnace tails). */
+  setItemRegistry(registry: ItemRegistry): void {
+    this._itemRegistry = registry;
+  }
+
+  private requireItemRegistry(): ItemRegistry {
+    if (this._itemRegistry === null) {
+      throw new Error("World.setItemRegistry must be called before chest/furnace persistence");
+    }
+    return this._itemRegistry;
   }
 
   /** Seeded RNG fork for each block-break loot roll (deterministic order for a given seed). */
@@ -305,6 +365,151 @@ export class World {
     chunk.dirty = true;
   }
 
+  /**
+   * Player / remote samples for door proximity opening. Call each tick before and after
+   * local movement (see {@link refreshDoorProximityMeshDirty} after physics).
+   */
+  setDoorPlayerCollidersForProximity(samples: readonly DoorPlayerSample[]): void {
+    this._doorPlayerSamples.length = 0;
+    for (const s of samples) {
+      this._doorPlayerSamples.push(s);
+    }
+  }
+
+  /** True if this cell is part of a door and the door should not collide / shows open. */
+  isDoorEffectivelyOpen(wx: number, wy: number): boolean {
+    const def = this.getBlock(wx, wy);
+    const bottomWy = doorAnchorBottomWy(def, wy);
+    if (bottomWy === null) {
+      return false;
+    }
+    const bottomDef = this.getBlock(wx, bottomWy);
+    if (bottomDef.doorHalf !== "bottom") {
+      return false;
+    }
+    const meta = this.getMetadata(wx, bottomWy);
+    if (doorLatchedOpenFromMeta(meta)) {
+      return true;
+    }
+    return anyPlayerOverlapsDoorProximity(
+      this._doorPlayerSamples,
+      wx,
+      bottomWy,
+    );
+  }
+
+  /**
+   * Hinge side for rendering the thin door strip (proximity-open uses walk direction vs feet).
+   */
+  getDoorRenderHingeRight(wx: number, wy: number): boolean {
+    const def = this.getBlock(wx, wy);
+    const bottomWy = doorAnchorBottomWy(def, wy);
+    if (bottomWy === null) {
+      return false;
+    }
+    const bottomDef = this.getBlock(wx, bottomWy);
+    if (bottomDef.doorHalf !== "bottom") {
+      return false;
+    }
+    const meta = this.getMetadata(wx, bottomWy);
+    const metaHinge = doorHingeRightFromMeta(meta);
+    if (!anyPlayerOverlapsDoorProximity(this._doorPlayerSamples, wx, bottomWy)) {
+      return metaHinge;
+    }
+    const sample = doorProximityOverlapBest(
+      this._doorPlayerSamples,
+      wx,
+      bottomWy,
+    );
+    if (sample === null) {
+      return metaHinge;
+    }
+    return doorRenderHingeRightFromProximity(sample, wx);
+  }
+
+  /**
+   * Marks foreground chunks dirty when door effective-open or swing hinge changes, so meshes rebuild.
+   */
+  refreshDoorProximityMeshDirty(): void {
+    for (const key of this._doorBottomKeys) {
+      const comma = key.indexOf(",");
+      const wx = Number(key.slice(0, comma));
+      const bottomWy = Number(key.slice(comma + 1));
+      const effective = this.isDoorEffectivelyOpen(wx, bottomWy);
+      const hingeR = this.getDoorRenderHingeRight(wx, bottomWy);
+      const sig = `${effective ? 1 : 0}:${hingeR ? 1 : 0}`;
+      const prev = this._doorRenderSig.get(key);
+      if (prev !== sig) {
+        this._doorRenderSig.set(key, sig);
+        this.markForegroundChunkDirtyAtWorldCell(wx, bottomWy);
+        this.markForegroundChunkDirtyAtWorldCell(wx, bottomWy + 1);
+      }
+    }
+  }
+
+  private markForegroundChunkDirtyAtWorldCell(wx: number, wy: number): void {
+    const ch = this.getChunkAt(wx, wy);
+    if (ch !== undefined) {
+      ch.dirty = true;
+    }
+  }
+
+  private updateDoorBottomIndexOnFgChange(
+    wx: number,
+    wy: number,
+    oldId: number,
+    newId: number,
+  ): void {
+    if (oldId !== 0) {
+      const od = this.registry.getById(oldId);
+      if (od.doorHalf === "bottom") {
+        this._doorBottomKeys.delete(`${wx},${wy}`);
+      } else if (od.doorHalf === "top" && wy > WORLD_Y_MIN) {
+        this._doorBottomKeys.delete(`${wx},${wy - 1}`);
+      }
+    }
+    if (newId !== 0) {
+      const nd = this.registry.getById(newId);
+      if (nd.doorHalf === "bottom") {
+        this._doorBottomKeys.add(`${wx},${wy}`);
+      } else if (nd.doorHalf === "top") {
+        this._doorBottomKeys.add(`${wx},${wy - 1}`);
+      }
+    }
+  }
+
+  private clearDoorBottomKeysInChunk(cx: number, cy: number): void {
+    const x0 = cx * CHUNK_SIZE;
+    const x1 = x0 + CHUNK_SIZE - 1;
+    const y0 = cy * CHUNK_SIZE;
+    const y1 = y0 + CHUNK_SIZE - 1;
+    const del: string[] = [];
+    for (const k of this._doorBottomKeys) {
+      const comma = k.indexOf(",");
+      const wx = Number(k.slice(0, comma));
+      const wyb = Number(k.slice(comma + 1));
+      if (wx >= x0 && wx <= x1 && wyb >= y0 && wyb <= y1) {
+        del.push(k);
+      }
+    }
+    for (const k of del) {
+      this._doorBottomKeys.delete(k);
+    }
+  }
+
+  private indexDoorBottomsFromChunk(chunk: Chunk): void {
+    const { wx: ox, wy: oy } = chunkToWorldOrigin(chunk.coord);
+    for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const id = chunk.blocks[localIndex(lx, ly)]!;
+        const def = this.registry.getById(id);
+        if (def.doorHalf === "bottom") {
+          this._doorBottomKeys.add(`${ox + lx},${oy + ly}`);
+        }
+      }
+    }
+  }
+
   /** True if orthogonal neighbor has solid foreground or non-empty background (for fg placement support). */
   hasForegroundPlacementSupport(wx: number, wy: number): boolean {
     const dirs: [number, number][] = [
@@ -386,6 +591,13 @@ export class World {
           continue;
         }
         if ((chunk.metadata[localIndex(lx, ly)]! & WORLDGEN_NO_COLLIDE) !== 0) {
+          continue;
+        }
+        const def = reg.getById(id);
+        if (
+          (def.doorHalf === "bottom" || def.doorHalf === "top") &&
+          this.isDoorEffectivelyOpen(wx, wy)
+        ) {
           continue;
         }
         out.push(
@@ -699,6 +911,9 @@ export class World {
     oldMeta: number,
     newMeta: number,
   ): void {
+    if (oldId !== newId) {
+      this.updateDoorBottomIndexOnFgChange(wx, wy, oldId, newId);
+    }
     if (this.bus === undefined) {
       return;
     }
@@ -748,6 +963,30 @@ export class World {
 
     if (above.tallGrass === "top") {
       if (support.tallGrass !== "bottom") {
+        this.spawnLootForBrokenBlock(above.id, wx, wy + 1);
+        this.setBlockWithoutPlantCascade(wx, wy + 1, 0);
+      }
+      return;
+    }
+
+    if (above.doorHalf === "bottom") {
+      const okSupport =
+        support.solid && !support.replaceable && !support.water;
+      if (!okSupport) {
+        this.spawnLootForBrokenBlock(above.id, wx, wy + 1);
+        this.setBlockWithoutPlantCascade(wx, wy + 1, 0);
+        if (wy + 2 <= WORLD_Y_MAX) {
+          const topHalf = this.getBlock(wx, wy + 2);
+          if (topHalf.doorHalf === "top") {
+            this.setBlockWithoutPlantCascade(wx, wy + 2, 0);
+          }
+        }
+      }
+      return;
+    }
+
+    if (above.doorHalf === "top") {
+      if (support.doorHalf !== "bottom") {
         this.spawnLootForBrokenBlock(above.id, wx, wy + 1);
         this.setBlockWithoutPlantCascade(wx, wy + 1, 0);
       }
@@ -1041,6 +1280,7 @@ export class World {
     for (const { cx, cy } of evicted) {
       this.removeFurnaceTilesInChunk(cx, cy);
       this.removeChestTilesInChunk(cx, cy);
+      this.clearDoorBottomKeysInChunk(cx, cy);
     }
     for (const { cx } of evicted) {
       this.invalidateSkyTopStripForChunk(cx);
@@ -1079,10 +1319,20 @@ export class World {
         const chunk = this.chunkFromRecord(record);
         this.chunks.putChunk(chunk);
         if (record.furnaces !== undefined && record.furnaces.length > 0) {
-          this.applyFurnaceEntitiesForChunk(coord.cx, coord.cy, record.furnaces);
+          this.applyFurnaceEntitiesForChunk(
+            coord.cx,
+            coord.cy,
+            record.furnaces,
+            this._needsItemIdLayoutMigration,
+          );
         }
         if (record.chests !== undefined && record.chests.length > 0) {
-          this.applyChestEntitiesForChunk(coord.cx, coord.cy, record.chests);
+          this.applyChestEntitiesForChunk(
+            coord.cx,
+            coord.cy,
+            record.chests,
+            this._needsItemIdLayoutMigration,
+          );
         }
         this.invalidateSkyTopStripForChunk(coord.cx);
         loaded++;
@@ -1195,6 +1445,7 @@ export class World {
     chunk.skyLight.fill(0);
     chunk.blockLight.fill(0);
     chunk.dirty = true;
+    this.indexDoorBottomsFromChunk(chunk);
     return chunk;
   }
 
@@ -1284,6 +1535,7 @@ export class World {
         chunk = createChunk(coord);
         this.chunks.putChunk(chunk);
       }
+      this.clearDoorBottomKeysInChunk(cx, cy);
       chunk.blocks.set(blocks);
       if (background !== undefined && background.length === expected) {
         chunk.background.set(background);
@@ -1308,6 +1560,7 @@ export class World {
       } else {
         this.removeChestTilesInChunk(cx, cy);
       }
+      this.indexDoorBottomsFromChunk(chunk);
       applied.push(coord);
     }
     const affected = new Set<string>();
@@ -1461,17 +1714,30 @@ export class World {
       ) {
         continue;
       }
-      out.push(furnaceTileToPersisted(wx, wy, state));
+      out.push(furnaceTileToPersisted(wx, wy, state, this.requireItemRegistry()));
     }
     return out;
   }
 
-  applyFurnaceEntitiesForChunk(cx: number, cy: number, entries: FurnacePersistedChunk[]): void {
+  applyFurnaceEntitiesForChunk(
+    cx: number,
+    cy: number,
+    entries: FurnacePersistedChunk[],
+    migrateLegacyItemIds = false,
+  ): void {
+    const items = this.requireItemRegistry();
     this.removeFurnaceTilesInChunk(cx, cy);
     for (const raw of entries) {
-      const e = normalizeFurnacePersistedChunk(raw as unknown) ?? raw;
+      let e = normalizeFurnacePersistedChunk(raw as unknown) ?? raw;
+      if (migrateLegacyItemIds && this._needsItemIdLayoutMigration) {
+        if (this._itemIdLayoutMigrationKind === "legacy") {
+          e = migrateFurnacePersistedChunk(e);
+        } else if (this._itemIdLayoutMigrationKind === "rev1Minus2") {
+          e = migrateFurnacePersistedChunkFromRevision1(e);
+        }
+      }
       const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
-      this._furnaceTiles.set(furnaceCellKey(wx, wy), persistedToFurnaceTile(e));
+      this._furnaceTiles.set(furnaceCellKey(wx, wy), persistedToFurnaceTile(e, items));
     }
   }
 
@@ -1544,7 +1810,10 @@ export class World {
       return;
     }
     const norm = normalizeFurnacePersistedChunk(data as unknown) ?? data;
-    this._furnaceTiles.set(furnaceCellKey(wx, wy), persistedToFurnaceTile(norm));
+    this._furnaceTiles.set(
+      furnaceCellKey(wx, wy),
+      persistedToFurnaceTile(norm, this.requireItemRegistry()),
+    );
   }
 
   setChestBlockId(id: number | null): void {
@@ -1636,17 +1905,30 @@ export class World {
       ) {
         continue;
       }
-      out.push(chestTileToPersisted(wx, wy, state));
+      out.push(chestTileToPersisted(wx, wy, state, this.requireItemRegistry()));
     }
     return out;
   }
 
-  applyChestEntitiesForChunk(cx: number, cy: number, entries: ChestPersistedChunk[]): void {
+  applyChestEntitiesForChunk(
+    cx: number,
+    cy: number,
+    entries: ChestPersistedChunk[],
+    migrateLegacyItemIds = false,
+  ): void {
+    const items = this.requireItemRegistry();
     this.removeChestTilesInChunk(cx, cy);
     for (const raw of entries) {
-      const e = normalizeChestPersistedChunk(raw as unknown) ?? raw;
+      let e = normalizeChestPersistedChunk(raw as unknown) ?? raw;
+      if (migrateLegacyItemIds && this._needsItemIdLayoutMigration) {
+        if (this._itemIdLayoutMigrationKind === "legacy") {
+          e = migrateChestPersistedChunk(e);
+        } else if (this._itemIdLayoutMigrationKind === "rev1Minus2") {
+          e = migrateChestPersistedChunkFromRevision1(e);
+        }
+      }
       const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
-      this._chestTiles.set(chestCellKey(wx, wy), persistedToChestTile(e));
+      this._chestTiles.set(chestCellKey(wx, wy), persistedToChestTile(e, items));
       this.ensureChestTileAt(wx, wy);
     }
   }
@@ -1685,7 +1967,7 @@ export class World {
       return;
     }
     const norm = normalizeChestPersistedChunk(data as unknown) ?? data;
-    this._chestTiles.set(chestCellKey(wx, wy), persistedToChestTile(norm));
+    this._chestTiles.set(chestCellKey(wx, wy), persistedToChestTile(norm, this.requireItemRegistry()));
     this.ensureChestTileAt(wx, wy);
   }
 

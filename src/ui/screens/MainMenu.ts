@@ -2850,6 +2850,46 @@ function injectStyles(base: string): void {
       min-width: min(200px, 100%);
       margin-bottom: 0;
     }
+    /* Short viewports (phone landscape): scroll nav + shrink chrome so buttons stay reachable */
+    @media (max-height: 520px), ((pointer: coarse) and (orientation: landscape) and (max-height: 640px)) {
+      .mm-root {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .mm-body {
+        overflow-y: visible;
+        padding-top: max(0.35rem, env(safe-area-inset-top, 0px));
+        padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+      }
+      .mm-nav {
+        max-height: min(100vh - 4.5rem, 520px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        width: min(220px, 42vw);
+        min-width: 0;
+        padding: 10px 12px;
+      }
+      .mm-brand-logo {
+        max-height: min(44px, 12vh);
+        width: auto;
+      }
+      .mm-brand-title {
+        font-size: clamp(22px, 4vh, 36px);
+      }
+      .mm-nav-btn {
+        padding: 10px 12px;
+        font-size: 16px;
+        min-height: 44px;
+      }
+      .mm-topbar {
+        padding: max(0.35rem, env(safe-area-inset-top, 0px)) 1rem 0;
+        flex-shrink: 0;
+      }
+      .mm-content-home {
+        justify-content: flex-start;
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .mm-nav-btn, .mm-btn, .mm-discord, .mm-world-row { transition: none; }
       .mm-content.mm-content-exit,

@@ -1,7 +1,7 @@
-import type { ItemId } from "../../core/itemDefinition";
+import type { ItemStack } from "../../core/itemDefinition";
 import { CHEST_DOUBLE_SLOTS, CHEST_SINGLE_SLOTS } from "../../core/constants";
 
-export type ChestStack = { itemId: ItemId; count: number } | null;
+export type ChestStack = ItemStack | null;
 
 export type ChestTileState = {
   readonly slots: ChestStack[];
@@ -25,7 +25,12 @@ export function chestTilesEqual(a: ChestTileState, b: ChestTileState): boolean {
     if (x === null && y === null) {
       continue;
     }
-    if (x === null || y === null || x.itemId !== y.itemId || x.count !== y.count) {
+    if (x === null || y === null) {
+      return false;
+    }
+    const dx = x.damage ?? 0;
+    const dy = y.damage ?? 0;
+    if (x.itemId !== y.itemId || x.count !== y.count || dx !== dy) {
       return false;
     }
   }

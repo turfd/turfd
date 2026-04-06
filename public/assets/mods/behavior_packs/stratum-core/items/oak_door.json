@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:oak_door"
+    },
+    "components": {
+      "stratum:display_name": "Oak Door",
+      "stratum:texture_key": "oak_door",
+      "stratum:places_block": "stratum:oak_door",
+      "stratum:numeric_id": 88
+    }
+  }
+}

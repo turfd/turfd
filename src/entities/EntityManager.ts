@@ -60,13 +60,43 @@ import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 import type { EventBus } from "../core/EventBus";
 import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
+import { isTouchUiMode } from "../input/touchUiMode";
 import type { ItemId } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { AtlasLoader } from "../renderer/AtlasLoader";
 import type { RenderPipeline } from "../renderer/RenderPipeline";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { World } from "../world/World";
+import type { DoorPlayerSample } from "../world/door/doorWorld";
+import { createAABB, type AABB } from "./physics/AABB";
 import { Player } from "./Player";
+
+function feetCollisionAABBForDoors(pos: { x: number; y: number }): AABB {
+  const x = pos.x - PLAYER_WIDTH * 0.5;
+  const y = -(pos.y + PLAYER_HEIGHT);
+  return createAABB(x, y, PLAYER_WIDTH, PLAYER_HEIGHT);
+}
+
+function doorSamplesForWorld(
+  player: Player,
+  world: World,
+): DoorPlayerSample[] {
+  const s = player.state;
+  const out: DoorPlayerSample[] = [
+    {
+      aabb: feetCollisionAABBForDoors(s.position),
+      vx: s.velocity.x,
+    },
+  ];
+  for (const rp of world.getRemotePlayers().values()) {
+    const f = rp.getAuthorityFeet();
+    out.push({
+      aabb: feetCollisionAABBForDoors({ x: f.x, y: f.y }),
+      vx: rp.velocityX,
+    });
+  }
+  return out;
+}
 import { z } from "zod";
 
 function sliceAtlasFrames(
@@ -429,7 +459,14 @@ export class EntityManager {
   }
 
   update(dt: number): void {
+    this.world.setDoorPlayerCollidersForProximity(
+      doorSamplesForWorld(this.player, this.world),
+    );
     this.player.update(dt, this.input, this.world);
+    this.world.setDoorPlayerCollidersForProximity(
+      doorSamplesForWorld(this.player, this.world),
+    );
+    this.world.refreshDoorProximityMeshDirty();
   }
 
   /** Sync placeholder rects to player + remote player world positions (call each render). */
@@ -447,9 +484,9 @@ export class EntityManager {
         const moving =
           s.onGround && Math.abs(vx) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD;
         const sprinting = moving && this.input.isDown("sprint");
+        const ax = this.input.getCombinedHorizontalMoveAxis();
         const moveIntent =
-          (this.input.isDown("right") ? 1 : 0) -
-          (this.input.isDown("left") ? 1 : 0);
+          ax > 0.12 ? 1 : ax < -0.12 ? -1 : 0;
         const miningBreak =
           s.breakTarget !== null &&
           s.breakProgress < 1 &&
@@ -696,6 +733,15 @@ export class EntityManager {
       return;
     }
     if (this.input.isWorldInputBlocked()) {
+      aim.clear();
+      const lineHidden = this.aimLineSprite;
+      if (lineHidden !== null) {
+        lineHidden.visible = false;
+      }
+      return;
+    }
+
+    if (isTouchUiMode()) {
       aim.clear();
       const lineHidden = this.aimLineSprite;
       if (lineHidden !== null) {

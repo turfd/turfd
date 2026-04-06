@@ -9,7 +9,7 @@
       "stratum:texture_key": "water_bucket",
       "stratum:max_stack": 1,
       "stratum:places_block": "stratum:water",
-      "stratum:numeric_id": 51
+      "stratum:numeric_id": 57
     }
   }
 }

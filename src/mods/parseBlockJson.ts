@@ -37,6 +37,7 @@ const stratumBlockComponentsSchema = z
     "stratum:random_flip_x": z.boolean().optional(),
     "stratum:replaceable": z.boolean().optional(),
     "stratum:tall_grass": z.enum(["none", "bottom", "top"]).optional(),
+    "stratum:door_half": z.enum(["bottom", "top"]).optional(),
     "stratum:plant_foot_offset_px": z.number().int().min(0).max(15).optional(),
     /** Whole-pixel vertical shift for plant quads after foot crop (see {@link BlockDefinitionBase.plantRenderOffsetYPx}). */
     "stratum:plant_render_offset_y_px": z.number().int().min(-8).max(8).optional(),
@@ -45,6 +46,7 @@ const stratumBlockComponentsSchema = z
     "stratum:tags": z.array(z.string()).optional(),
     /** Furnace: burn time per block item (`burn_seconds` per consumed unit). */
     "stratum:fuel": z.object({ burn_seconds: z.number().positive() }).strict().optional(),
+    "stratum:stair": z.boolean().optional(),
     /** Stable save/wire id; must be dense 0..N-1 with air = 0 (`BlockRegistry.registerInOrder`). */
     "stratum:numeric_id": z.number().int().min(0).max(65535),
   })
@@ -91,11 +93,13 @@ export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
     material,
     replaceable: c["stratum:replaceable"] ?? false,
     tallGrass: c["stratum:tall_grass"] ?? "none",
+    doorHalf: c["stratum:door_half"] ?? "none",
     plantFootOffsetPx: c["stratum:plant_foot_offset_px"],
     plantRenderOffsetYPx: c["stratum:plant_render_offset_y_px"],
     windSwayMaxPx: c["stratum:wind_sway_max_px"],
     tags: c["stratum:tags"],
     fuelBurnSeconds: c["stratum:fuel"]?.burn_seconds,
+    ...(c["stratum:stair"] === true ? { isStair: true as const } : {}),
     numericId: c["stratum:numeric_id"],
   };
 }

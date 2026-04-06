@@ -55,6 +55,8 @@ export interface BlockDefinitionBase {
   replaceable: boolean;
   /** Tall-grass pair: bottom removes top when broken; top is the upper half. */
   tallGrass: "none" | "bottom" | "top";
+  /** Two-tall door halves; paired like tall grass (`stratum:door_half`). */
+  doorHalf: "none" | "bottom" | "top";
   /**
    * Pixels cropped from the top of the cell when drawing (0–15). Bottom of the quad stays
    * on the block’s lower edge so short plants don’t visually float above the ground.
@@ -72,6 +74,8 @@ export interface BlockDefinitionBase {
   windSwayMaxPx?: number;
   /** Crafting tags (e.g. `"stratum:logs"`, `"stratum:planks"`). */
   tags?: readonly string[];
+  /** Corner-cut stair; orientation in chunk metadata bits 6–7 (`getStairShape`). */
+  isStair?: boolean;
   /**
    * Copied to the auto-registered block item: furnace burn seconds per item (`stratum:fuel` in block JSON).
    */

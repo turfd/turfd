@@ -8,12 +8,15 @@ import {
 } from "../../world/water/waterMetadata";
 import type { BlockDefinition } from "../../world/blocks/BlockDefinition";
 import type { BlockRegistry } from "../../world/blocks/BlockRegistry";
+import { getStairShape } from "../../world/blocks/stairMetadata";
 import type { Chunk } from "../../world/chunk/Chunk";
 import { getBlock } from "../../world/chunk/Chunk";
 import { chunkToWorldOrigin, localIndex } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
 import type { AtlasLoader } from "../AtlasLoader";
 import { chestVisualRole } from "../../world/chest/chestVisual";
+import { doorHingeRightFromMeta } from "../../world/door/doorMetadata";
+import { DOOR_PANEL_WIDTH_PX } from "../../world/door/doorWorld";
 
 const AIR_ID = 0;
 
@@ -24,6 +27,10 @@ export type TileMeshBuildOptions = {
   /** When set with {@link sampleBlockId}, paired chests use full `chest_double` per tile (east flipped). */
   chestBlockId: number | null;
   sampleBlockId: BlockIdWorldSampler;
+  /** When set, door tiles use open UVs / walk-through state from live player proximity + latch. */
+  isDoorEffectivelyOpen?: (wx: number, wy: number) => boolean;
+  /** When set, thin door strip is placed on the hinge side implied by walk (proximity) vs meta. */
+  getDoorRenderHingeRight?: (wx: number, wy: number) => boolean;
 };
 
 /**
@@ -134,6 +141,12 @@ type BuiltTileGeometry = {
 
 /** One or two quads per cell when a ground deadband splits wind geometry. */
 function windForegroundQuadsForCell(def: BlockDefinition, ly: number): number {
+  if (def.isStair === true) {
+    return 2;
+  }
+  if (def.doorHalf !== "none") {
+    return 1;
+  }
   const maxWind = def.windSwayMaxPx ?? 0;
   if (maxWind <= 0 || def.tallGrass === "top") {
     return 1;
@@ -255,6 +268,145 @@ function buildGeometryFromCells(
       const px = lx * BLOCK_SIZE;
       const py = -(ly + 1) * BLOCK_SIZE;
       const b = BLOCK_SIZE;
+
+      if (def.isStair === true) {
+        const meta = chunk.metadata[localIndex(lx, ly)]!;
+        const shape = getStairShape(meta);
+        const uAt = (xOff: number) => leftU + (xOff / b) * (rightU - leftU);
+        const vAt = (yOff: number) => v0 + (yOff / b) * (v1 - v0);
+        const pushFace = (
+          x0: number,
+          y0: number,
+          x1: number,
+          y1: number,
+        ): void => {
+          const ua = uAt(x0 - px);
+          const ub = uAt(x1 - px);
+          const va = vAt(y0 - py);
+          const vb = vAt(y1 - py);
+          positions[pi] = x0;
+          positions[pi + 1] = y0;
+          uvs[pi] = ua;
+          uvs[pi + 1] = va;
+          pi += 2;
+          positions[pi] = x1;
+          positions[pi + 1] = y0;
+          uvs[pi] = ub;
+          uvs[pi + 1] = va;
+          pi += 2;
+          positions[pi] = x0;
+          positions[pi + 1] = y1;
+          uvs[pi] = ua;
+          uvs[pi + 1] = vb;
+          pi += 2;
+          positions[pi] = x1;
+          positions[pi + 1] = y1;
+          uvs[pi] = ub;
+          uvs[pi + 1] = vb;
+          pi += 2;
+          const b0 = vertBase;
+          indices[ii] = b0;
+          indices[ii + 1] = b0 + 1;
+          indices[ii + 2] = b0 + 2;
+          indices[ii + 3] = b0 + 1;
+          indices[ii + 4] = b0 + 3;
+          indices[ii + 5] = b0 + 2;
+          ii += 6;
+          vertBase += 4;
+        };
+        const h = b * 0.5;
+        if (shape === 0) {
+          pushFace(px, py + h, px + b, py + b);
+          pushFace(px + h, py, px + b, py + h);
+        } else if (shape === 1) {
+          pushFace(px, py + h, px + b, py + b);
+          pushFace(px, py, px + h, py + h);
+        } else if (shape === 2) {
+          pushFace(px, py, px + b, py + h);
+          pushFace(px + h, py + h, px + b, py + b);
+        } else {
+          pushFace(px, py, px + b, py + h);
+          pushFace(px, py + h, px + h, py + b);
+        }
+        continue;
+      }
+
+      if (def.doorHalf === "bottom" || def.doorHalf === "top") {
+        const meta = chunk.metadata[localIndex(lx, ly)]!;
+        const hingeRight =
+          opts?.getDoorRenderHingeRight !== undefined
+            ? opts.getDoorRenderHingeRight(worldX, worldY)
+            : doorHingeRightFromMeta(meta);
+        const open =
+          opts?.isDoorEffectivelyOpen !== undefined &&
+          opts.isDoorEffectivelyOpen(worldX, worldY);
+
+        const vSpan = v1 - v0;
+        const vMid = v0 + vSpan * 0.5;
+        const vTopUv = def.doorHalf === "bottom" ? vMid : v0;
+        const vBotUv = def.doorHalf === "bottom" ? v1 : vMid;
+
+        const px = lx * BLOCK_SIZE;
+        const py = -(ly + 1) * BLOCK_SIZE;
+
+        let uLo: number;
+        let uHi: number;
+        let quadLeft: number;
+        let panelW: number;
+        if (open) {
+          if (hingeRight) {
+            uLo = rightU;
+            uHi = leftU;
+          } else {
+            uLo = leftU;
+            uHi = rightU;
+          }
+          quadLeft = px;
+          panelW = BLOCK_SIZE;
+        } else {
+          const stripSourceW = Math.min(DOOR_PANEL_WIDTH_PX, fr.width);
+          const srcXStrip = fr.x + fr.width - stripSourceW;
+          uLo = srcXStrip / sw;
+          uHi = (srcXStrip + stripSourceW) / sw;
+          panelW = DOOR_PANEL_WIDTH_PX;
+          quadLeft = hingeRight ? px + (BLOCK_SIZE - panelW) : px;
+        }
+        const yT = py;
+        const yB = py + BLOCK_SIZE;
+
+        positions[pi] = quadLeft;
+        positions[pi + 1] = yT;
+        uvs[pi] = uLo;
+        uvs[pi + 1] = vTopUv;
+        pi += 2;
+        positions[pi] = quadLeft + panelW;
+        positions[pi + 1] = yT;
+        uvs[pi] = uHi;
+        uvs[pi + 1] = vTopUv;
+        pi += 2;
+        positions[pi] = quadLeft;
+        positions[pi + 1] = yB;
+        uvs[pi] = uLo;
+        uvs[pi + 1] = vBotUv;
+        pi += 2;
+        positions[pi] = quadLeft + panelW;
+        positions[pi + 1] = yB;
+        uvs[pi] = uHi;
+        uvs[pi + 1] = vBotUv;
+        pi += 2;
+
+        const b0 = vertBase;
+        indices[ii] = b0;
+        indices[ii + 1] = b0 + 1;
+        indices[ii + 2] = b0 + 2;
+        indices[ii + 3] = b0 + 1;
+        indices[ii + 4] = b0 + 3;
+        indices[ii + 5] = b0 + 2;
+        ii += 6;
+        vertBase += 4;
+        continue;
+      }
+
       let foot = Math.min(def.plantFootOffsetPx ?? 0, b - 1);
       if (def.identifier === "stratum:water") {
         const meta = chunk.metadata[localIndex(lx, ly)]!;

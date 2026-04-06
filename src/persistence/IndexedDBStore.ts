@@ -73,6 +73,11 @@ export type WorldMetadata = {
    * Used to remap chunk cells when `stratum:numeric_id` assignments change.
    */
   blockIdPalette?: readonly string[];
+  /**
+   * Item id layout generation for tile-entity persistence (chest/furnace numeric ids).
+   * Absent or less than 1: load may remap legacy standalone ids 50–81 by +6 (stair block id insert).
+   */
+  itemIdLayoutRevision?: number;
   /** Host-only: last feet position when each multiplayer guest left (`id:…` / `name:…` keys). */
   multiplayerLastPositions?: Record<string, { x: number; y: number }>;
 };

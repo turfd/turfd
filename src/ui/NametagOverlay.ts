@@ -52,15 +52,17 @@ export class NametagOverlay {
    * on the mount; using `getBoundingClientRect()` math (`cr - mr`) drifts on some DPR / fractional
    * layouts while `100%` stays aligned with the same containing block as the canvas.
    */
-  syncLayout(_mount: HTMLElement, _canvas: HTMLCanvasElement): void {
+  syncLayout(mount: HTMLElement, canvas: HTMLCanvasElement): void {
     const layer = this.layer;
     if (layer === null) {
       return;
     }
-    layer.style.left = "0";
-    layer.style.top = "0";
-    layer.style.width = "100%";
-    layer.style.height = "100%";
+    const mr = mount.getBoundingClientRect();
+    const cr = canvas.getBoundingClientRect();
+    layer.style.left = `${cr.left - mr.left}px`;
+    layer.style.top = `${cr.top - mr.top}px`;
+    layer.style.width = `${cr.width}px`;
+    layer.style.height = `${cr.height}px`;
     layer.style.boxSizing = "border-box";
   }
 
@@ -94,15 +96,6 @@ export class NametagOverlay {
     const cw = Math.max(1, canvas.width);
     const ch = Math.max(1, canvas.height);
     const cr = canvas.getBoundingClientRect();
-    // Same mapping as InputManager (buffer ↔ CSS via canvas rect).
-    const cssPerBufX = cr.width / cw;
-    const cssPerBufY = cr.height / ch;
-    const bufPerCssX = cw / Math.max(cr.width, 1e-6);
-    const bufPerCssY = ch / Math.max(cr.height, 1e-6);
-    const uniform =
-      Math.abs(bufPerCssX - bufPerCssY) < 1e-3
-        ? (cssPerBufX + cssPerBufY) * 0.5
-        : null;
 
     const placeTag = (id: string, text: string, worldX: number, worldY: number): void => {
       let el = this.tags.get(id);
@@ -131,8 +124,8 @@ export class NametagOverlay {
       const headX = worldX;
       const headY = -worldY - PLAYER_HEIGHT;
       const { x: sx, y: sy } = camera.worldToScreen(headX, headY);
-      const px = uniform !== null ? sx * uniform : sx * cssPerBufX;
-      const py = uniform !== null ? sy * uniform : sy * cssPerBufY;
+      const px = (sx / cw) * cr.width;
+      const py = (sy / ch) * cr.height;
       el.style.left = `${px}px`;
       el.style.top = `${py}px`;
     };

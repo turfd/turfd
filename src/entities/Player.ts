@@ -36,7 +36,15 @@ import type { ItemRegistry } from "../items/ItemRegistry";
 import { PlayerInventory } from "../items/PlayerInventory";
 import type { BlockDefinition } from "../world/blocks/BlockDefinition";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
+import {
+  computePlacedStairShape,
+  withStairShape,
+} from "../world/blocks/stairMetadata";
 import type { World } from "../world/World";
+import {
+  packDoorMetadata,
+  toggleDoorLatchInMeta,
+} from "../world/door/doorMetadata";
 import {
   isWaterSourceMetadata,
   withWaterFlowLevel,
@@ -70,6 +78,8 @@ const TARGET_JUMP_HEIGHT_PX = TARGET_JUMP_HEIGHT_BLOCKS * BLOCK_SIZE;
 const JUMP_VELOCITY = -Math.sqrt(2 * GRAVITY * TARGET_JUMP_HEIGHT_PX);
 
 const GROUND_PROBE_HEIGHT = 2;
+/** When walking into a stair lip, lift by this much then re-sweep so steps can be walked without jumping. */
+const STAIR_STEP_UP_PX = BLOCK_SIZE * 0.5;
 
 const HOTBAR_KEYS: [InputAction, number][] = [
   ["hotbar1", 0],
@@ -398,6 +408,13 @@ export class Player {
     } satisfies GameEvent);
   }
 
+  /** Select hotbar slot 0..HOTBAR_SIZE-1 (e.g. touch hotbar tap). */
+  selectHotbarSlot(slot: number): void {
+    const s =
+      ((Math.floor(slot) % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
+    this.state.hotbarSlot = s;
+  }
+
   update(dt: number, input: InputManager, world: World): void {
     const { state } = this;
 
@@ -422,13 +439,7 @@ export class Player {
     state.coyoteTimeRemaining = Math.max(0, state.coyoteTimeRemaining - dt);
     state.jumpBufferRemaining = Math.max(0, state.jumpBufferRemaining - dt);
 
-    let moveInput = 0;
-    if (input.isDown("left")) {
-      moveInput -= 1;
-    }
-    if (input.isDown("right")) {
-      moveInput += 1;
-    }
+    const moveInput = input.getCombinedHorizontalMoveAxis();
     const sprintHeld = input.isDown("sprint");
     const inWater = playerAabbOverlapsWater(world, state.position);
     const waterMult = inWater ? PLAYER_WATER_SPEED_MULT : 1;
@@ -441,7 +452,7 @@ export class Player {
     const targetVx = moveInput * speed;
     const accel = state.onGround ? GROUND_ACCEL : AIR_ACCEL;
     const decel = state.onGround ? GROUND_DECEL : AIR_DECEL;
-    const maxDelta = (moveInput !== 0 ? accel : decel) * dt;
+    const maxDelta = (Math.abs(moveInput) > 1e-4 ? accel : decel) * dt;
     state.velocity.x = approach(state.velocity.x, targetVx, maxDelta);
 
     if (input.isJustPressed("jump")) {
@@ -471,15 +482,37 @@ export class Player {
     const dy = state.velocity.y * dt;
 
     const pad = 4;
+    const stepUpMargin = BLOCK_SIZE;
     const query = createAABB(
       Math.min(mover.x, mover.x + dx) - pad,
-      Math.min(mover.y, mover.y + dy) - pad,
+      Math.min(mover.y, mover.y + dy) - pad - stepUpMargin,
       Math.abs(dx) + mover.width + pad * 2,
-      Math.abs(dy) + mover.height + pad * 2,
+      Math.abs(dy) + mover.height + pad * 2 + stepUpMargin,
     );
     getSolidAABBs(world, query, this.solidScratch);
 
-    const { hitY } = sweepAABB(mover, dx, dy, this.solidScratch);
+    const startMover = { ...mover };
+    let { hitX, hitY } = sweepAABB(mover, dx, dy, this.solidScratch);
+
+    if (
+      hitX &&
+      wasOnGround &&
+      !inWater &&
+      Math.abs(dx) > 1e-4
+    ) {
+      const stepHeights = [STAIR_STEP_UP_PX, BLOCK_SIZE];
+      for (const stepUp of stepHeights) {
+        const retry = { ...startMover };
+        sweepAABB(retry, 0, -stepUp, this.solidScratch);
+        const r2 = sweepAABB(retry, dx, dy, this.solidScratch);
+        if (!r2.hitX) {
+          mover = retry;
+          hitX = r2.hitX;
+          hitY = r2.hitY;
+          break;
+        }
+      }
+    }
 
     const feet = screenAABBTofeet(mover);
     state.position.x = feet.x;
@@ -539,9 +572,9 @@ export class Player {
       state.velocity.y = 0;
     }
 
-    if (moveInput > 0) {
+    if (moveInput > 0.08) {
       state.facingRight = true;
-    } else if (moveInput < 0) {
+    } else if (moveInput < -0.08) {
       state.facingRight = false;
     } else if (Math.abs(state.velocity.x) >= PLAYER_MOVE_ANIM_VEL_THRESHOLD) {
       state.facingRight = state.velocity.x > 0;
@@ -666,6 +699,28 @@ export class Player {
                 if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
                 world.setBlock(wx, wy, 0);
               }
+            } else if (def.doorHalf === "bottom" || def.doorHalf === "top") {
+              const bottomWy = def.doorHalf === "bottom" ? wy : wy - 1;
+              const topWy = bottomWy + 1;
+              const bottomOk =
+                bottomWy >= WORLD_Y_MIN && bottomWy <= WORLD_Y_MAX;
+              const topOk = topWy >= WORLD_Y_MIN && topWy <= WORLD_Y_MAX;
+              const bottomCell = bottomOk ? world.getBlock(wx, bottomWy) : null;
+              const topCell = topOk ? world.getBlock(wx, topWy) : null;
+              const fullDoor =
+                bottomCell !== null &&
+                bottomCell.doorHalf === "bottom" &&
+                topCell !== null &&
+                topCell.doorHalf === "top";
+
+              if (fullDoor && bottomCell !== null) {
+                if (dropsLoot) world.spawnLootForBrokenBlock(bottomCell.id, wx, bottomWy);
+                world.setBlock(wx, topWy, 0);
+                world.setBlock(wx, bottomWy, 0);
+              } else {
+                if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
+                world.setBlock(wx, wy, 0);
+              }
             } else {
               if (def.identifier === "stratum:furnace") {
                 world.spawnFurnaceItemDropsAt(wx, wy);
@@ -732,6 +787,20 @@ export class Player {
             wx,
             wy,
           } satisfies GameEvent);
+        } else if (cell.doorHalf === "bottom" || cell.doorHalf === "top") {
+          const bottomWy = cell.doorHalf === "bottom" ? wy : wy - 1;
+          const b = world.getBlock(wx, bottomWy);
+          if (b.doorHalf === "bottom" && bottomWy + 1 <= WORLD_Y_MAX) {
+            const t = world.getBlock(wx, bottomWy + 1);
+            if (t.doorHalf === "top") {
+              const m = world.getMetadata(wx, bottomWy);
+              const newM = toggleDoorLatchInMeta(m);
+              world.setBlock(wx, bottomWy, b.id, { cellMetadata: newM });
+              world.setBlock(wx, bottomWy + 1, t.id, { cellMetadata: newM });
+              this.startHandSwingVisual();
+              this.audio.playSfx(getPlaceSound("wood"), { pitchVariance: 25 });
+            }
+          }
         }
       } else if (!input.isWorldInputBlocked()) {
       let placeHandled = false;
@@ -921,6 +990,91 @@ export class Player {
                   }
                 }
               }
+            } else if (placedDef.doorHalf === "bottom") {
+              const surfaceBelow = world.getBlock(wx, wy - 1);
+              const surfaceOk =
+                surfaceBelow.solid &&
+                !surfaceBelow.replaceable &&
+                !surfaceBelow.water;
+              if (!surfaceOk) {
+                // door needs a solid block under the lower half
+              } else if (!world.hasForegroundPlacementSupport(wx, wy)) {
+                //
+              } else {
+                const topCell = world.getBlock(wx, wy + 1);
+                if (topCell.solid && !topCell.replaceable) {
+                  //
+                } else {
+                  const aabbLower = createAABB(
+                    wx * BLOCK_SIZE,
+                    -(wy + 1) * BLOCK_SIZE,
+                    BLOCK_SIZE,
+                    BLOCK_SIZE,
+                  );
+                  const aabbUpper = createAABB(
+                    wx * BLOCK_SIZE,
+                    -(wy + 2) * BLOCK_SIZE,
+                    BLOCK_SIZE,
+                    BLOCK_SIZE,
+                  );
+                  const playerAabb = feetToScreenAABB(state.position);
+                  let overlapsAnyPlayer =
+                    overlaps(playerAabb, aabbLower) ||
+                    overlaps(playerAabb, aabbUpper);
+                  if (!overlapsAnyPlayer) {
+                    for (const remote of world.getRemotePlayers().values()) {
+                      const feet = remote.getAuthorityFeet();
+                      const remoteAabb = feetToScreenAABB({ x: feet.x, y: feet.y });
+                      if (
+                        overlaps(remoteAabb, aabbLower) ||
+                        overlaps(remoteAabb, aabbUpper)
+                      ) {
+                        overlapsAnyPlayer = true;
+                        break;
+                      }
+                    }
+                  }
+                  if (
+                    !overlapsAnyPlayer &&
+                    world.canPlaceForegroundWithCactusRules(wx, wy, placesBlockId)
+                  ) {
+                    const topId = this.registry.getByIdentifier(
+                      "stratum:oak_door_top",
+                    ).id;
+                    if (
+                      !world.canPlaceForegroundWithCactusRules(wx, wy + 1, topId)
+                    ) {
+                      //
+                    } else {
+                      const cellLeft = wx * BLOCK_SIZE;
+                      const cellRight = (wx + 1) * BLOCK_SIZE;
+                      const px = state.position.x;
+                      const hingeRight =
+                        Math.abs(px - cellRight) <= Math.abs(px - cellLeft);
+                      const doorMeta = packDoorMetadata(0, hingeRight, false);
+                      if (!world.setBlock(wx, wy, placesBlockId, {
+                        cellMetadata: doorMeta,
+                      })) {
+                        //
+                      } else if (
+                        !world.setBlock(wx, wy + 1, topId, {
+                          cellMetadata: doorMeta,
+                        })
+                      ) {
+                        world.setBlock(wx, wy, 0);
+                      } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                        world.setBlock(wx, wy, 0);
+                        world.setBlock(wx, wy + 1, 0);
+                      } else {
+                        this.startHandSwingVisual();
+                        this.audio.playSfx(getPlaceSound(placedDef.material), {
+                          pitchVariance: 30,
+                        });
+                      }
+                    }
+                  }
+                }
+              }
             } else {
               const hasSupport = world.hasForegroundPlacementSupport(wx, wy);
               if (hasSupport) {
@@ -948,13 +1102,24 @@ export class Player {
                 ) {
                   const placedDefForSfx = this.registry.getById(placesBlockId);
                   const waterBlockId = world.getWaterBlockId();
+                  const stairMeta =
+                    placedDefForSfx.isStair === true
+                      ? withStairShape(
+                          0,
+                          computePlacedStairShape(wx, state.position.x),
+                        )
+                      : undefined;
                   const placedCellOk =
                     placesBlockId === waterBlockId &&
                     itemDef?.key === "stratum:water_bucket"
                       ? world.setBlock(wx, wy, waterBlockId, {
                           cellMetadata: withWaterFlowLevel(0, 0),
                         })
-                      : world.setBlock(wx, wy, placesBlockId);
+                      : stairMeta !== undefined
+                        ? world.setBlock(wx, wy, placesBlockId, {
+                            cellMetadata: stairMeta,
+                          })
+                        : world.setBlock(wx, wy, placesBlockId);
                   if (!placedCellOk) {
                     // vertical bounds
                   } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
@@ -979,6 +1144,22 @@ export class Player {
                   }
                 }
               }
+            }
+          }
+        }
+      } else if (cell.doorHalf === "bottom" || cell.doorHalf === "top") {
+        if (input.isJustPressed("place")) {
+          const bottomWy = cell.doorHalf === "bottom" ? wy : wy - 1;
+          const b = world.getBlock(wx, bottomWy);
+          if (b.doorHalf === "bottom" && bottomWy + 1 <= WORLD_Y_MAX) {
+            const t = world.getBlock(wx, bottomWy + 1);
+            if (t.doorHalf === "top") {
+              const m = world.getMetadata(wx, bottomWy);
+              const newM = toggleDoorLatchInMeta(m);
+              world.setBlock(wx, bottomWy, b.id, { cellMetadata: newM });
+              world.setBlock(wx, bottomWy + 1, t.id, { cellMetadata: newM });
+              this.startHandSwingVisual();
+              this.audio.playSfx(getPlaceSound("wood"), { pitchVariance: 25 });
             }
           }
         }

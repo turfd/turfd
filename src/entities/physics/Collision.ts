@@ -2,6 +2,10 @@
  * Collidable block AABBs in screen space ({@link BlockDefinitionBase.collides}).
  */
 import { BLOCK_SIZE, WORLDGEN_NO_COLLIDE } from "../../core/constants";
+import {
+  getStairShape,
+  stairSolidRectsInCellPixels,
+} from "../../world/blocks/stairMetadata";
 import { getBlock } from "../../world/chunk/Chunk";
 import { localIndex, worldToLocalBlock } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
@@ -34,7 +38,25 @@ export function getSolidAABBs(
       if (!reg.collides(id)) {
         continue;
       }
-      if ((chunk.metadata[localIndex(lx, ly)]! & WORLDGEN_NO_COLLIDE) !== 0) {
+      const meta = chunk.metadata[localIndex(lx, ly)]!;
+      if ((meta & WORLDGEN_NO_COLLIDE) !== 0) {
+        continue;
+      }
+      const def = reg.getById(id);
+      if (def.isStair === true) {
+        const topY = -(wy + 1) * BLOCK_SIZE;
+        const shape = getStairShape(meta);
+        for (const [rx, ry, rw, rh] of stairSolidRectsInCellPixels(shape)) {
+          out.push(
+            createAABB(wx * BLOCK_SIZE + rx, topY + ry, rw, rh),
+          );
+        }
+        continue;
+      }
+      if (
+        (def.doorHalf === "bottom" || def.doorHalf === "top") &&
+        world.isDoorEffectivelyOpen(wx, wy)
+      ) {
         continue;
       }
       out.push(

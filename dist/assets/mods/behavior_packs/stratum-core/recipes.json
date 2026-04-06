@@ -280,6 +280,48 @@
         { "itemId": "stratum:stick", "count": 2 }
       ],
       "output": { "itemId": "stratum:diamond_hoe", "count": 1 }
+    },
+    {
+      "id": "stratum:oak_plank_stairs_from_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:oak_planks", "count": 6 }],
+      "output": { "itemId": "stratum:oak_plank_stairs", "count": 4 }
+    },
+    {
+      "id": "stratum:spruce_plank_stairs_from_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:spruce_planks", "count": 6 }],
+      "output": { "itemId": "stratum:spruce_plank_stairs", "count": 4 }
+    },
+    {
+      "id": "stratum:birch_plank_stairs_from_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:birch_planks", "count": 6 }],
+      "output": { "itemId": "stratum:birch_plank_stairs", "count": 4 }
+    },
+    {
+      "id": "stratum:oak_log_stairs_from_logs",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:oak_log", "count": 6 }],
+      "output": { "itemId": "stratum:oak_log_stairs", "count": 4 }
+    },
+    {
+      "id": "stratum:spruce_log_stairs_from_logs",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:spruce_log", "count": 6 }],
+      "output": { "itemId": "stratum:spruce_log_stairs", "count": 4 }
+    },
+    {
+      "id": "stratum:birch_log_stairs_from_logs",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:birch_log", "count": 6 }],
+      "output": { "itemId": "stratum:birch_log_stairs", "count": 4 }
     }
   ]
 }

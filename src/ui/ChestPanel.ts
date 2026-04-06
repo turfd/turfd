@@ -47,7 +47,7 @@ export class ChestPanel {
   private rmbPlacedOnDown = false;
   private lastBuiltSlotCount = 0;
 
-  private readonly onWindowMouseUp = (e: MouseEvent): void => {
+  private readonly onWindowPointerUp = (e: PointerEvent | MouseEvent): void => {
     if (this.pointerDownSlot === null) {
       return;
     }
@@ -106,11 +106,15 @@ export class ChestPanel {
     inner.appendChild(scroll);
     root.appendChild(inner);
 
-    window.addEventListener("mouseup", this.onWindowMouseUp, true);
+    window.addEventListener("mouseup", this.onWindowPointerUp, true);
+    window.addEventListener("pointerup", this.onWindowPointerUp, true);
+    window.addEventListener("pointercancel", this.onWindowPointerUp, true);
   }
 
   destroy(): void {
-    window.removeEventListener("mouseup", this.onWindowMouseUp, true);
+    window.removeEventListener("mouseup", this.onWindowPointerUp, true);
+    window.removeEventListener("pointerup", this.onWindowPointerUp, true);
+    window.removeEventListener("pointercancel", this.onWindowPointerUp, true);
     this.root.remove();
   }
 
@@ -144,7 +148,7 @@ export class ChestPanel {
   }
 
   private bindSlot(slot: HTMLDivElement, slotIndex: number): void {
-    slot.addEventListener("mousedown", (e: MouseEvent) => {
+    slot.addEventListener("pointerdown", (e: PointerEvent) => {
       if (!this.open || !this.visible) {
         return;
       }
@@ -153,6 +157,11 @@ export class ChestPanel {
       }
       e.preventDefault();
       e.stopPropagation();
+      try {
+        slot.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
       this.pointerDownSlot = slotIndex;
       this.pointerDownSlotEl = slot;
       this.pointerDownButton = e.button;

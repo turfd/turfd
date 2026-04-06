@@ -127,6 +127,16 @@
         { "itemKey": "stratum:birch_sapling", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
+    "stratum:oak_door": {
+      "entries": [
+        { "itemKey": "stratum:oak_door", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:oak_door_top": {
+      "entries": [
+        { "itemKey": "stratum:oak_door", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
     "stratum:coal_ore": {
       "entries": [
         { "itemKey": "stratum:coal", "countMin": 1, "countMax": 1, "chance": 1.0 }
@@ -203,7 +213,38 @@
     },
     "stratum:wheat_crop_mature": {
       "entries": [
-        { "itemKey": "stratum:wheat", "countMin": 3, "countMax": 4, "chance": 1.0 }
+        { "itemKey": "stratum:wheat", "countMin": 3, "countMax": 4, "chance": 1.0 },
+        { "itemKey": "stratum:wheat_seeds", "countMin": 1, "countMax": 3, "chance": 1.0 }
+      ]
+    },
+    "stratum:oak_plank_stairs": {
+      "entries": [
+        { "itemKey": "stratum:oak_plank_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:spruce_plank_stairs": {
+      "entries": [
+        { "itemKey": "stratum:spruce_plank_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:birch_plank_stairs": {
+      "entries": [
+        { "itemKey": "stratum:birch_plank_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:oak_log_stairs": {
+      "entries": [
+        { "itemKey": "stratum:oak_log_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:spruce_log_stairs": {
+      "entries": [
+        { "itemKey": "stratum:spruce_log_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:birch_log_stairs": {
+      "entries": [
+        { "itemKey": "stratum:birch_log_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     }
   }

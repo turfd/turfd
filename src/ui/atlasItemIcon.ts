@@ -24,8 +24,12 @@ export function getItemIconStyleFromUrl(
   ].join(";");
 }
 
+/** Matches {@link TileDrawBatch} stair shape 0: bottom slab + top-right corner; top-left removed. */
+const STAIR_ITEM_ICON_CLIP =
+  "polygon(0% 100%, 100% 100%, 100% 0%, 50% 0%, 50% 50%, 0% 50%)";
+
 export function getItemIconStyleForDefinition(
-  def: Pick<ItemDefinition, "textureName">,
+  def: Pick<ItemDefinition, "textureName" | "stairItemIconClip">,
   urlLookup: ItemIconUrlLookup | null,
   displayPx: number,
 ): string {
@@ -36,5 +40,9 @@ export function getItemIconStyleForDefinition(
   if (resolved === undefined) {
     return "";
   }
-  return getItemIconStyleFromUrl(resolved, displayPx);
+  let style = getItemIconStyleFromUrl(resolved, displayPx);
+  if (def.stairItemIconClip === true) {
+    style += `;clip-path:${STAIR_ITEM_ICON_CLIP};-webkit-clip-path:${STAIR_ITEM_ICON_CLIP}`;
+  }
+  return style;
 }

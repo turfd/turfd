@@ -6,6 +6,7 @@ import type { GameEvent } from "../core/types";
 import type { Player } from "../entities/Player";
 import type { World } from "../world/World";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
+import { ITEM_ID_LAYOUT_REVISION_CURRENT } from "../items/itemIdLayoutMigration";
 import type { WorldMetadata } from "./IndexedDBStore";
 import { IndexedDBStore } from "./IndexedDBStore";
 
@@ -104,6 +105,10 @@ export class SaveGame {
       moderation: moderationPatch ?? existing?.moderation,
       playerInventory: this.player.inventory.serialize(),
       blockIdPalette: this.world.getRegistry().buildIdentifierPalette(),
+      itemIdLayoutRevision: Math.max(
+        existing?.itemIdLayoutRevision ?? 0,
+        ITEM_ID_LAYOUT_REVISION_CURRENT,
+      ),
       ...(Object.keys(mpMerged).length > 0
         ? { multiplayerLastPositions: mpMerged }
         : {}),

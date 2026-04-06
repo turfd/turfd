@@ -60,6 +60,8 @@ export class ChunkRenderer {
     return {
       chestBlockId,
       sampleBlockId: (wx, wy) => this.world.getForegroundBlockId(wx, wy),
+      isDoorEffectivelyOpen: (wx, wy) => this.world.isDoorEffectivelyOpen(wx, wy),
+      getDoorRenderHingeRight: (wx, wy) => this.world.getDoorRenderHingeRight(wx, wy),
     };
   }
 

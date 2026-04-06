@@ -14,6 +14,18 @@
   --inv-grid-gap: 10px;
 }
 
+@media (pointer: coarse) {
+  #inventory-ui-root {
+    --inv-slot-px: 48px;
+    --inv-slot-icon-px: 34px;
+    --inv-grid-gap: 6px;
+  }
+
+  #inventory-ui-root .inv-hotbar-item-name {
+    font-size: clamp(22px, 4vmin, 32px);
+  }
+}
+
 #inventory-ui-root.inv-root--open {
   pointer-events: auto;
 }
@@ -27,7 +39,7 @@
 /* Column: item name floats above the dark hotbar strip (Minecraft-style). */
 #inventory-ui-root .inv-hotbar-stack {
   position: absolute;
-  bottom: 1.1rem;
+  bottom: max(1.1rem, env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -223,6 +235,31 @@
 #inventory-ui-root .inv-slot.inv-slot--selected {
   border-color: rgba(255, 255, 255, 0.45);
   box-shadow: 0 0 0 1px rgba(242, 242, 247, 0.25);
+}
+
+#inventory-ui-root .inv-panel .inv-slot-partial {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 5px;
+  height: 5px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.08s ease;
+}
+
+#inventory-ui-root .inv-panel .inv-slot-partial--visible {
+  opacity: 1;
+}
+
+#inventory-ui-root .inv-panel .inv-slot-partial__fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #5ac8fa, #32d74b);
+  border-radius: 2px;
 }
 
 #inventory-ui-root .inv-slot-icon {
