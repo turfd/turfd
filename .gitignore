@@ -3,3 +3,7 @@
 
 # Local Vite-style secrets for dev (see public/secrets.local.example.json)
 /public/secrets.local.json
+.cursor/plans/furnace_smelting_system.md
+/.cursor
+/node_modules
+/node_modules
