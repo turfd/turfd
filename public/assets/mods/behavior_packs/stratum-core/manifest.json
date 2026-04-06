@@ -64,10 +64,16 @@
     "spruce-log-stairs.json",
     "birch-log-stairs.json",
     "oak_door.json",
-    "oak_door_top.json"
+    "oak_door_top.json",
+    "birch_door.json",
+    "birch_door_top.json",
+    "spruce_door.json",
+    "spruce_door_top.json"
   ],
   "items": [
     "oak_door.json",
+    "birch_door.json",
+    "spruce_door.json",
     "bread.json",
     "bucket.json",
     "water_bucket.json",

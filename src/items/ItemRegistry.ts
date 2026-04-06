@@ -117,7 +117,8 @@ export function registerBlockItems(
       displayName: block.displayName ?? block.identifier,
       maxStack: MAX_STACK_DEFAULT,
       placesBlockId: block.id,
-      tags: block.tags,
+      // Stairs can burn as fuel (fuelBurnSeconds) but should not count as crafting materials.
+      tags: block.isStair === true ? undefined : block.tags,
       fuelBurnSeconds: block.fuelBurnSeconds,
       ...(block.isStair === true ? { stairItemIconClip: true as const } : {}),
     });

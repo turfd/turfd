@@ -53,6 +53,8 @@
     "birch_planks": "assets/mods/resource_packs/stratum-core/textures/tiles/birch_planks.png",
     "birch_sapling": "assets/mods/resource_packs/stratum-core/textures/tiles/birch_sapling.png",
     "oak_door": "assets/mods/resource_packs/stratum-core/textures/tiles/oak_door.png",
+    "birch_door": "assets/mods/resource_packs/stratum-core/textures/tiles/birch_door.png",
+    "spruce_door": "assets/mods/resource_packs/stratum-core/textures/tiles/spruce_door.png",
     "leaf_0": "assets/mods/resource_packs/stratum-core/textures/particle/leaf_0.png",
     "leaf_1": "assets/mods/resource_packs/stratum-core/textures/particle/leaf_1.png",
     "leaf_2": "assets/mods/resource_packs/stratum-core/textures/particle/leaf_2.png",

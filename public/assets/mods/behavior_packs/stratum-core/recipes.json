@@ -33,6 +33,27 @@
       "output": { "itemId": "stratum:birch_planks", "count": 4 }
     },
     {
+      "id": "stratum:oak_door_from_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:oak_planks", "count": 6 }],
+      "output": { "itemId": "stratum:oak_door", "count": 1 }
+    },
+    {
+      "id": "stratum:birch_door_from_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:birch_planks", "count": 6 }],
+      "output": { "itemId": "stratum:birch_door", "count": 1 }
+    },
+    {
+      "id": "stratum:spruce_door_from_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:spruce_planks", "count": 6 }],
+      "output": { "itemId": "stratum:spruce_door", "count": 1 }
+    },
+    {
       "id": "stratum:crafting_table_from_planks",
       "category": "Basic",
       "station": null,

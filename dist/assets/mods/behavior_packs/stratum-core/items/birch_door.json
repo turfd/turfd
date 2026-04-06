@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:birch_door"
+    },
+    "components": {
+      "stratum:display_name": "Birch Door",
+      "stratum:texture_key": "birch_door",
+      "stratum:places_block": "stratum:birch_door",
+      "stratum:numeric_id": 89
+    }
+  }
+}

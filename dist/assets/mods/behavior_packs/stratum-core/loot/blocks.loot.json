@@ -137,6 +137,26 @@
         { "itemKey": "stratum:oak_door", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
+    "stratum:birch_door": {
+      "entries": [
+        { "itemKey": "stratum:birch_door", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:birch_door_top": {
+      "entries": [
+        { "itemKey": "stratum:birch_door", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:spruce_door": {
+      "entries": [
+        { "itemKey": "stratum:spruce_door", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:spruce_door_top": {
+      "entries": [
+        { "itemKey": "stratum:spruce_door", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
     "stratum:coal_ore": {
       "entries": [
         { "itemKey": "stratum:coal", "countMin": 1, "countMax": 1, "chance": 1.0 }
