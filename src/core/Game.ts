@@ -803,6 +803,25 @@ export class Game {
       (slotIndex, slotEl) => {
         this._handleInventoryShiftQuickMove(slotIndex, slotEl);
       },
+      (stack) => {
+        const w = this.world;
+        const em = this.entityManager;
+        if (w === null || em === null || stack.count <= 0) {
+          return;
+        }
+        const st = em.getPlayer().state;
+        const x = st.position.x;
+        const y = st.position.y + BLOCK_SIZE * 0.75;
+        w.spawnItem(
+          stack.itemId,
+          stack.count,
+          x,
+          y,
+          0,
+          0,
+          stack.damage ?? 0,
+        );
+      },
     );
     await inventoryUI.loadTextureIcons();
     this.inventoryUI = inventoryUI;
@@ -1389,6 +1408,163 @@ export class Game {
         }
         if (msg.type === MsgType.CHEST_SNAPSHOT && this.world !== null) {
           this.world.applyChestSnapshotWorld(msg.wx, msg.wy, msg.data);
+          return;
+        }
+        if (
+          msg.type === MsgType.CHEST_TAKE_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          const w = this.world;
+          const ir = this._itemRegistry;
+          if (w === null || ir === null) {
+            return;
+          }
+          const anchor = { ax: msg.wx, ay: msg.wy };
+          if (!this._chestWithinReachForPeer(anchor, e.peerId)) {
+            return;
+          }
+          const tile = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+          if (tile === undefined) {
+            return;
+          }
+          const s = tile.slots[msg.slotIndex];
+          if (s === undefined || s === null || s.count <= 0) {
+            return;
+          }
+          const take = msg.button === 2 ? 1 : s.count;
+          const left = s.count - take;
+          const nextSlots = tile.slots.map((x) => (x === null ? null : { ...x }));
+          nextSlots[msg.slotIndex] =
+            left > 0 ? { itemId: s.itemId, count: left } : null;
+          w.setChestTileAtAnchor(anchor.ax, anchor.ay, { slots: nextSlots });
+          this._broadcastChestSnapshotNow(anchor.ax, anchor.ay);
+          this.adapter.send(e.peerId as PeerId, {
+            type: MsgType.GIVE_ITEM_STACK,
+            itemId: s.itemId as number,
+            count: take,
+          });
+          return;
+        }
+        if (
+          msg.type === MsgType.FURNACE_SLOT_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          const w = this.world;
+          const ir = this._itemRegistry;
+          if (w === null || ir === null) {
+            return;
+          }
+          if (!this._furnaceWithinReachForPeer(msg.wx, msg.wy, e.peerId)) {
+            return;
+          }
+          const tile =
+            w.getFurnaceTile(msg.wx, msg.wy) ??
+            createEmptyFurnaceTileState(this._worldTime.ms);
+          let taken: { itemId: number; count: number } | null = null;
+          if (msg.kind === 0) {
+            const fuel = tile.fuel;
+            if (fuel !== null && fuel.count > 0) {
+              const take = msg.button === 2 ? 1 : fuel.count;
+              const left = fuel.count - take;
+              tile.fuel = left > 0 ? { itemId: fuel.itemId, count: left } : null;
+              taken = { itemId: fuel.itemId as number, count: take };
+            }
+          } else {
+            const idx = msg.slotIndex | 0;
+            const out = tile.outputSlots[idx];
+            if (out !== undefined && out !== null && out.count > 0) {
+              const take = msg.button === 2 ? 1 : out.count;
+              const left = out.count - take;
+              tile.outputSlots = tile.outputSlots.map((x, i) => {
+                if (i !== idx) return x;
+                return left > 0 ? { itemId: out.itemId, count: left } : null;
+              });
+              taken = { itemId: out.itemId as number, count: take };
+            }
+          }
+          if (taken === null) {
+            return;
+          }
+          w.setFurnaceTile(msg.wx, msg.wy, tile);
+          this._broadcastFurnaceSnapshotNow(msg.wx, msg.wy);
+          this.adapter.send(e.peerId as PeerId, {
+            type: MsgType.GIVE_ITEM_STACK,
+            itemId: taken.itemId,
+            count: taken.count,
+          });
+          return;
+        }
+        if (
+          msg.type === MsgType.CHEST_PUT_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          const w = this.world;
+          const ir = this._itemRegistry;
+          if (w === null || ir === null) {
+            return;
+          }
+          const anchor = { ax: msg.wx, ay: msg.wy };
+          if (!this._chestWithinReachForPeer(anchor, e.peerId)) {
+            return;
+          }
+          const tile = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+          if (tile === undefined) {
+            return;
+          }
+          const curCount = msg.cursorCount | 0;
+          if (curCount <= 0 || msg.cursorItemId <= 0) {
+            return;
+          }
+          const cursor = {
+            itemId: msg.cursorItemId as ItemId,
+            count: curCount,
+            ...(msg.cursorDamage > 0 ? { damage: msg.cursorDamage } : {}),
+          };
+          const maxStack = (id: ItemId) => this._maxStackForItem(id);
+          const { state: next } = applyChestSlotMouse(
+            tile,
+            msg.slotIndex,
+            msg.button,
+            cursor,
+            maxStack,
+          );
+          w.setChestTileAtAnchor(anchor.ax, anchor.ay, next);
+          this._broadcastChestSnapshotNow(anchor.ax, anchor.ay);
+          return;
+        }
+        if (
+          msg.type === MsgType.CHEST_QUICKMOVE_TO_CHEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          const w = this.world;
+          const ir = this._itemRegistry;
+          if (w === null || ir === null) {
+            return;
+          }
+          const anchor = { ax: msg.wx, ay: msg.wy };
+          if (!this._chestWithinReachForPeer(anchor, e.peerId)) {
+            return;
+          }
+          const tile = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+          if (tile === undefined) {
+            return;
+          }
+          if (msg.itemId <= 0 || msg.count <= 0) {
+            return;
+          }
+          const stack = {
+            itemId: msg.itemId as ItemId,
+            count: msg.count,
+            ...(msg.damage > 0 ? { damage: msg.damage } : {}),
+          };
+          const maxStack = (id: ItemId) => this._maxStackForItem(id);
+          const { state: next } = quickMoveStackIntoChest(tile, stack, maxStack);
+          w.setChestTileAtAnchor(anchor.ax, anchor.ay, next);
+          this._broadcastChestSnapshotNow(anchor.ax, anchor.ay);
           return;
         }
         if (this._awaitingWorldData && msg.type === MsgType.WORLD_SYNC) {
@@ -2478,6 +2654,22 @@ export class Game {
   private _handleFurnaceFuelSlotClick(button: number): void {
     const net = this.adapter.state;
     if (net.status === "connected" && net.role === "client") {
+      const cell = this._nearestFurnaceCell();
+      if (cell === null) {
+        return;
+      }
+      const hostId = net.lanHostPeerId as PeerId | null;
+      if (hostId === null) {
+        return;
+      }
+      this.adapter.send(hostId, {
+        type: MsgType.FURNACE_SLOT_REQUEST,
+        wx: cell.wx,
+        wy: cell.wy,
+        kind: 0,
+        slotIndex: 0,
+        button,
+      });
       return;
     }
     const w = this.world;
@@ -2509,6 +2701,22 @@ export class Game {
   private _handleFurnaceOutputSlotClick(slotIndex: number, button: number): void {
     const net = this.adapter.state;
     if (net.status === "connected" && net.role === "client") {
+      const cell = this._nearestFurnaceCell();
+      if (cell === null) {
+        return;
+      }
+      const hostId = net.lanHostPeerId as PeerId | null;
+      if (hostId === null) {
+        return;
+      }
+      this.adapter.send(hostId, {
+        type: MsgType.FURNACE_SLOT_REQUEST,
+        wx: cell.wx,
+        wy: cell.wy,
+        kind: 1,
+        slotIndex,
+        button,
+      });
       return;
     }
     const w = this.world;
@@ -2669,6 +2877,53 @@ export class Game {
     this._craftingPanel?.update(em.getPlayer().inventory);
   }
 
+  private _chestWithinReachForPeer(
+    anchor: { ax: number; ay: number },
+    peerId: string,
+  ): boolean {
+    const w = this.world;
+    if (w === null || w.getChestBlockId() === null) {
+      return false;
+    }
+    const rp = w.getRemotePlayers().get(peerId);
+    if (rp === undefined) {
+      return false;
+    }
+    const cid = w.getChestBlockId()!;
+    const feet = rp.getAuthorityFeet();
+    const pcx = Math.floor(feet.x / BLOCK_SIZE);
+    const pcy = Math.floor(feet.y / BLOCK_SIZE);
+    const R = CHEST_ACCESS_RADIUS_BLOCKS;
+    const cheb = (bx: number, by: number): boolean =>
+      Math.max(Math.abs(pcx - bx), Math.abs(pcy - by)) <= R;
+    if (cheb(anchor.ax, anchor.ay)) {
+      return true;
+    }
+    if (
+      w.getForegroundBlockId(anchor.ax + 1, anchor.ay) === cid &&
+      cheb(anchor.ax + 1, anchor.ay)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  private _furnaceWithinReachForPeer(wx: number, wy: number, peerId: string): boolean {
+    const w = this.world;
+    if (w === null) {
+      return false;
+    }
+    const rp = w.getRemotePlayers().get(peerId);
+    if (rp === undefined) {
+      return false;
+    }
+    const feet = rp.getAuthorityFeet();
+    const pcx = Math.floor(feet.x / BLOCK_SIZE);
+    const pcy = Math.floor(feet.y / BLOCK_SIZE);
+    const R = FURNACE_ACCESS_RADIUS_BLOCKS;
+    return Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= R;
+  }
+
   private _broadcastChestSnapshotNow(ax: number, ay: number): void {
     const w = this.world;
     const st = w?.getChestTileAtAnchor(ax, ay);
@@ -2699,7 +2954,51 @@ export class Game {
   private _handleChestSlotMouseDown(slotIndex: number, button: number): boolean {
     const net = this.adapter.state;
     if (net.status === "connected" && net.role === "client") {
-      return false;
+      const anchor = this._activeChestAnchor;
+      const w = this.world;
+      const em = this.entityManager;
+      if (anchor === null || w === null || em === null) {
+        return false;
+      }
+      if (!this._chestWithinReach(anchor)) {
+        return false;
+      }
+      if (button !== 2) {
+        return false;
+      }
+      const inv = em.getPlayer().inventory;
+      const cur = inv.getCursorStack();
+      if (cur === null) {
+        return false;
+      }
+      let tile = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+      if (tile === undefined) {
+        return false;
+      }
+      const maxStack = (id: ItemId) => this._maxStackForItem(id);
+      const { state: next, cursor } = applyChestSlotMouse(
+        tile,
+        slotIndex,
+        2,
+        cur,
+        maxStack,
+      );
+      w.setChestTileAtAnchor(anchor.ax, anchor.ay, next);
+      inv.replaceCursorStack(cursor);
+      const hostId = net.lanHostPeerId as PeerId | null;
+      if (hostId !== null) {
+        this.adapter.send(hostId, {
+          type: MsgType.CHEST_PUT_REQUEST,
+          wx: anchor.ax,
+          wy: anchor.ay,
+          slotIndex,
+          button: 2,
+          cursorItemId: cur.itemId as number,
+          cursorCount: cur.count,
+          cursorDamage: cur.damage ?? 0,
+        });
+      }
+      return true;
     }
     const anchor = this._activeChestAnchor;
     const w = this.world;
@@ -2737,6 +3036,50 @@ export class Game {
   ): void {
     const net = this.adapter.state;
     if (net.status === "connected" && net.role === "client") {
+      const em = this.entityManager;
+      const w = this.world;
+      const ir = this._itemRegistry;
+      const anchor = this._activeChestAnchor;
+      if (em === null || w === null || ir === null || anchor === null) {
+        return;
+      }
+      const inv = em.getPlayer().inventory;
+      if (inv.getCursorStack() !== null) {
+        return;
+      }
+      if (!this._chestWithinReach(anchor)) {
+        return;
+      }
+      const src = inv.getStack(slotIndex);
+      if (src === null || src.count <= 0) {
+        return;
+      }
+      const tile = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+      if (tile === undefined) {
+        return;
+      }
+      const maxStack = (id: ItemId) => this._maxStackForItem(id);
+      const { state: nextChest, remainder, firstChestIndex } =
+        quickMoveStackIntoChest(tile, src, maxStack);
+      if (firstChestIndex === null) {
+        return;
+      }
+      inv.setStack(slotIndex, remainder);
+      w.setChestTileAtAnchor(anchor.ax, anchor.ay, nextChest);
+      this._chestPanel?.scrollChestSlotIntoView(firstChestIndex);
+      const toEl = this._chestSlotDomElement(firstChestIndex);
+      playShiftSlotFlyAnimation(fromEl, toEl);
+      const hostId = net.lanHostPeerId as PeerId | null;
+      if (hostId !== null) {
+        this.adapter.send(hostId, {
+          type: MsgType.CHEST_QUICKMOVE_TO_CHEST,
+          wx: anchor.ax,
+          wy: anchor.ay,
+          itemId: src.itemId as number,
+          count: src.count,
+          damage: src.damage ?? 0,
+        });
+      }
       return;
     }
     const em = this.entityManager;
@@ -2783,6 +3126,77 @@ export class Game {
     void dragOccurred;
     const net = this.adapter.state;
     if (net.status === "connected" && net.role === "client") {
+      const anchor = this._activeChestAnchor;
+      if (anchor === null) {
+        return;
+      }
+      const hostId = net.lanHostPeerId as PeerId | null;
+      if (hostId === null) {
+        return;
+      }
+      if (button !== 0 && button !== 2) {
+        return;
+      }
+      const w = this.world;
+      const em = this.entityManager;
+      if (w === null || em === null) {
+        return;
+      }
+      const inv = em.getPlayer().inventory;
+      const cur = inv.getCursorStack();
+
+      // Shift-click: always take from chest into inventory (host gives items).
+      if (button === 0 && shift) {
+        // Basic visual feedback: animate into the player's inventory card.
+        const toEl = this.inventoryUI?.getOverlaySlotElement(em.getPlayer().state.hotbarSlot) ?? null;
+        playShiftSlotFlyAnimation(slotEl, toEl);
+        this.adapter.send(hostId, {
+          type: MsgType.CHEST_TAKE_REQUEST,
+          wx: anchor.ax,
+          wy: anchor.ay,
+          slotIndex,
+          button: 0,
+        });
+        return;
+      }
+
+      // If cursor is holding items, this is a place operation; do it locally and ask host to mirror.
+      if (cur !== null && cur.count > 0) {
+        const tile = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+        if (tile === undefined) {
+          return;
+        }
+        const maxStack = (id: ItemId) => this._maxStackForItem(id);
+        const { state: next, cursor } = applyChestSlotMouse(
+          tile,
+          slotIndex,
+          button,
+          cur,
+          maxStack,
+        );
+        w.setChestTileAtAnchor(anchor.ax, anchor.ay, next);
+        inv.replaceCursorStack(cursor);
+        this.adapter.send(hostId, {
+          type: MsgType.CHEST_PUT_REQUEST,
+          wx: anchor.ax,
+          wy: anchor.ay,
+          slotIndex,
+          button,
+          cursorItemId: cur.itemId as number,
+          cursorCount: cur.count,
+          cursorDamage: cur.damage ?? 0,
+        });
+        return;
+      }
+
+      // Otherwise: take from chest (host gives items).
+      this.adapter.send(hostId, {
+        type: MsgType.CHEST_TAKE_REQUEST,
+        wx: anchor.ax,
+        wy: anchor.ay,
+        slotIndex,
+        button,
+      });
       return;
     }
     const anchor = this._activeChestAnchor;
@@ -2895,6 +3309,69 @@ export class Game {
   private _handleChestSlotMouseEnter(slotIndex: number, buttons: number): void {
     const net = this.adapter.state;
     if (net.status === "connected" && net.role === "client") {
+      const anchor = this._activeChestAnchor;
+      const w = this.world;
+      const em = this.entityManager;
+      if (anchor === null || w === null || em === null) {
+        return;
+      }
+      if (!this._chestWithinReach(anchor)) {
+        return;
+      }
+      const inv = em.getPlayer().inventory;
+      const cur = inv.getCursorStack();
+      if (cur === null || cur.count <= 0) {
+        return;
+      }
+      const hostId = net.lanHostPeerId as PeerId | null;
+      if (hostId === null) {
+        return;
+      }
+      let tile = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+      if (tile === undefined) {
+        return;
+      }
+      const maxStack = (id: ItemId) => this._maxStackForItem(id);
+      if ((buttons & 1) !== 0) {
+        const { state: next, cursor } = placeOneFromCursorIntoChestSlot(
+          tile,
+          slotIndex,
+          cur,
+          maxStack,
+        );
+        w.setChestTileAtAnchor(anchor.ax, anchor.ay, next);
+        inv.replaceCursorStack(cursor);
+        this.adapter.send(hostId, {
+          type: MsgType.CHEST_PUT_REQUEST,
+          wx: anchor.ax,
+          wy: anchor.ay,
+          slotIndex,
+          button: 0,
+          cursorItemId: cur.itemId as number,
+          cursorCount: cur.count,
+          cursorDamage: cur.damage ?? 0,
+        });
+      }
+      if ((buttons & 2) !== 0) {
+        const { state: next, cursor } = placeOneFromCursorIntoChestSlot(
+          tile,
+          slotIndex,
+          cur,
+          maxStack,
+        );
+        w.setChestTileAtAnchor(anchor.ax, anchor.ay, next);
+        inv.replaceCursorStack(cursor);
+        this.adapter.send(hostId, {
+          type: MsgType.CHEST_PUT_REQUEST,
+          wx: anchor.ax,
+          wy: anchor.ay,
+          slotIndex,
+          button: 2,
+          cursorItemId: cur.itemId as number,
+          cursorCount: cur.count,
+          cursorDamage: cur.damage ?? 0,
+        });
+      }
       return;
     }
     const anchor = this._activeChestAnchor;

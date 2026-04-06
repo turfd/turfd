@@ -92,6 +92,9 @@ export class InventoryUI {
   private prevInventoryKeys: string[] | null = null;
 
   private readonly onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null;
+  private readonly onDropCursorStackOutside:
+    | ((stack: ItemStack) => void)
+    | null;
 
   private static slotKey(
     stack: { itemId: ItemId; count: number; damage?: number } | null,
@@ -226,6 +229,7 @@ export class InventoryUI {
     const slot = this.pointerDownSlot;
     const downEl = this.pointerDownSlotEl;
     this.pointerDownSlotEl = null;
+    const inv = this.getInventory();
     if (e.button === 0) {
       if (!this.dragOccurred) {
         if (e.shiftKey) {
@@ -239,6 +243,17 @@ export class InventoryUI {
           }
         } else {
           this.getInventory().handleLmbClick(slot);
+        }
+      } else {
+        // Dropping an item stack outside the inventory UI drops it into the world.
+        const cur = inv.getCursorStack();
+        const target = e.target as Node | null;
+        const droppedOutside =
+          cur !== null &&
+          (target === null || !this.root.contains(target));
+        if (droppedOutside && this.onDropCursorStackOutside !== null) {
+          this.onDropCursorStackOutside(cur);
+          inv.replaceCursorStack(null);
         }
       }
     } else if (e.button === 2) {
@@ -257,11 +272,13 @@ export class InventoryUI {
     itemRegistry: ItemRegistry,
     getInventory: GetInventory,
     onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null = null,
+    onDropCursorStackOutside: ((stack: ItemStack) => void) | null = null,
   ) {
     ensureInventoryFonts();
     this.itemRegistry = itemRegistry;
     this.getInventory = getInventory;
     this.onShiftQuickMoveFromOverlay = onShiftQuickMoveFromOverlay;
+    this.onDropCursorStackOutside = onDropCursorStackOutside;
 
     const root = document.createElement("div");
     root.id = "inventory-ui-root";

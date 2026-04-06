@@ -45,6 +45,14 @@ export enum MessageType {
   GIVE_ITEM_STACK = 0x11,
   /** Host → one client: authoritative feet spawn (rejoin / saved logout position). */
   ASSIGNED_SPAWN = 0x12,
+  /** Client → host: request to take items from a chest slot (host will snapshot + give items). */
+  CHEST_TAKE_REQUEST = 0x13,
+  /** Client → host: request to click a furnace fuel/output slot (host will snapshot + give items). */
+  FURNACE_SLOT_REQUEST = 0x14,
+  /** Client → host: request to place cursor stack into a chest slot (host will snapshot). */
+  CHEST_PUT_REQUEST = 0x15,
+  /** Client → host: shift-quick-move a stack from player inventory into chest (host will snapshot). */
+  CHEST_QUICKMOVE_TO_CHEST = 0x16,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -103,6 +111,50 @@ export type ChestSnapshotMsg = {
   wx: number;
   wy: number;
   data: ChestPersistedChunk;
+};
+
+export type ChestTakeRequestMsg = {
+  type: MessageType.CHEST_TAKE_REQUEST;
+  /** Chest anchor world coordinates. */
+  wx: number;
+  wy: number;
+  slotIndex: number;
+  /** 0 = take stack, 2 = take one. */
+  button: number;
+};
+
+export type FurnaceSlotRequestMsg = {
+  type: MessageType.FURNACE_SLOT_REQUEST;
+  wx: number;
+  wy: number;
+  /** 0 = fuel slot, 1 = output slot. */
+  kind: 0 | 1;
+  /** Output slot index (0..2). For fuel slot, must be 0. */
+  slotIndex: number;
+  /** 0 = take stack, 2 = take one. */
+  button: number;
+};
+
+export type ChestPutRequestMsg = {
+  type: MessageType.CHEST_PUT_REQUEST;
+  /** Chest anchor world coordinates. */
+  wx: number;
+  wy: number;
+  slotIndex: number;
+  /** 0 = LMB, 2 = RMB (same semantics as applyChestSlotMouse). */
+  button: number;
+  cursorItemId: number;
+  cursorCount: number;
+  cursorDamage: number;
+};
+
+export type ChestQuickMoveToChestMsg = {
+  type: MessageType.CHEST_QUICKMOVE_TO_CHEST;
+  wx: number;
+  wy: number;
+  itemId: number;
+  count: number;
+  damage: number;
 };
 
 /** Client → host: subject is the connection’s peer id. */
@@ -238,6 +290,10 @@ export type NetworkMessage =
   | PingMsg
   | GiveItemStackMsg
   | AssignedSpawnMsg
+  | ChestTakeRequestMsg
+  | FurnaceSlotRequestMsg
+  | ChestPutRequestMsg
+  | ChestQuickMoveToChestMsg
   | WorldSyncMsg
   | WorldTimeMsg
   | SessionEndedMsg
@@ -397,6 +453,55 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
 
     case MessageType.CHEST_SNAPSHOT:
       return BinarySerializer.serializeChestSnapshot(msg.wx, msg.wy, msg.data);
+
+    case MessageType.CHEST_TAKE_REQUEST: {
+      const buf = new ArrayBuffer(11);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.CHEST_TAKE_REQUEST);
+      v.setInt32(1, msg.wx, LE);
+      v.setInt32(5, msg.wy, LE);
+      v.setUint8(9, msg.slotIndex & 0xff);
+      v.setUint8(10, msg.button & 0xff);
+      return buf;
+    }
+
+    case MessageType.FURNACE_SLOT_REQUEST: {
+      const buf = new ArrayBuffer(12);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.FURNACE_SLOT_REQUEST);
+      v.setInt32(1, msg.wx, LE);
+      v.setInt32(5, msg.wy, LE);
+      v.setUint8(9, msg.kind & 0xff);
+      v.setUint8(10, msg.slotIndex & 0xff);
+      v.setUint8(11, msg.button & 0xff);
+      return buf;
+    }
+
+    case MessageType.CHEST_PUT_REQUEST: {
+      const buf = new ArrayBuffer(1 + 4 + 4 + 1 + 1 + 2 + 2 + 2);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.CHEST_PUT_REQUEST);
+      v.setInt32(1, msg.wx, LE);
+      v.setInt32(5, msg.wy, LE);
+      v.setUint8(9, msg.slotIndex & 0xff);
+      v.setUint8(10, msg.button & 0xff);
+      v.setUint16(11, msg.cursorItemId & 0xffff, LE);
+      v.setUint16(13, msg.cursorCount & 0xffff, LE);
+      v.setUint16(15, msg.cursorDamage & 0xffff, LE);
+      return buf;
+    }
+
+    case MessageType.CHEST_QUICKMOVE_TO_CHEST: {
+      const buf = new ArrayBuffer(1 + 4 + 4 + 2 + 2 + 2);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.CHEST_QUICKMOVE_TO_CHEST);
+      v.setInt32(1, msg.wx, LE);
+      v.setInt32(5, msg.wy, LE);
+      v.setUint16(9, msg.itemId & 0xffff, LE);
+      v.setUint16(11, msg.count & 0xffff, LE);
+      v.setUint16(13, msg.damage & 0xffff, LE);
+      return buf;
+    }
 
     case MessageType.BLOCK_UPDATE: {
       return BinarySerializer.serializeBlockUpdate(
@@ -692,6 +797,64 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         wx: p.wx,
         wy: p.wy,
         data: p.data,
+      };
+    }
+
+    case MessageType.CHEST_TAKE_REQUEST: {
+      if (v.byteLength < 11) {
+        throw new Error("CHEST_TAKE_REQUEST: buffer too short");
+      }
+      return {
+        type: MessageType.CHEST_TAKE_REQUEST,
+        wx: v.getInt32(1, LE),
+        wy: v.getInt32(5, LE),
+        slotIndex: v.getUint8(9),
+        button: v.getUint8(10),
+      };
+    }
+
+    case MessageType.FURNACE_SLOT_REQUEST: {
+      if (v.byteLength < 12) {
+        throw new Error("FURNACE_SLOT_REQUEST: buffer too short");
+      }
+      const kind = v.getUint8(9);
+      return {
+        type: MessageType.FURNACE_SLOT_REQUEST,
+        wx: v.getInt32(1, LE),
+        wy: v.getInt32(5, LE),
+        kind: (kind === 0 ? 0 : 1) as 0 | 1,
+        slotIndex: v.getUint8(10),
+        button: v.getUint8(11),
+      };
+    }
+
+    case MessageType.CHEST_PUT_REQUEST: {
+      if (v.byteLength < 17) {
+        throw new Error("CHEST_PUT_REQUEST: buffer too short");
+      }
+      return {
+        type: MessageType.CHEST_PUT_REQUEST,
+        wx: v.getInt32(1, LE),
+        wy: v.getInt32(5, LE),
+        slotIndex: v.getUint8(9),
+        button: v.getUint8(10),
+        cursorItemId: v.getUint16(11, LE),
+        cursorCount: v.getUint16(13, LE),
+        cursorDamage: v.getUint16(15, LE),
+      };
+    }
+
+    case MessageType.CHEST_QUICKMOVE_TO_CHEST: {
+      if (v.byteLength < 15) {
+        throw new Error("CHEST_QUICKMOVE_TO_CHEST: buffer too short");
+      }
+      return {
+        type: MessageType.CHEST_QUICKMOVE_TO_CHEST,
+        wx: v.getInt32(1, LE),
+        wy: v.getInt32(5, LE),
+        itemId: v.getUint16(9, LE),
+        count: v.getUint16(11, LE),
+        damage: v.getUint16(13, LE),
       };
     }
 

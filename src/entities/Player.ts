@@ -594,7 +594,8 @@ export class Player {
     if (input.isJustPressed("dropItem") && !input.isWorldInputBlocked()) {
       const dropSlot = state.hotbarSlot % HOTBAR_SIZE;
       const dropStack = this.inventory.getStack(dropSlot);
-      if (dropStack !== null && this.inventory.consumeOneFromSlot(dropSlot)) {
+      if (dropStack !== null && dropStack.count > 0) {
+        this.inventory.setStack(dropSlot, null);
         const { dirX, dirY } = getAimUnitVectorFromFeet(
           state.position.x,
           state.position.y,
@@ -611,7 +612,7 @@ export class Player {
         const sy = chestY - dirY * off;
         world.spawnItem(
           dropStack.itemId,
-          1,
+          dropStack.count,
           sx,
           sy,
           vx,
