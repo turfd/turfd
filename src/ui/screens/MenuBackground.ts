@@ -34,7 +34,10 @@ import { WorldGenerator } from "../../world/gen/WorldGenerator";
 import type { Chunk } from "../../world/chunk/Chunk";
 import { chunkKey, chunkToWorldOrigin } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
-import { paintMenuSky } from "./menuSkyPaint";
+import {
+  MENU_SKY_FALLBACK_GRADIENT,
+  paintMenuSky,
+} from "./menuSkyPaint";
 
 // ---------------------------------------------------------------------------
 // Layout / world constants
@@ -310,7 +313,8 @@ export class MenuBackground {
     const backdropRoot = document.createElement("div");
     backdropRoot.className = "stratum-menu-backdrop";
     backdropRoot.style.cssText =
-      "position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;";
+      "position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;" +
+      `background:${MENU_SKY_FALLBACK_GRADIENT};`;
     this.backdropRoot = backdropRoot;
     if (mount.firstChild) {
       mount.insertBefore(backdropRoot, mount.firstChild);
@@ -325,6 +329,7 @@ export class MenuBackground {
     backdropRoot.appendChild(skyCanvas);
     this.skyCanvas = skyCanvas;
     this.skyCtx = skyCanvas.getContext("2d");
+    this.paintSkyBootstrap(mount);
 
     // -- PixiJS init --------------------------------------------------------
     const app = new Application();
@@ -543,6 +548,25 @@ export class MenuBackground {
   // ---------------------------------------------------------------------------
   // Sky canvas rendering
   // ---------------------------------------------------------------------------
+
+  /**
+   * Draw sky once as soon as the canvas exists (before atlas / WebGL init).
+   * Avoids a long white flash on slow networks where `animate` starts late.
+   */
+  private paintSkyBootstrap(mount: HTMLElement): void {
+    const cvs = this.skyCanvas;
+    const ctx = this.skyCtx;
+    if (!cvs || !ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const mw = mount.clientWidth || window.innerWidth || 1;
+    const mh = mount.clientHeight || window.innerHeight || 1;
+    const cw = Math.max(1, Math.round(mw * dpr));
+    const ch = Math.max(1, Math.round(mh * dpr));
+    cvs.width = cw;
+    cvs.height = ch;
+    paintMenuSky(ctx, cw, ch, dpr);
+  }
 
   private paintSky(worldContainerX: number, worldContainerY: number): void {
     void worldContainerX;

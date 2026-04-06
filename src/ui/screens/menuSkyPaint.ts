@@ -82,3 +82,10 @@ export function paintMenuSky(
     ctx.fill();
   }
 }
+
+/**
+ * CSS gradient under the menu sky canvas (canvas is transparent until first paint / while WebGL loads).
+ * Keep hues aligned with {@link paintMenuSky} (`SKY_TOP` / `SKY_HORIZON` / `SKY_BOTTOM`).
+ */
+export const MENU_SKY_FALLBACK_GRADIENT =
+  "linear-gradient(180deg, #74b3ff 0%, #a8d8ff 52%, #6a8a9a 100%)";
