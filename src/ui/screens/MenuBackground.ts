@@ -37,6 +37,7 @@ import type { World } from "../../world/World";
 import {
   MENU_SKY_FALLBACK_GRADIENT,
   paintMenuSky,
+  paintMenuSkyToFit,
 } from "./menuSkyPaint";
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,17 @@ const PAN_SPEED_X       = 0.040;  // rad/s
 const PAN_RANGE_X_BLOCKS = 16;    // ±blocks
 const PAN_SPEED_Y       = 0.022;  // rad/s
 const PAN_RANGE_Y_PX    = 24;     // ±screen-pixels (vertical bob)
+
+/** Intro: terrain + parallax start this far down-screen (fraction of viewport height) and ease up. */
+const MENU_INTRO_SLIDE_MS = 920;
+const MENU_INTRO_SLIDE_FRAC = 0.19;
+/** Parallax travels slightly farther than foreground so both slide up with a hint of depth. */
+const MENU_INTRO_PARALLAX_DEEPEN = 1.14;
+
+function easeOutCubic(t: number): number {
+  const c = Math.min(1, Math.max(0, t));
+  return 1 - (1 - c) ** 3;
+}
 
 // ---------------------------------------------------------------------------
 // Sky / background constants (mirror values from WorldTime.ts / RenderPipeline.ts)
@@ -287,6 +299,12 @@ export class MenuBackground {
   private lastCenterCX = -9999;
   private lastCenterCY = -9999;
 
+  /** `performance.now()` when the intro slide-up begins (same epoch as {@link startTime}). */
+  private slideRevealStartMs = 0;
+  /** Pixels to slide at intro start; updated on resize. */
+  private introSlideMaxPx = 0;
+  private parallaxSlideMaxPx = 0;
+
   /** Remove sky/backdrop and destroy Pixi when bailing out of {@link init} mid-flight. */
   private tearDownPartialInit(app: Application | null): void {
     if (app !== null) {
@@ -310,26 +328,41 @@ export class MenuBackground {
   }
 
   private async initImpl(mount: HTMLElement): Promise<void> {
-    const backdropRoot = document.createElement("div");
-    backdropRoot.className = "stratum-menu-backdrop";
-    backdropRoot.style.cssText =
-      "position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;" +
-      `background:${MENU_SKY_FALLBACK_GRADIENT};`;
-    this.backdropRoot = backdropRoot;
-    if (mount.firstChild) {
-      mount.insertBefore(backdropRoot, mount.firstChild);
+    const existingBackdrop = mount.querySelector(
+      ":scope > .stratum-menu-backdrop",
+    ) as HTMLDivElement | null;
+    const existingCanvas = existingBackdrop?.querySelector(
+      "canvas",
+    ) as HTMLCanvasElement | null;
+
+    let backdropRoot: HTMLDivElement;
+    let skyCanvas: HTMLCanvasElement;
+
+    if (existingBackdrop !== null && existingCanvas !== null) {
+      backdropRoot = existingBackdrop;
+      skyCanvas = existingCanvas;
     } else {
-      mount.appendChild(backdropRoot);
+      backdropRoot = document.createElement("div");
+      backdropRoot.className = "stratum-menu-backdrop";
+      backdropRoot.style.cssText =
+        "position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;" +
+        `background:${MENU_SKY_FALLBACK_GRADIENT};`;
+      if (mount.firstChild) {
+        mount.insertBefore(backdropRoot, mount.firstChild);
+      } else {
+        mount.appendChild(backdropRoot);
+      }
+
+      skyCanvas = document.createElement("canvas");
+      skyCanvas.style.cssText =
+        "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
+      backdropRoot.appendChild(skyCanvas);
     }
 
-    // -- Sky Canvas (inserted first = lowest z-order) -----------------------
-    const skyCanvas = document.createElement("canvas");
-    skyCanvas.style.cssText =
-      "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
-    backdropRoot.appendChild(skyCanvas);
+    this.backdropRoot = backdropRoot;
     this.skyCanvas = skyCanvas;
     this.skyCtx = skyCanvas.getContext("2d");
-    this.paintSkyBootstrap(mount);
+    paintMenuSkyToFit(skyCanvas, mount);
 
     // -- PixiJS init --------------------------------------------------------
     const app = new Application();
@@ -357,15 +390,20 @@ export class MenuBackground {
 
     // -- Atlas + registry ---------------------------------------------------
     const atlas = new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
-    await atlas.load();
-    if (this.destroyed) { app.destroy(); return; }
-
-    this.atlasLoader = atlas;
-
     const registry = new BlockRegistry();
     const base = import.meta.env.BASE_URL;
     const behBase = `${base}${STRATUM_CORE_BEHAVIOR_PACK_PATH}`;
-    const behManifest = await fetchBehaviorPackManifest(behBase);
+    const [, behManifest] = await Promise.all([
+      atlas.load(),
+      fetchBehaviorPackManifest(behBase),
+    ]);
+    if (this.destroyed) {
+      this.tearDownPartialInit(app);
+      return;
+    }
+
+    this.atlasLoader = atlas;
+
     await loadBehaviorPackBlocks(registry, behBase, behManifest);
     if (this.destroyed) {
       this.tearDownPartialInit(app);
@@ -425,16 +463,6 @@ export class MenuBackground {
         const o = chunkToWorldOrigin(coord);
         generator.decorateChunkSurface(chunk, o.wx, o.wy);
         chunkMap.add(chunk);
-        const pos = {
-          x: cx * CHUNK_SIZE * BLOCK_SIZE,
-          y: -cy * CHUNK_SIZE * BLOCK_SIZE,
-        };
-        const bgMesh = buildBackgroundMesh(chunk, registry, atlas);
-        bgMesh.position.set(pos.x, pos.y);
-        worldContainer.addChild(bgMesh);
-        const { mesh } = buildMesh(chunk, registry, atlas);
-        mesh.position.set(pos.x, pos.y);
-        worldContainer.addChild(mesh);
       }
     }
 
@@ -479,12 +507,38 @@ export class MenuBackground {
     this.baseY = screenH * 0.55 + (surfaceY + 1) * BLOCK_SIZE * zoom;
     this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
 
+    this.introSlideMaxPx = screenH * MENU_INTRO_SLIDE_FRAC;
+    this.parallaxSlideMaxPx = this.introSlideMaxPx * MENU_INTRO_PARALLAX_DEEPEN;
+
     worldContainer.position.set(this.baseX, this.baseY);
 
     this.lastRendererW = app.renderer.width;
     this.lastRendererH = app.renderer.height;
 
-    this.startTime = performance.now();
+    const revealStart = performance.now();
+    this.slideRevealStartMs = revealStart;
+    this.startTime = revealStart;
+
+    for (let cy = CY_START; cy <= CY_END; cy++) {
+      for (let cx = 0; cx < CHUNKS_X; cx++) {
+        if (this.destroyed) {
+          return;
+        }
+        const coord = { cx, cy };
+        const chunk = menuGenMap.get(chunkKey(coord))!;
+        const pos = {
+          x: cx * CHUNK_SIZE * BLOCK_SIZE,
+          y: -cy * CHUNK_SIZE * BLOCK_SIZE,
+        };
+        const bgMesh = buildBackgroundMesh(chunk, registry, atlas);
+        bgMesh.position.set(pos.x, pos.y);
+        worldContainer.addChild(bgMesh);
+        const { mesh } = buildMesh(chunk, registry, atlas);
+        mesh.position.set(pos.x, pos.y);
+        worldContainer.addChild(mesh);
+      }
+    }
+
     this.rafId = requestAnimationFrame((t) => this.animate(t));
   }
 
@@ -541,6 +595,9 @@ export class MenuBackground {
       (this.surfaceYForLayout + 1) * BLOCK_SIZE * zoom;
     this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
 
+    this.introSlideMaxPx = screenH * MENU_INTRO_SLIDE_FRAC;
+    this.parallaxSlideMaxPx = this.introSlideMaxPx * MENU_INTRO_PARALLAX_DEEPEN;
+
     this.lastCenterCX = -9999;
     this.lastCenterCY = -9999;
   }
@@ -553,21 +610,6 @@ export class MenuBackground {
    * Draw sky once as soon as the canvas exists (before atlas / WebGL init).
    * Avoids a long white flash on slow networks where `animate` starts late.
    */
-  private paintSkyBootstrap(mount: HTMLElement): void {
-    const cvs = this.skyCanvas;
-    const ctx = this.skyCtx;
-    if (!cvs || !ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const mw = mount.clientWidth || window.innerWidth || 1;
-    const mh = mount.clientHeight || window.innerHeight || 1;
-    const cw = Math.max(1, Math.round(mw * dpr));
-    const ch = Math.max(1, Math.round(mh * dpr));
-    cvs.width = cw;
-    cvs.height = ch;
-    paintMenuSky(ctx, cw, ch, dpr);
-  }
-
   private paintSky(worldContainerX: number, worldContainerY: number): void {
     void worldContainerX;
     void worldContainerY;
@@ -602,10 +644,21 @@ export class MenuBackground {
     const composite      = this.composite;
     const chunkMap       = this.chunkMap;
 
-    // -- Camera pan ---------------------------------------------------------
+    // -- Camera pan + intro slide-up --------------------------------------
     const t = (now - this.startTime) / 1000;
+    const introT = Math.min(
+      1,
+      (now - this.slideRevealStartMs) / MENU_INTRO_SLIDE_MS,
+    );
+    const eased = easeOutCubic(introT);
+    const introDy = (1 - eased) * this.introSlideMaxPx;
+    const parallaxDy = (1 - eased) * this.parallaxSlideMaxPx;
+
     worldContainer.x = this.baseX + Math.sin(t * PAN_SPEED_X) * this.panRangeXPx;
-    worldContainer.y = this.baseY + Math.sin(t * PAN_SPEED_Y) * PAN_RANGE_Y_PX;
+    worldContainer.y =
+      this.baseY +
+      Math.sin(t * PAN_SPEED_Y) * PAN_RANGE_Y_PX +
+      introDy;
 
     // -- Sky (CSS canvas) ---------------------------------------------------
     this.paintSky(worldContainer.x, worldContainer.y);
@@ -614,7 +667,11 @@ export class MenuBackground {
     const sw = app.renderer.width / dpr;
     const sh = app.renderer.height / dpr;
     const localCX = (sw / 2 - worldContainer.x) / this.zoom;
-    this.parallaxStrip?.updateParallax(localCX, BACKGROUND_PARALLAX_X);
+    const strip = this.parallaxStrip;
+    if (strip !== null) {
+      strip.updateParallax(localCX, BACKGROUND_PARALLAX_X);
+      strip.displayRoot.y = parallaxDy;
+    }
 
     // -- Lighting uniforms --------------------------------------------------
     if (occlusion && indirect && composite && chunkMap) {
@@ -646,7 +703,13 @@ export class MenuBackground {
 
     // -- Two-pass render ----------------------------------------------------
     if (this.albedoRT && composite) {
-      app.renderer.render({ container: worldContainer, target: this.albedoRT });
+      // Opaque clear would leave alpha=1 everywhere; composite would hide the parallax strip.
+      app.renderer.render({
+        container: worldContainer,
+        target: this.albedoRT,
+        clear: true,
+        clearColor: "rgba(0,0,0,0)",
+      });
       worldContainer.visible = false;
       app.render();
       worldContainer.visible = true;

@@ -13,7 +13,11 @@ const blockMaterialSchema = z.enum([
   "wood",
   "grass",
   "sand",
+  "gravel",
   "glass",
+  "door",
+  "chest",
+  "furnace",
   "generic",
 ]);
 

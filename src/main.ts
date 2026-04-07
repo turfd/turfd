@@ -12,7 +12,11 @@ import {
   type PlayerSavedState,
 } from "./core/Game";
 import type { GameEvent } from "./core/types";
+import { AudioEngine } from "./audio/AudioEngine";
+import { OstPlaylistController } from "./audio/ostPlaylist";
+import { readVolumeStored, VOL_KEYS } from "./audio/volumeSettings";
 import { ModRepository } from "./mods/ModRepository";
+import { STRATUM_CORE_RESOURCE_PACK_PATH } from "./mods/internalPackManifest";
 import { asModRecordId } from "./mods/workshopTypes";
 import {
   getLatestPublishedStratumModByModId,
@@ -23,6 +27,7 @@ import { semverGt } from "./util/semverGt";
 import { createSupabaseSignalRelay } from "./network/SupabaseSignalAdapter";
 import { IndexedDBStore } from "./persistence/IndexedDBStore";
 import { pinWorkshopModToWorld } from "./persistence/pinWorkshopModToWorld";
+import { mountEarlyMenuBackdrop } from "./ui/screens/menuSkyPaint";
 import { MainMenu } from "./ui/screens/MainMenu";
 import { MenuBackground } from "./ui/screens/MenuBackground";
 import { runGameEntryBlackTransition } from "./ui/screens/gameEntryTransition";
@@ -34,6 +39,10 @@ import "./styles/global.css";
 /** Minimum time the loading overlay stays up (ms), so the bar and tips feel intentional. */
 function randomLoadingHoldMs(): number {
   return 3000 + Math.floor(unixRandom01() * 1000);
+}
+
+function menuMusicFadeOutSec(): number {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0.12 : 1.2;
 }
 
 function loadingErrorMessage(err: unknown): string {
@@ -296,6 +305,8 @@ async function main(): Promise<void> {
     true,
   );
 
+  mountEarlyMenuBackdrop(mount);
+
   const store = new IndexedDBStore();
   await store.openDB();
   await loadLocalSecretsFile();
@@ -307,9 +318,50 @@ async function main(): Promise<void> {
   await modRepository.init();
   wireWorkshopHandlers(menuBus, auth, store, modRepository);
 
+  const assetBase = import.meta.env.BASE_URL;
+  const stratumResBase = `${assetBase}${STRATUM_CORE_RESOURCE_PACK_PATH}`;
+  const sharedAudio = new AudioEngine();
+  sharedAudio.setMasterVolume(readVolumeStored(VOL_KEYS.master, 80) / 100);
+  sharedAudio.setMusicVolume(readVolumeStored(VOL_KEYS.music, 60) / 100);
+  sharedAudio.setSfxVolume(readVolumeStored(VOL_KEYS.sfx, 100) / 100);
+  const ost = new OstPlaylistController(sharedAudio, stratumResBase);
+  await ost.loadManifest();
+  ost.preloadMode("menu");
+  ost.preloadMode("game");
+  const primeAudioOnce = (): void => {
+    sharedAudio.primeAudioFromUserGesture();
+    window.removeEventListener("pointerdown", primeAudioOnce, true);
+  };
+  window.addEventListener("pointerdown", primeAudioOnce, true);
+
+  window.addEventListener(
+    "pagehide",
+    (ev: PageTransitionEvent) => {
+      if (ev.persisted) {
+        sharedAudio.suspendContext();
+      } else {
+        ost.setMode(null);
+      }
+    },
+    true,
+  );
+  window.addEventListener(
+    "pageshow",
+    (ev: PageTransitionEvent) => {
+      if (ev.persisted) {
+        sharedAudio.resumeContext();
+      }
+    },
+    true,
+  );
+
   while (true) {
     mount.classList.remove("stratum-game-loading");
     mount.replaceChildren();
+    mountEarlyMenuBackdrop(mount);
+
+    ost.preloadMode("menu");
+    ost.setMode("menu", 0);
 
     const workshopDeps = auth.isConfigured
       ? { bus: menuBus, modRepository }
@@ -319,8 +371,10 @@ async function main(): Promise<void> {
       store,
       auth,
       workshopDeps,
+      sharedAudio,
     );
     await menuBackground.initFinished;
+    ost.stopAdvancingPlaylist();
     mount.classList.add("stratum-game-loading");
     const loadingUi = new WorldLoadingScreen(mount);
     loadingUi.update({
@@ -425,6 +479,7 @@ async function main(): Promise<void> {
         displayName: auth.getDisplayLabel(),
         accountId: session?.userId ?? null,
         modRepository,
+        sharedAudio,
       });
       const loadStartedAt = Date.now();
       const minHoldMs = randomLoadingHoldMs();
@@ -442,6 +497,7 @@ async function main(): Promise<void> {
       if (loadingBackdrop === null || game === null) {
         throw new Error("Internal error: world load finished without backdrop or game.");
       }
+      await sharedAudio.fadeOutAndStopMusic(menuMusicFadeOutSec());
       const fadeBackdrop = loadingBackdrop;
       const gameToStart = game;
       await runGameEntryBlackTransition(mount, async () => {
@@ -449,14 +505,17 @@ async function main(): Promise<void> {
         loadingBackdrop = null;
         loadingUi.destroy();
         mount.classList.remove("stratum-game-loading");
+        ost.setMode("game", 0);
         gameToStart.start();
       });
 
       await game.waitForStop();
 
+      ost.setMode(null);
       await game.destroy();
     } catch (err: unknown) {
       console.error(err);
+      ost.setMode(null);
       loadingBackdrop?.destroy();
       loadingBackdrop = null;
       loadingUi.setError(loadingErrorMessage(err));

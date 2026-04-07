@@ -18,6 +18,7 @@ export class UIShell {
   private unsubSessionEnded: (() => void) | null = null;
   private sessionOverlay: HTMLDivElement | null = null;
   private sessionEndedShown = false;
+  private deathOverlay: HTMLDivElement | null = null;
 
   constructor(
     bus: EventBus,
@@ -80,6 +81,91 @@ export class UIShell {
     mount.appendChild(sess);
     this.sessionOverlay = sess;
 
+    const death = document.createElement("div");
+    death.className = "stratum-death-overlay";
+    death.setAttribute("aria-hidden", "true");
+    death.setAttribute("role", "dialog");
+    death.setAttribute("aria-modal", "true");
+    death.setAttribute("aria-labelledby", "stratum-death-title");
+
+    const deathCard = document.createElement("div");
+    deathCard.className = "stratum-session-card";
+    deathCard.addEventListener("click", (e) => e.stopPropagation());
+
+    const deathTitle = document.createElement("h2");
+    deathTitle.id = "stratum-death-title";
+    deathTitle.textContent = "You died";
+    deathTitle.style.cssText = [
+      "margin:0 0 0.65rem",
+      "font-family:'BoldPixels',monospace",
+      "font-size:22px",
+      "font-weight:normal",
+      "text-transform:uppercase",
+      "letter-spacing:0.06em",
+      "color:#f2f2f7",
+    ].join(";");
+
+    const deathMsg = document.createElement("p");
+    deathMsg.style.cssText = [
+      "margin:0 0 1.25rem",
+      "font-family:'M5x7',monospace",
+      "font-size:18px",
+      "line-height:1.45",
+      "color:#c7c7cc",
+    ].join(";");
+    deathMsg.textContent = "Respawn at world spawn or return to the main menu.";
+
+    const deathActions = document.createElement("div");
+    deathActions.style.cssText =
+      "display:flex;flex-wrap:wrap;gap:10px;justify-content:center;";
+
+    const respawnBtn = document.createElement("button");
+    respawnBtn.type = "button";
+    respawnBtn.textContent = "Respawn";
+    respawnBtn.style.cssText = [
+      "padding:11px 18px",
+      "font-family:'BoldPixels',monospace",
+      "font-size:17px",
+      "text-transform:uppercase",
+      "letter-spacing:0.06em",
+      "cursor:pointer",
+      "border-radius:10px",
+      "border:1px solid #f2f2f7",
+      "background:#f2f2f7",
+      "color:#1c1c1e",
+    ].join(";");
+    respawnBtn.addEventListener("click", () => {
+      bus.emit({ type: "ui:death-respawn" } satisfies GameEvent);
+    });
+
+    const deathMenuBtn = document.createElement("button");
+    deathMenuBtn.type = "button";
+    deathMenuBtn.textContent = "Main menu";
+    deathMenuBtn.style.cssText = [
+      "padding:11px 18px",
+      "font-family:'BoldPixels',monospace",
+      "font-size:17px",
+      "text-transform:uppercase",
+      "letter-spacing:0.06em",
+      "cursor:pointer",
+      "border-radius:10px",
+      "border:1px solid rgba(242,242,247,0.45)",
+      "background:transparent",
+      "color:#f2f2f7",
+    ].join(";");
+    deathMenuBtn.addEventListener("click", () => {
+      bus.emit({ type: "ui:quit" } satisfies GameEvent);
+    });
+
+    deathActions.appendChild(respawnBtn);
+    deathActions.appendChild(deathMenuBtn);
+    deathCard.appendChild(deathTitle);
+    deathCard.appendChild(deathMsg);
+    deathCard.appendChild(deathActions);
+    death.appendChild(deathCard);
+    mount.appendChild(death);
+    this.deathOverlay = death;
+
     this.unsubSessionEnded = bus.on("ui:session-ended", (e) => {
       if (this.sessionEndedShown) {
         return;
@@ -109,6 +195,16 @@ export class UIShell {
     this.pauseMenu.setOpen(open);
   }
 
+  /** Death prompt: respawn at world spawn or quit to menu. */
+  setDeathOverlayOpen(open: boolean): void {
+    const el = this.deathOverlay;
+    if (el === null) {
+      return;
+    }
+    el.classList.toggle("stratum-death-overlay--open", open);
+    el.setAttribute("aria-hidden", open ? "false" : "true");
+  }
+
   /** Tab background wall edit mode indicator. */
   setBackgroundEditMode(active: boolean): void {
     this.hud.setBackgroundEditMode(active);
@@ -124,6 +220,8 @@ export class UIShell {
     this.sessionOverlay?.remove();
     this.sessionOverlay = null;
     this.sessionEndedShown = false;
+    this.deathOverlay?.remove();
+    this.deathOverlay = null;
     this.pauseMenu.destroy();
     this.hud.destroy();
   }

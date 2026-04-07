@@ -9,6 +9,7 @@ import type { World } from "../../world/World";
 import type { AtlasLoader } from "../AtlasLoader";
 import type { RenderPipeline } from "../RenderPipeline";
 import {
+  applyFurnaceFireToMesh,
   applyWindSwayToMesh,
   buildBackgroundMesh,
   buildFgShadowMesh,
@@ -18,6 +19,7 @@ import {
   updateFgShadowMesh,
   updateMesh,
   type TileMeshBuildOptions,
+  type TileFurnaceFire,
   type TileWindSway,
 } from "./TileDrawBatch";
 import { chunkPerfLog, chunkPerfNow } from "../../debug/chunkPerf";
@@ -39,6 +41,9 @@ export class ChunkRenderer {
   private readonly fgWindSways = new WeakMap<Mesh, TileWindSway[]>();
   /** Foreground meshes that have at least one wind sway tile (see {@link updateFoliageWind}). */
   private readonly _windyForegroundMeshes = new Set<Mesh>();
+  /** Foreground meshes with lit furnace fire UV animation (see {@link updateFurnaceFire}). */
+  private readonly _furnaceFireForegroundMeshes = new Set<Mesh>();
+  private readonly fgFurnaceFires = new WeakMap<Mesh, TileFurnaceFire[]>();
   /** Reused in {@link syncChunks} to avoid per-frame `Set` allocation. */
   private readonly _syncSeen = new Set<string>();
 
@@ -57,8 +62,11 @@ export class ChunkRenderer {
 
   private tileMeshOpts(): TileMeshBuildOptions {
     const chestBlockId = this.world.getChestBlockId();
+    const furnaceBlockId = this.world.getFurnaceBlockId();
     return {
       chestBlockId,
+      furnaceBlockId,
+      isFurnaceLit: (wx, wy) => this.world.isFurnaceVisuallyLit(wx, wy),
       sampleBlockId: (wx, wy) => this.world.getForegroundBlockId(wx, wy),
       isDoorEffectivelyOpen: (wx, wy) => this.world.isDoorEffectivelyOpen(wx, wy),
       getDoorRenderHingeRight: (wx, wy) => this.world.getDoorRenderHingeRight(wx, wy),
@@ -80,13 +88,14 @@ export class ChunkRenderer {
       if (triple === undefined) {
         const bg = buildBackgroundMesh(chunk, this.registry, this.atlas);
         const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler);
-        const { mesh: fg, windSways } = buildMesh(
+        const { mesh: fg, windSways, furnaceFires } = buildMesh(
           chunk,
           this.registry,
           this.atlas,
           this.tileMeshOpts(),
         );
         this.syncWindyFg(fg, windSways);
+        this.syncFurnaceFg(fg, furnaceFires);
         this.applyChunkMeshCulling(bg);
         this.applyChunkMeshCulling(fgShadow);
         this.applyChunkMeshCulling(fg);
@@ -102,7 +111,7 @@ export class ChunkRenderer {
       } else if (chunk.dirty) {
         updateBackgroundMesh(triple.bg, chunk, this.registry, this.atlas);
         updateFgShadowMesh(triple.fgShadow, chunk, this.fgShadowSampler);
-        const windSways = updateMesh(
+        const { windSways, furnaceFires } = updateMesh(
           triple.fg,
           chunk,
           this.registry,
@@ -110,6 +119,7 @@ export class ChunkRenderer {
           this.tileMeshOpts(),
         );
         this.syncWindyFg(triple.fg, windSways);
+        this.syncFurnaceFg(triple.fg, furnaceFires);
         this.positionChunkRoot(triple.bg, chunk.coord);
         this.positionChunkRoot(triple.fgShadow, chunk.coord);
         this.positionChunkRoot(triple.fg, chunk.coord);
@@ -123,6 +133,7 @@ export class ChunkRenderer {
       if (!seen.has(key)) {
         const { bg, fgShadow, fg } = this.meshes.get(key)!;
         this._windyForegroundMeshes.delete(fg);
+        this._furnaceFireForegroundMeshes.delete(fg);
         layer.removeChild(bg);
         layer.removeChild(fgShadow);
         layer.removeChild(fg);
@@ -146,8 +157,21 @@ export class ChunkRenderer {
     }
   }
 
+  /** Lit furnace `furnace_on` strip animation (UV ping-pong). */
+  updateFurnaceFire(timeSec: number): void {
+    for (const fg of this._furnaceFireForegroundMeshes) {
+      applyFurnaceFireToMesh(
+        fg,
+        this.atlas,
+        this.fgFurnaceFires.get(fg) ?? [],
+        timeSec,
+      );
+    }
+  }
+
   destroy(): void {
     this._windyForegroundMeshes.clear();
+    this._furnaceFireForegroundMeshes.clear();
     const layer = this.pipeline.layerTilesBack;
     for (const { bg, fgShadow, fg } of this.meshes.values()) {
       layer.removeChild(bg);
@@ -174,6 +198,15 @@ export class ChunkRenderer {
       this._windyForegroundMeshes.add(fg);
     } else {
       this._windyForegroundMeshes.delete(fg);
+    }
+  }
+
+  private syncFurnaceFg(fg: Mesh, furnaceFires: TileFurnaceFire[]): void {
+    this.fgFurnaceFires.set(fg, furnaceFires);
+    if (furnaceFires.length > 0) {
+      this._furnaceFireForegroundMeshes.add(fg);
+    } else {
+      this._furnaceFireForegroundMeshes.delete(fg);
     }
   }
 

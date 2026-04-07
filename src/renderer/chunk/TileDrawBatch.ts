@@ -27,6 +27,9 @@ export type TileMeshBuildOptions = {
   /** When set with {@link sampleBlockId}, paired chests use full `chest_double` per tile (east flipped). */
   chestBlockId: number | null;
   sampleBlockId: BlockIdWorldSampler;
+  /** When set with {@link isFurnaceLit}, smelting furnaces use animated `furnace_on` strip frames. */
+  furnaceBlockId?: number | null;
+  isFurnaceLit?: (wx: number, wy: number) => boolean;
   /** When set, door tiles use open UVs / walk-through state from live player proximity + latch. */
   isDoorEffectivelyOpen?: (wx: number, wy: number) => boolean;
   /** When set, thin door strip is placed on the hinge side implied by walk (proximity) vs meta. */
@@ -134,10 +137,39 @@ export type TileWindSway = {
   topWaveTier: "seam" | "crown";
 };
 
+/** Lit furnace: ping-pong UV animation through `furnace_on_*` atlas frames (see {@link applyFurnaceFireToMesh}). */
+export type TileFurnaceFire = {
+  posIndex: number;
+  /** Seconds offset so neighboring furnaces stay out of phase. */
+  phase: number;
+  frameCount: number;
+  flipX: boolean;
+};
+
 type BuiltTileGeometry = {
   geometry: MeshGeometry;
   windSways: TileWindSway[];
+  furnaceFires: TileFurnaceFire[];
 };
+
+/** Seconds per step along the ping-pong (slow “fade” through the strip). */
+const FURNACE_ON_FRAME_SEC = 0.48;
+const FURNACE_PHASE_SCALE = 2.35;
+
+function pingPongFrameIndexFromFloat(t: number, n: number): number {
+  if (n <= 1) {
+    return 0;
+  }
+  const period = n * 2 - 2;
+  let p = t % period;
+  if (p < 0) {
+    p += period;
+  }
+  if (p < n) {
+    return Math.floor(p);
+  }
+  return n * 2 - 2 - Math.floor(p);
+}
 
 /** One or two quads per cell when a ground deadband splits wind geometry. */
 function windForegroundQuadsForCell(def: BlockDefinition, ly: number): number {
@@ -186,6 +218,7 @@ function buildGeometryFromCells(
         indices: new Uint32Array([0, 1, 2]),
       }),
       windSways: [],
+      furnaceFires: [],
     };
   }
 
@@ -195,6 +228,7 @@ function buildGeometryFromCells(
   const uvs = new Float32Array(vCount * 2);
   const indices = new Uint32Array(iCount);
   const windSways: TileWindSway[] = [];
+  const furnaceFires: TileFurnaceFire[] = [];
 
   let pi = 0;
   let ii = 0;
@@ -234,12 +268,33 @@ function buildGeometryFromCells(
         }
       }
 
+      let useFurnaceAnim = false;
+      if (
+        def.identifier === "stratum:furnace" &&
+        opts !== undefined &&
+        opts.furnaceBlockId !== null &&
+        opts.furnaceBlockId === id &&
+        opts.isFurnaceLit !== undefined &&
+        opts.isFurnaceLit(worldX, worldY)
+      ) {
+        try {
+          const vOn = atlas.getTextureVariants("furnace_on");
+          if (vOn.length > 0) {
+            drawableTextureName = "furnace_on";
+            useFurnaceAnim = true;
+          }
+        } catch {
+          /* missing atlas entry; keep cold furnace */
+        }
+      }
+
       /** Same atlas variant for both cells (east cell borrows west world X for alts). */
       const variantWx = chestDoubleCell === "east" ? worldX - 1 : worldX;
       const variantWy = worldY;
       const variants = atlas.getTextureVariants(drawableTextureName);
-      const tex =
-        variants.length > 1
+      const tex = useFurnaceAnim
+        ? variants[0]!
+        : variants.length > 1
           ? variants[pickTextureVariant(variantWx, variantWy, id, variants.length)]!
           : variants[0]!;
 
@@ -507,6 +562,17 @@ function buildGeometryFromCells(
         const quadPosStart = pi;
         emitQuad(yTop, yBottom, vUvTop, vUvBottom);
 
+        if (useFurnaceAnim) {
+          furnaceFires.push({
+            posIndex: quadPosStart,
+            phase: (windPhaseRad(worldX, worldY) / (Math.PI * 2)) * 3.7,
+            frameCount: variants.length,
+            flipX:
+              def.randomFlipX === true &&
+              shouldFlipTextureX(worldX, worldY, id),
+          });
+        }
+
         if (maxWind > 0) {
           const ay = windAnchorWorldY(worldY, def.tallGrass);
           const bottomWaveMul = 0;
@@ -534,6 +600,7 @@ function buildGeometryFromCells(
   return {
     geometry: new MeshGeometry({ positions, uvs, indices }),
     windSways,
+    furnaceFires,
   };
 }
 
@@ -833,6 +900,7 @@ export function updateFgShadowMesh(
 export type ForegroundTileMeshBundle = {
   mesh: Mesh;
   windSways: TileWindSway[];
+  furnaceFires: TileFurnaceFire[];
 };
 
 export function buildMesh(
@@ -841,7 +909,7 @@ export function buildMesh(
   atlas: AtlasLoader,
   opts?: TileMeshBuildOptions,
 ): ForegroundTileMeshBundle {
-  const { geometry, windSways } = buildGeometryFromCells(
+  const { geometry, windSways, furnaceFires } = buildGeometryFromCells(
     chunk,
     chunk.blocks,
     registry,
@@ -855,6 +923,7 @@ export function buildMesh(
       roundPixels: true,
     }),
     windSways,
+    furnaceFires,
   };
 }
 
@@ -882,8 +951,8 @@ export function updateMesh(
   registry: BlockRegistry,
   atlas: AtlasLoader,
   opts?: TileMeshBuildOptions,
-): TileWindSway[] {
-  const { geometry, windSways } = buildGeometryFromCells(
+): { windSways: TileWindSway[]; furnaceFires: TileFurnaceFire[] } {
+  const { geometry, windSways, furnaceFires } = buildGeometryFromCells(
     chunk,
     chunk.blocks,
     registry,
@@ -892,7 +961,7 @@ export function updateMesh(
   );
   mesh.geometry.destroy();
   mesh.geometry = geometry;
-  return windSways;
+  return { windSways, furnaceFires };
 }
 
 export function updateBackgroundMesh(
@@ -956,5 +1025,61 @@ export function applyWindSwayToMesh(
   const posAttr = geom.attributes.aPosition;
   if (posAttr !== undefined) {
     posAttr.buffer.update();
+  }
+}
+
+/**
+ * Ping-pong UV animation for lit furnaces (`furnace_on` strip). Call each frame after {@link applyWindSwayToMesh}.
+ */
+export function applyFurnaceFireToMesh(
+  mesh: Mesh,
+  atlas: AtlasLoader,
+  fires: TileFurnaceFire[],
+  timeSec: number,
+): void {
+  if (fires.length === 0) {
+    return;
+  }
+  let variants: readonly Texture[];
+  try {
+    variants = atlas.getTextureVariants("furnace_on");
+  } catch {
+    return;
+  }
+  if (variants.length === 0) {
+    return;
+  }
+  const geom = mesh.geometry as MeshGeometry;
+  const uv = geom.uvs;
+  const sw = variants[0]!.source.width;
+  const sh = variants[0]!.source.height;
+  for (const f of fires) {
+    const n = Math.min(f.frameCount, variants.length);
+    if (n < 1) {
+      continue;
+    }
+    const tFrames = timeSec / FURNACE_ON_FRAME_SEC + f.phase * FURNACE_PHASE_SCALE;
+    const fi = pingPongFrameIndexFromFloat(tFrames, n);
+    const tex = variants[fi]!;
+    const fr = tex.frame;
+    const u0 = fr.x / sw;
+    const v0 = fr.y / sh;
+    const u1 = (fr.x + fr.width) / sw;
+    const v1 = (fr.y + fr.height) / sh;
+    const leftU = f.flipX ? u1 : u0;
+    const rightU = f.flipX ? u0 : u1;
+    const i = f.posIndex;
+    uv[i] = leftU;
+    uv[i + 1] = v0;
+    uv[i + 2] = rightU;
+    uv[i + 3] = v0;
+    uv[i + 4] = leftU;
+    uv[i + 5] = v1;
+    uv[i + 6] = rightU;
+    uv[i + 7] = v1;
+  }
+  const uvAttr = geom.attributes.aUV;
+  if (uvAttr !== undefined) {
+    uvAttr.buffer.update();
   }
 }

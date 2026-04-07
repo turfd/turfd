@@ -52,6 +52,7 @@ import {
   PLAYER_SPRINT_ANIM_SPEED_MULT,
   PLAYER_REMOTE_AIR_VY_THRESHOLD,
   PLAYER_REMOTE_ANIM_VEL_SMOOTH_PER_SEC,
+  PLAYER_DAMAGE_TINT_DURATION_SEC,
   PLAYER_WALK_ANIM_SPEED,
   PLAYER_WIDTH,
   REACH_BLOCKS,
@@ -69,6 +70,15 @@ import type { World } from "../world/World";
 import type { DoorPlayerSample } from "../world/door/doorWorld";
 import { createAABB, type AABB } from "./physics/AABB";
 import { Player } from "./Player";
+
+/** `strength` 0 = white, 1 = strong red (multiplies sprite RGB). */
+function playerHurtTintRgb(strength: number): number {
+  const k = Math.min(1, Math.max(0, strength));
+  const r = 255;
+  const g = Math.round(255 * (1 - k * 0.74));
+  const b = Math.round(255 * (1 - k * 0.78));
+  return (r << 16) | (g << 8) | b;
+}
 
 function feetCollisionAABBForDoors(pos: { x: number; y: number }): AABB {
   const x = pos.x - PLAYER_WIDTH * 0.5;
@@ -438,6 +448,11 @@ export class EntityManager {
     return this.player;
   }
 
+  /** Route block break / place through host RPCs when true. */
+  setMultiplayerTerrainClient(v: boolean): void {
+    this.player.setMultiplayerTerrainClient(v);
+  }
+
   /** Pose extras for `PLAYER_STATE` / host snapshots (matches local held + mining body logic). */
   getLocalPlayerNetworkPoseExtras(): {
     hotbarSlot: number;
@@ -475,7 +490,20 @@ export class EntityManager {
       const s = this.player.state;
       const x = s.prevPosition.x + (s.position.x - s.prevPosition.x) * alpha;
       const y = s.prevPosition.y + (s.position.y - s.prevPosition.y) * alpha;
-      root.position.set(x - PLAYER_WIDTH / 2, -y - PLAYER_HEIGHT);
+      const deathT = s.deathAnimT;
+      if (deathT !== null) {
+        const t = Math.min(1, Math.max(0, deathT));
+        root.pivot.set(PLAYER_WIDTH * 0.5, PLAYER_HEIGHT);
+        root.position.set(x, -y);
+        const sign = s.facingRight ? 1 : -1;
+        root.rotation = sign * t * (Math.PI * 0.5);
+        root.alpha = 1 - t;
+      } else {
+        root.pivot.set(0, 0);
+        root.rotation = 0;
+        root.alpha = 1;
+        root.position.set(x - PLAYER_WIDTH / 2, -y - PLAYER_HEIGHT);
+      }
 
       const anim = this.localPlayerAnim;
       if (anim !== null) {
@@ -555,6 +583,16 @@ export class EntityManager {
             s.onGround,
             heldItemId,
           );
+        }
+
+        const hurtK =
+          s.damageTintRemainSec > 0
+            ? s.damageTintRemainSec / PLAYER_DAMAGE_TINT_DURATION_SEC
+            : 0;
+        const hurtTint = playerHurtTintRgb(hurtK);
+        anim.tint = hurtTint;
+        if (held !== null) {
+          held.tint = hurtTint;
         }
       }
     }

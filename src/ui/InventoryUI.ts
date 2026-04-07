@@ -245,12 +245,13 @@ export class InventoryUI {
           this.getInventory().handleLmbClick(slot);
         }
       } else {
-        // Dropping an item stack outside the inventory UI drops it into the world.
+        // Dropping on the dim backdrop hits `.inv-overlay` (still under #inventory-ui-root).
+        // Only the panel/chest/crafting row should count as "inside" the UI chrome.
         const cur = inv.getCursorStack();
         const target = e.target as Node | null;
         const droppedOutside =
           cur !== null &&
-          (target === null || !this.root.contains(target));
+          (target === null || !this.overlayRowEl.contains(target));
         if (droppedOutside && this.onDropCursorStackOutside !== null) {
           this.onDropCursorStackOutside(cur);
           inv.replaceCursorStack(null);

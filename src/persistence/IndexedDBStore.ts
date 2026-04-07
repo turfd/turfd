@@ -52,6 +52,8 @@ export type WorldMetadata = {
   modList: string[];
   /** Optional for worlds saved before world time persistence was added. */
   worldTimeMs?: number;
+  /** Rain remaining (seconds) when saved; host/solo only; absent in older saves. */
+  rainRemainingSec?: number;
   /** JPEG data URL of the last in-game view, captured on save (optional). */
   previewImageDataUrl?: string;
   /** Host-only multiplayer moderation; optional until first save with chat. */

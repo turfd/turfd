@@ -89,3 +89,54 @@ export function paintMenuSky(
  */
 export const MENU_SKY_FALLBACK_GRADIENT =
   "linear-gradient(180deg, #74b3ff 0%, #a8d8ff 52%, #6a8a9a 100%)";
+
+const MENU_BACKDROP_CLASS = "stratum-menu-backdrop";
+
+/**
+ * Paints the menu sky into a canvas sized to `mount` (or viewport fallback).
+ * Shared by {@link MenuBackground} and {@link mountEarlyMenuBackdrop}.
+ */
+export function paintMenuSkyToFit(
+  canvas: HTMLCanvasElement,
+  mount: HTMLElement,
+): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const mw = mount.clientWidth || window.innerWidth || 1;
+  const mh = mount.clientHeight || window.innerHeight || 1;
+  const cw = Math.max(1, Math.round(mw * dpr));
+  const ch = Math.max(1, Math.round(mh * dpr));
+  canvas.width = cw;
+  canvas.height = ch;
+  paintMenuSky(ctx, cw, ch, dpr);
+}
+
+/**
+ * Inserts the same sky stack as {@link MenuBackground} (CSS gradient + 2D canvas)
+ * under future siblings, without Pixi. Call synchronously before heavy async bootstrap
+ * so the menu backdrop appears while IndexedDB / mods init.
+ */
+export function mountEarlyMenuBackdrop(mount: HTMLElement): void {
+  if (mount.querySelector(`:scope > .${MENU_BACKDROP_CLASS}`)) return;
+
+  const backdropRoot = document.createElement("div");
+  backdropRoot.className = MENU_BACKDROP_CLASS;
+  backdropRoot.style.cssText =
+    "position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;" +
+    `background:${MENU_SKY_FALLBACK_GRADIENT};`;
+
+  const skyCanvas = document.createElement("canvas");
+  skyCanvas.style.cssText =
+    "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
+  backdropRoot.appendChild(skyCanvas);
+
+  if (mount.firstChild) {
+    mount.insertBefore(backdropRoot, mount.firstChild);
+  } else {
+    mount.appendChild(backdropRoot);
+  }
+
+  paintMenuSkyToFit(skyCanvas, mount);
+}

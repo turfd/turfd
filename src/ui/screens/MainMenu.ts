@@ -2,6 +2,7 @@
  * Pre-game main menu — no Game / World imports; resolves via Promise only.
  * Visual: live PixiJS world background (MenuBackground) + pixel-art DOM overlay.
  */
+import type { AudioEngine } from "../../audio/AudioEngine";
 import type { IAuthProvider } from "../../auth/IAuthProvider";
 import type { EventBus } from "../../core/EventBus";
 import { unixRandom01 } from "../../core/unixRandom";
@@ -2915,10 +2916,7 @@ function injectStyles(base: string): void {
 // ---------------------------------------------------------------------------
 
 const WHATS_NEW_HTML = `
-  Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus
-  condimentum, nisl sed fermentum ullamcorper, mauris risus congue
-  justo, vitae interdum lorem sem sed justo. Curabitur in arcu sed
-  magna varius feugiat.
+  Alpha 0.3 adds full game audio, random rain (not deserts; boosts crops, grass, and saplings.), stairs from logs or planks, and new blocks.
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -2938,6 +2936,7 @@ export class MainMenu {
     store: IndexedDBStore,
     auth: IAuthProvider,
     workshop?: MainMenuWorkshopDeps,
+    sharedAudio?: AudioEngine,
   ): Promise<MainMenuExit> {
     const base = import.meta.env.BASE_URL;
     injectStyles(base);
@@ -3273,7 +3272,7 @@ export class MainMenu {
 
         const wnHeading = document.createElement("p");
         wnHeading.className = "mm-home-changelog-title";
-        wnHeading.textContent = "Patch Notes - Update 4";
+        wnHeading.textContent = "Stratum · Alpha 0.3";
         wnCopy.appendChild(wnHeading);
 
         const wnBody = document.createElement("div");
@@ -4536,6 +4535,7 @@ export class MainMenu {
           getInstalled: () =>
             workshop?.modRepository.getInstalled() ?? [],
           signal: settingsPanelAbort.signal,
+          audio: sharedAudio,
         });
       }
 

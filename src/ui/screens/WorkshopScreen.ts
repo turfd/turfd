@@ -1479,40 +1479,48 @@ export class WorkshopScreen {
       }
       zipLabel.textContent = f.name;
       err.textContent = "";
-      void f.arrayBuffer().then((buf) => {
-        zipBytes = new Uint8Array(buf);
-        try {
-          const raw = unzipSync(zipBytes) as Record<string, Uint8Array>;
-          const norm: Record<string, Uint8Array> = {};
-          for (const [k, v] of Object.entries(raw)) {
-            norm[k.replace(/\\/g, "/").replace(/^\//, "")] = v;
+      void f
+        .arrayBuffer()
+        .then((buf) => {
+          zipBytes = new Uint8Array(buf);
+          try {
+            const raw = unzipSync(zipBytes) as Record<string, Uint8Array>;
+            const norm: Record<string, Uint8Array> = {};
+            for (const [k, v] of Object.entries(raw)) {
+              norm[k.replace(/\\/g, "/").replace(/^\//, "")] = v;
+            }
+            const parsed = readWorkshopManifestFromZipFiles(norm);
+            manifestName = parsed.name;
+            manifestId = parsed.id;
+            manifestVersion = parsed.version;
+            manifestType = parsed.mod_type;
+            nameInp.value = manifestName;
+            idDisp.textContent = manifestId;
+            verDisp.textContent = manifestVersion;
+            typeDisp.textContent =
+              manifestType === "behavior_pack"
+                ? "behavior_pack (blocks, items, recipes, loot)"
+                : manifestType === "resource_pack"
+                  ? "resource_pack (textures)"
+                  : manifestType;
+            const png = norm["pack.png"];
+            if (png !== undefined) {
+              coverBytes = png;
+              covLabel.textContent = "Using pack.png from zip";
+              preview.src = URL.createObjectURL(
+                new Blob([png], { type: "image/png" }),
+              );
+            }
+            updatePublishEnabled();
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            err.textContent = msg;
           }
-          const parsed = readWorkshopManifestFromZipFiles(norm);
-          manifestName = parsed.name;
-          manifestId = parsed.id;
-          manifestVersion = parsed.version;
-          manifestType = parsed.mod_type;
-          nameInp.value = manifestName;
-          idDisp.textContent = manifestId;
-          verDisp.textContent = manifestVersion;
-          typeDisp.textContent =
-            manifestType === "behavior_pack"
-              ? "behavior_pack (blocks, items, recipes, loot)"
-              : manifestType === "resource_pack"
-                ? "resource_pack (textures)"
-                : manifestType;
-          const png = norm["pack.png"];
-          if (png !== undefined) {
-            coverBytes = png;
-            covLabel.textContent = "Using pack.png from zip";
-            preview.src = URL.createObjectURL(new Blob([png], { type: "image/png" }));
-          }
-          updatePublishEnabled();
-        } catch (e) {
+        })
+        .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
           err.textContent = msg;
-        }
-      });
+        });
     });
 
     coverInput.addEventListener("change", () => {
@@ -1522,11 +1530,17 @@ export class WorkshopScreen {
       }
       covLabel.textContent = f.name;
       err.textContent = "";
-      void f.arrayBuffer().then((buf) => {
-        coverBytes = new Uint8Array(buf);
-        preview.src = URL.createObjectURL(f);
-        updatePublishEnabled();
-      });
+      void f
+        .arrayBuffer()
+        .then((buf) => {
+          coverBytes = new Uint8Array(buf);
+          preview.src = URL.createObjectURL(f);
+          updatePublishEnabled();
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          err.textContent = msg;
+        });
     });
 
     pub.addEventListener("click", () => {

@@ -1,8 +1,20 @@
 /**
  * Local player: world-pixel feet (Y up), screen vy (positive down), break/place, hotbar.
  */
-import type { AudioEngine } from "../audio/AudioEngine";
-import { getBreakSound, getPlaceSound, getStepSound } from "../audio/blockSounds";
+import type { AudioEngine, SfxOptions } from "../audio/AudioEngine";
+import {
+  getCloseSound,
+  getDigSound,
+  getJumpSound,
+  getOpenSound,
+  getPlaceSound,
+  getStepSound,
+} from "../audio/blockSounds";
+import {
+  getDamageFallBigSound,
+  getDamageFallSmallSound,
+  getDamageHitSound,
+} from "../audio/damageSounds";
 import type { EventBus } from "../core/EventBus";
 import type { GameEvent } from "../core/types";
 import {
@@ -20,9 +32,11 @@ import {
   PLAYER_WATER_SWIM_HOLD_UP_ACCEL,
   PLAYER_WIDTH,
   PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT,
+  PLAYER_DAMAGE_TINT_DURATION_SEC,
   PLAYER_HAND_SWING_VISUAL_DURATION_SEC,
   REACH_BLOCKS,
   STEP_INTERVAL,
+  MINING_DIG_SOUND_INTERVAL_SEC,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
   playerFallDamageFromDistance,
@@ -42,6 +56,17 @@ import {
 } from "../world/blocks/stairMetadata";
 import type { World } from "../world/World";
 import {
+  SUB_BG,
+  SUB_BUCKET_FILL,
+  SUB_DOOR_PAIR,
+  SUB_HOE,
+  SUB_SIMPLE_FG,
+  SUB_TALL_GRASS,
+  SUB_WHEAT,
+} from "../world/terrain/terrainHostPlace";
+import { getFeetSupportBlock } from "../world/footstepSurface";
+import {
+  doorLatchedOpenFromMeta,
   packDoorMetadata,
   toggleDoorLatchInMeta,
 } from "../world/door/doorMetadata";
@@ -76,6 +101,15 @@ const JUMP_BUFFER_SEC = 0.1;
 const TARGET_JUMP_HEIGHT_BLOCKS = 2.5;
 const TARGET_JUMP_HEIGHT_PX = TARGET_JUMP_HEIGHT_BLOCKS * BLOCK_SIZE;
 const JUMP_VELOCITY = -Math.sqrt(2 * GRAVITY * TARGET_JUMP_HEIGHT_PX);
+
+/** Fall damage at or above this plays `damage.fall_big` SFX; below plays `fall_small`. */
+const FALL_DAMAGE_SOUND_BIG_THRESHOLD = 4;
+
+/** Minimum fall distance (blocks) before playing landing impact (`jump_*` SFX); avoids spawn click. */
+const LANDING_IMPACT_MIN_FALL_BLOCKS = 0.04;
+
+/** Cadence for `water_swim` while moving submerged (seconds). */
+const WATER_SWIM_SFX_INTERVAL_SEC = 0.38;
 
 const GROUND_PROBE_HEIGHT = 2;
 /** When walking into a stair lip, lift by this much then re-sweep so steps can be walked without jumping. */
@@ -123,6 +157,14 @@ export type PlayerState = {
    * After place / item use: seconds left to show the same mining-style body + held-item swing as breaking.
    */
   handSwingRemainSec: number;
+  /** True when HP has reached 0 until respawn. */
+  dead: boolean;
+  /**
+   * Death presentation progress in `[0, 1]`; `null` when alive. Advanced by the main game loop each tick.
+   */
+  deathAnimT: number | null;
+  /** Seconds of red damage tint remaining (rendered on the local body + held item). */
+  damageTintRemainSec: number;
 };
 
 function feetToScreenAABB(pos: { x: number; y: number }): AABB {
@@ -304,6 +346,9 @@ export class Player {
     coyoteTimeRemaining: 0,
     jumpBufferRemaining: 0,
     handSwingRemainSec: 0,
+    dead: false,
+    deathAnimT: null,
+    damageTintRemainSec: 0,
   };
 
   public readonly inventory: PlayerInventory;
@@ -314,9 +359,17 @@ export class Player {
   private readonly registry: BlockRegistry;
   private readonly itemRegistry: ItemRegistry;
   private readonly airId: number;
+  /** Accumulator for periodic mining hit SFX (not crack-stage). */
+  private miningDigSoundAccum = 0;
   private prevHotbarSlot = 0;
   /** Downward feet travel (blocks) while airborne; reset on ground. Landing includes this frame’s drop. */
   private fallDistanceBlocks = 0;
+  /** Previous tick: AABB overlapped water (for enter/exit splash). */
+  private wasInWater = false;
+  /** Accumulator for periodic {@link WATER_SWIM_SFX_INTERVAL_SEC} swim strokes. */
+  private waterSwimSfxAccum = 0;
+  /** When true, block/place mutations go to the host via bus (`terrain:net-*`). */
+  private _mpTerrainClient = false;
 
   constructor(registry: BlockRegistry, bus: EventBus, audio: AudioEngine, itemRegistry: ItemRegistry) {
     this.bus = bus;
@@ -325,6 +378,30 @@ export class Player {
     this.itemRegistry = itemRegistry;
     this.inventory = new PlayerInventory(itemRegistry);
     this.airId = registry.getByIdentifier("stratum:air").id;
+  }
+
+  /** Multiplayer guest: terrain edits are RPC’d to the host. */
+  setMultiplayerTerrainClient(v: boolean): void {
+    this._mpTerrainClient = v;
+  }
+
+  private emitNetPlace(
+    subtype: number,
+    wx: number,
+    wy: number,
+    hotbarSlot: number,
+    placesBlockId: number,
+    aux: number,
+  ): void {
+    this.bus.emit({
+      type: "terrain:net-place",
+      subtype,
+      wx,
+      wy,
+      hotbarSlot,
+      placesBlockId,
+      aux,
+    } satisfies GameEvent);
   }
 
   getAABB(): AABB {
@@ -353,16 +430,38 @@ export class Player {
     this.state.jumpBufferRemaining = 0;
     this.state.health = PLAYER_MAX_HEALTH;
     this.state.handSwingRemainSec = 0;
+    this.state.dead = false;
+    this.state.deathAnimT = null;
+    this.state.damageTintRemainSec = 0;
     this.fallDistanceBlocks = 0;
+    this.wasInWater = false;
+    this.waterSwimSfxAccum = 0;
   }
 
   /** Reduce health; amount is floored. HP does not go below 0. */
-  takeDamage(amount: number): void {
-    if (amount <= 0) {
+  takeDamage(
+    amount: number,
+    opts?: { skipHurtSound?: boolean },
+  ): void {
+    if (this.state.dead || amount <= 0) {
       return;
     }
     const d = Math.floor(amount);
+    const prevHp = this.state.health;
     this.state.health = Math.max(0, this.state.health - d);
+    if (this.state.health < prevHp) {
+      this.state.damageTintRemainSec = PLAYER_DAMAGE_TINT_DURATION_SEC;
+    }
+    if (!opts?.skipHurtSound && prevHp > 0) {
+      this.sfxSelf(getDamageHitSound(), {
+        volume: 0.82,
+        pitchVariance: 28,
+      });
+    }
+    if (this.state.health <= 0) {
+      this.state.dead = true;
+      this.state.deathAnimT = 0;
+    }
   }
 
   /** Restore health; amount is floored. HP does not exceed `PLAYER_MAX_HEALTH`. */
@@ -402,14 +501,64 @@ export class Player {
     if (inventory !== undefined) {
       this.inventory.restore(inventory);
     }
+    this.state.dead = false;
+    this.state.deathAnimT = null;
+    this.state.damageTintRemainSec = 0;
     this.bus.emit({
       type: "player:hotbarChanged",
       slot,
     } satisfies GameEvent);
   }
 
+  /** Spatial SFX at block center (mining, placement, door). */
+  private sfxAtBlock(
+    wx: number,
+    wy: number,
+    name: string,
+    opts?: Omit<SfxOptions, "world">,
+  ): void {
+    const { state } = this;
+    const lx = state.position.x;
+    const ly = state.position.y;
+    this.audio.playSfx(name, {
+      ...opts,
+      world: {
+        listenerX: lx,
+        listenerY: ly,
+        sourceX: wx * BLOCK_SIZE + BLOCK_SIZE * 0.5,
+        sourceY: wy * BLOCK_SIZE + BLOCK_SIZE * 0.5,
+      },
+    });
+  }
+
+  /** Spatial SFX at the player (fall hurt, eat, footstep origin near feet). */
+  private sfxSelf(name: string, opts?: Omit<SfxOptions, "world">): void {
+    const { state } = this;
+    const lx = state.position.x;
+    const ly = state.position.y;
+    this.audio.playSfx(name, {
+      ...opts,
+      world: { listenerX: lx, listenerY: ly, sourceX: lx, sourceY: ly },
+    });
+  }
+
   update(dt: number, input: InputManager, world: World): void {
     const { state } = this;
+
+    if (state.damageTintRemainSec > 0) {
+      state.damageTintRemainSec = Math.max(0, state.damageTintRemainSec - dt);
+    }
+
+    if (state.dead) {
+      state.prevPosition.x = state.position.x;
+      state.prevPosition.y = state.position.y;
+      state.velocity.x = 0;
+      state.velocity.y = 0;
+      this.fallDistanceBlocks = 0;
+      this.wasInWater = false;
+      this.waterSwimSfxAccum = 0;
+      return;
+    }
 
     const feetBx = Math.floor(state.position.x / BLOCK_SIZE);
     const feetBy = Math.floor(state.position.y / BLOCK_SIZE);
@@ -422,6 +571,8 @@ export class Player {
       state.velocity.x = 0;
       state.velocity.y = 0;
       this.fallDistanceBlocks = 0;
+      this.wasInWater = false;
+      this.waterSwimSfxAccum = 0;
       return;
     }
 
@@ -528,10 +679,37 @@ export class Player {
     const onGroundAfterCollision = state.onGround;
     const downBlocksThisTick =
       Math.max(0, state.prevPosition.y - state.position.y) / BLOCK_SIZE;
-    if (!onGroundAfterCollision) {
+    /**
+     * Do not count vertical movement while submerged as falling — swimming/sinking would otherwise
+     * inflate {@link fallDistanceBlocks} and cause bogus fall damage when walking onto shore.
+     * Clear for either tick edge so one-frame surface gaps do not accumulate.
+     */
+    if (inWaterAfterMove || inWater) {
+      this.fallDistanceBlocks = 0;
+    } else if (!onGroundAfterCollision) {
       this.fallDistanceBlocks += downBlocksThisTick;
     } else if (!wasOnGround) {
       this.fallDistanceBlocks += downBlocksThisTick;
+      if (
+        !inWaterAfterMove &&
+        this.fallDistanceBlocks > LANDING_IMPACT_MIN_FALL_BLOCKS
+      ) {
+        const landSurface = getFeetSupportBlock(
+          world,
+          state.position.x,
+          state.position.y,
+        );
+        if (landSurface.id !== this.airId && !landSurface.water) {
+          const lbx = Math.floor(state.position.x / BLOCK_SIZE);
+          const lfy = Math.floor(state.position.y / BLOCK_SIZE);
+          const atFeetForLand = world.getBlock(lbx, lfy);
+          const lwy = atFeetForLand.isStair === true ? lfy : lfy - 1;
+          this.sfxAtBlock(lbx, lwy, getJumpSound(landSurface.material), {
+            volume: 0.52,
+            pitchVariance: 50,
+          });
+        }
+      }
       let fallDmg = playerFallDamageFromDistance(this.fallDistanceBlocks);
       if (fallDmg > 0 && world.getRegistry().isRegistered("stratum:water")) {
         const wDepth = maxWaterDepthAboveFooting(
@@ -546,7 +724,18 @@ export class Player {
         }
       }
       if (fallDmg > 0) {
-        this.takeDamage(fallDmg);
+        if (fallDmg >= FALL_DAMAGE_SOUND_BIG_THRESHOLD) {
+          this.sfxSelf(getDamageFallBigSound(), {
+            volume: 0.88,
+            pitchVariance: 22,
+          });
+        } else {
+          this.sfxSelf(getDamageFallSmallSound(), {
+            volume: 0.72,
+            pitchVariance: 18,
+          });
+        }
+        this.takeDamage(fallDmg, { skipHurtSound: true });
       }
       this.fallDistanceBlocks = 0;
     } else {
@@ -563,6 +752,18 @@ export class Player {
       canUseGroundJump &&
       !inWaterAfterMove
     ) {
+      const jumpSurface = getFeetSupportBlock(
+        world,
+        state.position.x,
+        state.position.y,
+      );
+      const jbx = Math.floor(state.position.x / BLOCK_SIZE);
+      const jfy = Math.floor(state.position.y / BLOCK_SIZE);
+      const atFeetForJump = world.getBlock(jbx, jfy);
+      const jwy = atFeetForJump.isStair === true ? jfy : jfy - 1;
+      this.sfxAtBlock(jbx, jwy, getJumpSound(jumpSurface.material), {
+        pitchVariance: 55,
+      });
       state.velocity.y = JUMP_VELOCITY;
       state.onGround = false;
       state.jumpBufferRemaining = 0;
@@ -570,6 +771,30 @@ export class Player {
     } else if (state.onGround && state.velocity.y >= 0 && !inWaterAfterMove) {
       state.velocity.y = 0;
     }
+
+    if (inWaterAfterMove && !this.wasInWater) {
+      this.sfxSelf("water_splash", { volume: 0.58, pitchVariance: 38 });
+    } else if (!inWaterAfterMove && this.wasInWater) {
+      this.sfxSelf("water_splash", { volume: 0.62, pitchVariance: 42 });
+    }
+    if (inWaterAfterMove) {
+      const movingInWater =
+        Math.abs(state.velocity.x) > 14 ||
+        Math.abs(state.velocity.y) > 22 ||
+        (input.isDown("jump") && inWater);
+      if (movingInWater) {
+        this.waterSwimSfxAccum += dt;
+        if (this.waterSwimSfxAccum >= WATER_SWIM_SFX_INTERVAL_SEC) {
+          this.waterSwimSfxAccum = 0;
+          this.sfxSelf("water_swim", { volume: 0.32, pitchVariance: 60 });
+        }
+      } else {
+        this.waterSwimSfxAccum = 0;
+      }
+    } else {
+      this.waterSwimSfxAccum = 0;
+    }
+    this.wasInWater = inWaterAfterMove;
 
     if (moveInput > 0) {
       state.facingRight = true;
@@ -591,7 +816,7 @@ export class Player {
       state.hotbarSlot = (state.hotbarSlot + step + HOTBAR_SIZE) % HOTBAR_SIZE;
     }
 
-    if (input.isJustPressed("dropItem") && !input.isWorldInputBlocked()) {
+    if (input.isJustPressed("dropItem")) {
       const dropSlot = state.hotbarSlot % HOTBAR_SIZE;
       const dropStack = this.inventory.getStack(dropSlot);
       if (dropStack !== null && dropStack.count > 0) {
@@ -628,6 +853,7 @@ export class Player {
       state.breakAccum = 0;
       state.breakProgress = 0;
       state.handSwingRemainSec = 0;
+      this.miningDigSoundAccum = 0;
     }
 
     const { wx, wy } = mouseToBlock(
@@ -669,10 +895,42 @@ export class Player {
             1,
             state.breakAccum / breakTime,
           );
+          if (state.breakProgress < 1) {
+            this.miningDigSoundAccum += dt;
+            while (
+              this.miningDigSoundAccum >= MINING_DIG_SOUND_INTERVAL_SEC
+            ) {
+              this.miningDigSoundAccum -= MINING_DIG_SOUND_INTERVAL_SEC;
+              this.sfxAtBlock(wx, wy, getDigSound(def.material), {
+                volume: 0.5,
+                pitchVariance: 35,
+              });
+            }
+          }
           if (state.breakProgress >= 1) {
-            const mat = def.material;
+            if (this._mpTerrainClient) {
+              const expectedBlockId =
+                layer === "bg"
+                  ? world.getBackgroundId(wx, wy)
+                  : world.getBlock(wx, wy).id;
+              this.bus.emit({
+                type: "terrain:net-break-commit",
+                wx,
+                wy,
+                layer,
+                expectedBlockId,
+                hotbarSlot: heldSlot,
+                heldItemId:
+                  heldStack !== null && heldStack.count > 0
+                    ? heldStack.itemId
+                    : 0,
+              } satisfies GameEvent);
+              state.breakTarget = null;
+              state.breakAccum = 0;
+              state.breakProgress = 0;
+              this.miningDigSoundAccum = 0;
+            } else {
             const dropsLoot = canHarvestDrops(def, heldItemDef);
-            this.audio.playSfx(getBreakSound(mat), { pitchVariance: 50 });
             if (layer === "bg") {
               if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
               world.setBackgroundBlock(wx, wy, 0);
@@ -736,21 +994,30 @@ export class Player {
             state.breakTarget = null;
             state.breakAccum = 0;
             state.breakProgress = 0;
+            this.miningDigSoundAccum = 0;
+            }
           }
         } else {
           state.breakTarget = { wx, wy, layer };
           state.breakAccum = 0;
           state.breakProgress = 0;
+          this.miningDigSoundAccum = 0;
+          this.sfxAtBlock(wx, wy, getDigSound(def.material), {
+            volume: 0.5,
+            pitchVariance: 35,
+          });
         }
       } else {
         state.breakTarget = null;
         state.breakAccum = 0;
         state.breakProgress = 0;
+        this.miningDigSoundAccum = 0;
       }
     } else {
       state.breakTarget = null;
       state.breakAccum = 0;
       state.breakProgress = 0;
+      this.miningDigSoundAccum = 0;
     }
 
     const placeEdgeWithInventoryOpen =
@@ -793,12 +1060,28 @@ export class Player {
           if (b.doorHalf === "bottom" && bottomWy + 1 <= WORLD_Y_MAX) {
             const t = world.getBlock(wx, bottomWy + 1);
             if (t.doorHalf === "top") {
+              if (this._mpTerrainClient) {
+                this.bus.emit({
+                  type: "terrain:net-door-toggle",
+                  wx,
+                  wy: bottomWy,
+                } satisfies GameEvent);
+                this.startHandSwingVisual();
+              } else {
               const m = world.getMetadata(wx, bottomWy);
               const newM = toggleDoorLatchInMeta(m);
               world.setBlock(wx, bottomWy, b.id, { cellMetadata: newM });
               world.setBlock(wx, bottomWy + 1, t.id, { cellMetadata: newM });
               this.startHandSwingVisual();
-              this.audio.playSfx(getPlaceSound("wood"), { pitchVariance: 25 });
+              this.sfxAtBlock(
+                wx,
+                bottomWy,
+                doorLatchedOpenFromMeta(newM)
+                  ? getOpenSound("door")
+                  : getCloseSound("door"),
+                { pitchVariance: 25 },
+              );
+              }
             }
           }
         }
@@ -819,13 +1102,26 @@ export class Player {
         if (held?.key === "stratum:bucket" && cell.water) {
           if (isWaterSourceMetadata(world.getMetadata(wx, wy))) {
             const wb = this.itemRegistry.getByKey("stratum:water_bucket");
-            if (wb !== undefined && world.setBlock(wx, wy, this.airId)) {
-              this.inventory.setStack(hotbarSlot, { itemId: wb.id, count: 1 });
-              placeHandled = true;
-              this.startHandSwingVisual();
-              this.audio.playSfx(getPlaceSound("generic"), {
-                pitchVariance: 20,
-              });
+            if (wb !== undefined) {
+              if (this._mpTerrainClient) {
+                this.emitNetPlace(
+                  SUB_BUCKET_FILL,
+                  wx,
+                  wy,
+                  hotbarSlot,
+                  0,
+                  0,
+                );
+                placeHandled = true;
+                this.startHandSwingVisual();
+              } else if (world.setBlock(wx, wy, this.airId)) {
+                this.inventory.setStack(hotbarSlot, { itemId: wb.id, count: 1 });
+                placeHandled = true;
+                this.startHandSwingVisual();
+                this.sfxAtBlock(wx, wy, getPlaceSound("generic"), {
+                  pitchVariance: 20,
+                });
+              }
             }
           }
         }
@@ -840,6 +1136,11 @@ export class Player {
             above.id === this.airId ||
             (above.replaceable && above.id !== this.airId);
           if (clearAbove) {
+            if (this._mpTerrainClient) {
+              this.emitNetPlace(SUB_WHEAT, wx, wy, hotbarSlot, 0, 0);
+              placeHandled = true;
+              this.startHandSwingVisual();
+            } else {
             if (above.id !== this.airId) {
               world.spawnLootForBrokenBlock(above.id, wx, wy + 1);
               world.setBlock(wx, wy + 1, this.airId);
@@ -851,12 +1152,13 @@ export class Player {
               if (this.inventory.consumeOneFromSlot(hotbarSlot)) {
                 placeHandled = true;
                 this.startHandSwingVisual();
-                this.audio.playSfx(getPlaceSound("grass"), {
+                this.sfxAtBlock(wx, wy + 1, getPlaceSound("grass"), {
                   pitchVariance: 25,
                 });
               } else {
                 world.setBlock(wx, wy + 1, this.airId);
               }
+            }
             }
           }
         }
@@ -872,6 +1174,11 @@ export class Player {
                 above.id === this.airId ||
                 (above.replaceable && above.id !== this.airId);
               if (clearAbove) {
+                if (this._mpTerrainClient) {
+                  this.emitNetPlace(SUB_HOE, wx, wy, hotbarSlot, 0, 0);
+                  placeHandled = true;
+                  this.startHandSwingVisual();
+                } else {
                 if (above.id !== this.airId) {
                   world.spawnLootForBrokenBlock(above.id, wx, wy + 1);
                   world.setBlock(wx, wy + 1, this.airId);
@@ -879,10 +1186,11 @@ export class Player {
                 if (world.setBlock(wx, wy, farmlandDryId)) {
                   this.inventory.applyToolUseFromMining(hotbarSlot);
                   this.startHandSwingVisual();
-                  this.audio.playSfx(getPlaceSound("dirt"), {
+                  this.sfxAtBlock(wx, wy, getPlaceSound("dirt"), {
                     pitchVariance: 30,
                   });
                   placeHandled = true;
+                }
                 }
               }
             }
@@ -903,12 +1211,22 @@ export class Player {
               const placedDef = this.registry.getById(placesBlockId);
               if (placedDef.tallGrass === "bottom") {
                 // two-tall plants not supported on back layer
+              } else if (this._mpTerrainClient) {
+                this.emitNetPlace(
+                  SUB_BG,
+                  wx,
+                  wy,
+                  hotbarSlot,
+                  placesBlockId,
+                  0,
+                );
+                this.startHandSwingVisual();
               } else if (world.setBackgroundBlock(wx, wy, placesBlockId)) {
                 if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
                   world.setBackgroundBlock(wx, wy, 0);
                 } else {
                   this.startHandSwingVisual();
-                  this.audio.playSfx(getPlaceSound(placedDef.material), {
+                  this.sfxAtBlock(wx, wy, getPlaceSound(placedDef.material), {
                     pitchVariance: 30,
                   });
                 }
@@ -974,6 +1292,20 @@ export class Player {
                   const topId = this.registry.getByIdentifier("stratum:tall_grass_top").id;
                   if (!world.canPlaceForegroundWithCactusRules(wx, wy + 1, topId)) {
                     // tall grass top would touch cactus horizontally
+                  } else if (this._mpTerrainClient) {
+                    this.emitNetPlace(
+                      SUB_TALL_GRASS,
+                      wx,
+                      wy,
+                      hotbarSlot,
+                      0,
+                      0,
+                    );
+                    const placed = this.registry.getById(placesBlockId);
+                    this.startHandSwingVisual();
+                    this.sfxAtBlock(wx, wy, getPlaceSound(placed.material), {
+                      pitchVariance: 30,
+                    });
                   } else if (!world.setBlock(wx, wy, placesBlockId)) {
                     // vertical bounds
                   } else if (!world.setBlock(wx, wy + 1, topId)) {
@@ -984,7 +1316,7 @@ export class Player {
                   } else {
                     const placed = this.registry.getById(placesBlockId);
                     this.startHandSwingVisual();
-                    this.audio.playSfx(getPlaceSound(placed.material), {
+                    this.sfxAtBlock(wx, wy, getPlaceSound(placed.material), {
                       pitchVariance: 30,
                     });
                   }
@@ -1051,6 +1383,20 @@ export class Player {
                       const px = state.position.x;
                       const hingeRight =
                         Math.abs(px - cellRight) <= Math.abs(px - cellLeft);
+                      if (this._mpTerrainClient) {
+                        this.emitNetPlace(
+                          SUB_DOOR_PAIR,
+                          wx,
+                          wy,
+                          hotbarSlot,
+                          0,
+                          hingeRight ? 1 : 0,
+                        );
+                        this.startHandSwingVisual();
+                        this.sfxAtBlock(wx, wy, getPlaceSound(placedDef.material), {
+                          pitchVariance: 30,
+                        });
+                      } else {
                       const doorMeta = packDoorMetadata(0, hingeRight, false);
                       if (!world.setBlock(wx, wy, placesBlockId, {
                         cellMetadata: doorMeta,
@@ -1067,9 +1413,10 @@ export class Player {
                         world.setBlock(wx, wy + 1, 0);
                       } else {
                         this.startHandSwingVisual();
-                        this.audio.playSfx(getPlaceSound(placedDef.material), {
+                        this.sfxAtBlock(wx, wy, getPlaceSound(placedDef.material), {
                           pitchVariance: 30,
                         });
+                      }
                       }
                     }
                   }
@@ -1102,6 +1449,20 @@ export class Player {
                 ) {
                   const placedDefForSfx = this.registry.getById(placesBlockId);
                   const waterBlockId = world.getWaterBlockId();
+                  if (this._mpTerrainClient) {
+                    this.emitNetPlace(
+                      SUB_SIMPLE_FG,
+                      wx,
+                      wy,
+                      hotbarSlot,
+                      placesBlockId,
+                      0,
+                    );
+                    this.startHandSwingVisual();
+                    this.sfxAtBlock(wx, wy, getPlaceSound(placedDefForSfx.material), {
+                      pitchVariance: 30,
+                    });
+                  } else {
                   const stairMeta =
                     placedDefForSfx.isStair === true
                       ? withStairShape(
@@ -1135,12 +1496,10 @@ export class Player {
                       }
                     }
                     this.startHandSwingVisual();
-                    this.audio.playSfx(
-                      getPlaceSound(placedDefForSfx.material),
-                      {
-                        pitchVariance: 30,
-                      },
-                    );
+                    this.sfxAtBlock(wx, wy, getPlaceSound(placedDefForSfx.material), {
+                      pitchVariance: 30,
+                    });
+                  }
                   }
                 }
               }
@@ -1154,12 +1513,28 @@ export class Player {
           if (b.doorHalf === "bottom" && bottomWy + 1 <= WORLD_Y_MAX) {
             const t = world.getBlock(wx, bottomWy + 1);
             if (t.doorHalf === "top") {
+              if (this._mpTerrainClient) {
+                this.bus.emit({
+                  type: "terrain:net-door-toggle",
+                  wx,
+                  wy: bottomWy,
+                } satisfies GameEvent);
+                this.startHandSwingVisual();
+              } else {
               const m = world.getMetadata(wx, bottomWy);
               const newM = toggleDoorLatchInMeta(m);
               world.setBlock(wx, bottomWy, b.id, { cellMetadata: newM });
               world.setBlock(wx, bottomWy + 1, t.id, { cellMetadata: newM });
               this.startHandSwingVisual();
-              this.audio.playSfx(getPlaceSound("wood"), { pitchVariance: 25 });
+              this.sfxAtBlock(
+                wx,
+                bottomWy,
+                doorLatchedOpenFromMeta(newM)
+                  ? getOpenSound("door")
+                  : getCloseSound("door"),
+                { pitchVariance: 25 },
+              );
+              }
             }
           }
         }
@@ -1202,7 +1577,7 @@ export class Player {
         ) {
           this.heal(eatHp);
           this.startHandSwingVisual();
-          this.audio.playSfx(getPlaceSound("generic"), {
+          this.sfxSelf(getPlaceSound("generic"), {
             pitchVariance: 18,
           });
         }
@@ -1230,7 +1605,7 @@ export class Player {
       ) {
         this.heal(eatHpFar);
         this.startHandSwingVisual();
-        this.audio.playSfx(getPlaceSound("generic"), {
+        this.sfxSelf(getPlaceSound("generic"), {
           pitchVariance: 18,
         });
       }
@@ -1250,10 +1625,16 @@ export class Player {
       state.stepAccum += dt;
       if (state.stepAccum >= STEP_INTERVAL) {
         state.stepAccum = 0;
-        const bx = Math.floor(state.position.x / BLOCK_SIZE);
-        const by = Math.floor(state.position.y / BLOCK_SIZE) - 1;
-        const blockBelow = world.getBlock(bx, by);
-        this.audio.playSfx(getStepSound(blockBelow.material), {
+        const blockBelow = getFeetSupportBlock(
+          world,
+          state.position.x,
+          state.position.y,
+        );
+        const sbx = Math.floor(state.position.x / BLOCK_SIZE);
+        const sfy = Math.floor(state.position.y / BLOCK_SIZE);
+        const atFeetStep = world.getBlock(sbx, sfy);
+        const swy = atFeetStep.isStair === true ? sfy : sfy - 1;
+        this.sfxAtBlock(sbx, swy, getStepSound(blockBelow.material), {
           volume: 0.4,
           pitchVariance: 80,
         });

@@ -1,10 +1,9 @@
-/** Host-driven chunk replication over `INetworkAdapter` and client-side chunk events via `EventBus`. */
+/** Host-driven chunk replication over `INetworkAdapter` (outbound snapshot to joining peers). */
 
 // PERF: No ack / pending-set — joining clients always receive a full snapshot; resend-on-reconnect
 // could duplicate work if extended without tracking acknowledged chunk keys.
 
 import { CHUNK_SIZE } from "../core/constants";
-import type { EventBus } from "../core/EventBus";
 import type { FurnacePersistedChunk } from "../world/furnace/furnacePersisted";
 import type { ChestPersistedChunk } from "../world/chest/chestPersisted";
 import type { INetworkAdapter, PeerId } from "./INetworkAdapter";
@@ -25,10 +24,7 @@ type ChunkIterator = (fn: (chunk: ChunkSnapshot) => void) => void;
 type ChunkDataProvider = ChunkIterator;
 
 export class ChunkSyncManager {
-  constructor(
-    private readonly _adapter: INetworkAdapter,
-    private readonly _bus: EventBus,
-  ) {}
+  constructor(private readonly _adapter: INetworkAdapter) {}
 
   sendAllChunksTo(peerId: PeerId, iterate: ChunkDataProvider): void {
     const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE;
@@ -50,24 +46,6 @@ export class ChunkSyncManager {
         metadata: chunk.metadata?.slice(),
       };
       this._adapter.send(peerId, msg);
-    });
-  }
-
-  handleInbound(msg: NetworkMessage): void {
-    if (msg.type !== MsgType.CHUNK_DATA) {
-      return;
-    }
-
-    // Copy the blocks array — the receiver owns this memory.
-    const blocks = msg.blocks.slice();
-
-    this._bus.emit({
-      type: "network:chunk-received",
-      chunkX: msg.cx,
-      chunkY: msg.cy,
-      blocks,
-      background: msg.background?.slice(),
-      metadata: msg.metadata?.slice(),
     });
   }
 }

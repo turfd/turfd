@@ -31,7 +31,14 @@ export class SaveGame {
   private readonly mergeMultiplayerLastPositions:
     | ((into: Record<string, { x: number; y: number }>) => void)
     | null;
+  /**
+   * When set: return seconds of rain left to persist. Return `undefined` to keep
+   * `existing.rainRemainingSec` (multiplayer clients must not overwrite host value).
+   */
+  private readonly getRainRemainingSec: (() => number | undefined) | null;
   private autoSaveId: ReturnType<typeof setInterval> | null = null;
+  /** Serializes overlapping `save()` calls (autosave + manual) to avoid torn metadata/chunk batches. */
+  private _saveSerial = Promise.resolve();
 
   constructor(
     store: IndexedDBStore,
@@ -46,6 +53,7 @@ export class SaveGame {
     mergeMultiplayerLastPositions?: (
       into: Record<string, { x: number; y: number }>,
     ) => void,
+    getRainRemainingSec?: () => number | undefined,
   ) {
     this.store = store;
     this.world = world;
@@ -57,6 +65,7 @@ export class SaveGame {
     this.capturePreview = capturePreview ?? null;
     this.getModerationForSave = getModerationForSave ?? null;
     this.mergeMultiplayerLastPositions = mergeMultiplayerLastPositions ?? null;
+    this.getRainRemainingSec = getRainRemainingSec ?? null;
   }
 
   async init(): Promise<void> {
@@ -64,6 +73,15 @@ export class SaveGame {
   }
 
   async save(): Promise<void> {
+    const p = this._saveSerial.then(() => this.saveNow());
+    this._saveSerial = p.then(
+      () => {},
+      () => {},
+    );
+    return p;
+  }
+
+  private async saveNow(): Promise<void> {
     const chunks = [...this.world.getChunkManager().getLoadedChunks()];
     await this.store.saveChunkBatch(
       this.worldUuid,
@@ -84,6 +102,12 @@ export class SaveGame {
       ...(existing?.multiplayerLastPositions ?? {}),
     };
     this.mergeMultiplayerLastPositions?.(mpMerged);
+    const rainFromSave = this.getRainRemainingSec?.();
+    const rainRemainingSec =
+      rainFromSave === undefined
+        ? existing?.rainRemainingSec
+        : rainFromSave;
+
     const meta: WorldMetadata = {
       uuid: this.worldUuid,
       name: existing?.name ?? this.worldName,
@@ -101,6 +125,7 @@ export class SaveGame {
       workshopResourceMods: existing?.workshopResourceMods,
       requirePacksBeforeJoin: existing?.requirePacksBeforeJoin,
       worldTimeMs: this.getWorldTimeMs(),
+      ...(rainRemainingSec !== undefined ? { rainRemainingSec } : {}),
       previewImageDataUrl,
       moderation: moderationPatch ?? existing?.moderation,
       playerInventory: this.player.inventory.serialize(),

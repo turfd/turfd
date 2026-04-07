@@ -1,14 +1,19 @@
 import {
   Application,
+  Assets,
   Container,
   Culler,
   RenderTexture,
+  TilingSprite,
+  type Texture,
 } from "pixi.js";
 import type { EventBus } from "../core/EventBus";
 import {
   BACKGROUND_PARALLAX_X,
+  DAY_LENGTH_MS,
   MAX_RENDER_DEVICE_PIXEL_RATIO,
 } from "../core/constants";
+import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 
 import type { World } from "../world/World";
 import type { WorldLightingParams } from "../world/lighting/WorldTime";
@@ -16,6 +21,7 @@ import type { AtlasLoader } from "./AtlasLoader";
 import { BackgroundLayerRenderer } from "./BackgroundLayerRenderer";
 import { Camera } from "./Camera";
 import { LightingComposer } from "./lighting/LightingComposer";
+import { WeatherRainParticles } from "./WeatherRainParticles";
 
 /**
  * Named world layers (instances are created by {@link RenderPipeline}).
@@ -87,8 +93,20 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _lastSkyCanvasPaintMs = -1;
   private _lastSkyCanvasPaintCw = -1;
   private _lastSkyCanvasPaintCh = -1;
+  private _lastSkyCanvasPaintLightning = -999;
+  /** Sky flash alpha from {@link updateSky} (0–1). */
+  private _skyLightningAlpha = 0;
   /** Last world ms applied to parallax background tint. */
   private _lastBackgroundLightingMs = -1;
+
+  private _rainRoot: Container | null = null;
+  private _rainTiling: TilingSprite | null = null;
+  private _rainParticles: WeatherRainParticles | null = null;
+
+  /** Loaded `textures/environment/*.png` for 2D sky canvas (sun / moon). */
+  private _skySunImage: HTMLImageElement | null = null;
+  private _skyMoonFullImage: HTMLImageElement | null = null;
+  private _skyMoonNewImage: HTMLImageElement | null = null;
 
   /** Dedicated DOM canvas behind the WebGL canvas — never touched by Pixi. */
   private _skyCssCanvas: HTMLCanvasElement | null = null;
@@ -268,13 +286,116 @@ export class RenderPipeline implements RenderPipelineLayers {
    * Store latest lighting for {@link render}; sky is painted once per frame there (when clock or
    * canvas size changes). Parallax background tint only updates when `worldTimeMs` changes.
    */
-  updateSky(lighting: WorldLightingParams, worldTimeMs: number): void {
+  updateSky(
+    lighting: WorldLightingParams,
+    worldTimeMs: number,
+    extras?: { lightningAlpha?: number },
+  ): void {
     this._lastSkyLighting = lighting;
     this._skyClockMs = worldTimeMs;
+    this._skyLightningAlpha = extras?.lightningAlpha ?? 0;
     if (worldTimeMs !== this._lastBackgroundLightingMs) {
       this._backgroundLayer?.applyWorldLighting(lighting);
       this._lastBackgroundLightingMs = worldTimeMs;
     }
+  }
+
+  /**
+   * World-space rain behind terrain: fills the visible viewport in world pixels so `weather/rain.png`
+   * texels align 1:1 with world pixels (same grid as blocks after zoom). Safe before textures load.
+   */
+  updateWeatherOverlay(showRain: boolean, dtSec: number): void {
+    const t = this._rainTiling;
+    const root = this._rainRoot;
+    if (t === null || root === null || this.app === null) {
+      return;
+    }
+    root.visible = showRain;
+    if (!showRain) {
+      return;
+    }
+    const cam = this.camera;
+    const z = cam.getZoom();
+    const w = Math.max(1, Math.round(this.app.renderer.width));
+    const h = Math.max(1, Math.round(this.app.renderer.height));
+    const viewW = w / z;
+    const viewH = h / z;
+    const topLeft = cam.screenToWorld(0, 0);
+    root.position.set(topLeft.x, topLeft.y);
+    t.width = viewW;
+    t.height = viewH;
+    t.x = 0;
+    t.y = 0;
+    // Scroll in texture space (px); rates tuned for the rain sheet.
+    t.tilePosition.x += dtSec * 42;
+    t.tilePosition.y += dtSec * 400;
+    this._rainParticles?.update(dtSec, showRain, viewW, viewH, z);
+  }
+
+  /** Load `textures/weather/rain.png` and attach tiling + streaks as the first world layer (under tiles). */
+  async initWeatherOverlay(): Promise<void> {
+    if (this.app === null) {
+      return;
+    }
+    const url = stratumCoreTextureAssetUrl("weather/rain.png");
+    let tex: Texture;
+    try {
+      tex = (await Assets.load<Texture>(url)) ?? Assets.get<Texture>(url);
+      if (tex === undefined || tex.source === undefined) {
+        return;
+      }
+      tex.source.scaleMode = "nearest";
+    } catch {
+      console.warn("[RenderPipeline] Rain texture failed to load:", url);
+      return;
+    }
+    const z = this.camera.getZoom();
+    const w = Math.max(1, Math.round(this.app.renderer.width));
+    const h = Math.max(1, Math.round(this.app.renderer.height));
+    const tiling = new TilingSprite({
+      texture: tex,
+      width: w / z,
+      height: h / z,
+      tileScale: { x: 1, y: 1 },
+      roundPixels: true,
+    });
+    tiling.alpha = 0.38;
+    tiling.visible = false;
+    const root = new Container();
+    root.label = "weatherRainOverlay";
+    root.eventMode = "none";
+    root.cullable = false;
+    root.cullableChildren = false;
+    root.addChild(tiling);
+    // Behind all tile/entity layers; still in front of the parallax background (separate stage child).
+    this.camera.worldRoot.addChildAt(root, 0);
+    this._rainRoot = root;
+    this._rainTiling = tiling;
+    this._rainParticles = new WeatherRainParticles(root);
+  }
+
+  /** Loads sun/moon PNGs from the built-in pack for {@link paintSkyCss}. */
+  async initSkyCelestialTextures(): Promise<void> {
+    const load = (url: string): Promise<HTMLImageElement | null> =>
+      new Promise((resolve) => {
+        const im = new Image();
+        im.crossOrigin = "anonymous";
+        im.onload = () => resolve(im);
+        im.onerror = () => {
+          console.warn("[RenderPipeline] Sky texture failed to load:", url);
+          resolve(null);
+        };
+        im.src = url;
+      });
+    const [sun, full, neu] = await Promise.all([
+      load(stratumCoreTextureAssetUrl("environment/sun.png")),
+      load(stratumCoreTextureAssetUrl("environment/full_moon.png")),
+      load(stratumCoreTextureAssetUrl("environment/new_moon.png")),
+    ]);
+    this._skySunImage = sun;
+    this._skyMoonFullImage = full;
+    this._skyMoonNewImage = neu;
+    this._lastSkyCanvasPaintMs = -1;
   }
 
   /**
@@ -331,30 +452,72 @@ export class RenderPipeline implements RenderPipelineLayers {
     const baseY = ch * 0.16;
 
     let sunAlpha = Math.min(1, sunIntensity / 0.65);
-    if (sunAlpha > 0.04) {
-      const sx = cw * 0.5 + sunDir[0] * spread;
-      const sy = baseY - sunDir[1] * ch * 0.2;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 16 * dpr, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255,243,176,${sunAlpha})`;
-      ctx.fill();
+    let moonAlpha = Math.min(1, moonIntensity / 0.22);
+    /** Only one celestial disc on the sky canvas (matches opposite-orbit day/night handoff). */
+    if (sunAlpha >= moonAlpha) {
+      moonAlpha = 0;
+    } else {
+      sunAlpha = 0;
     }
 
-    let moonAlpha = Math.min(1, moonIntensity / 0.22);
-    // Avoid both bodies being strongly visible at the same time; fade one out when the other dominates.
-    if (sunAlpha > 0.15) {
-      moonAlpha *= Math.max(0, 0.6 - sunAlpha);
+    const sunImg = this._skySunImage;
+    const sunTexW = sunImg !== null && sunImg.naturalWidth > 0 ? sunImg.naturalWidth : 16;
+    const celestialDim = Math.max(20 * dpr, sunTexW * dpr * 1.25) * 4;
+
+    const sx = cw * 0.5 + sunDir[0] * spread;
+    const sy = baseY - sunDir[1] * ch * 0.2;
+    if (sunAlpha > 0.04) {
+      if (sunImg !== null && sunImg.naturalWidth > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = sunAlpha;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(sunImg, sx - celestialDim * 0.5, sy - celestialDim * 0.5, celestialDim, celestialDim);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = sunAlpha;
+        ctx.beginPath();
+        ctx.arc(sx, sy, celestialDim * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgb(255,243,176)";
+        ctx.fill();
+        ctx.restore();
+      }
     }
-    if (moonAlpha > 0.15) {
-      sunAlpha *= Math.max(0, 0.6 - moonAlpha);
-    }
+
+    const mx = cw * 0.5 + moonDir[0] * spread;
+    const my = baseY - moonDir[1] * ch * 0.2;
     if (moonAlpha > 0.04) {
-      const mx = cw * 0.5 + moonDir[0] * spread;
-      const my = baseY - moonDir[1] * ch * 0.2;
-      ctx.beginPath();
-      ctx.arc(mx, my, 12 * dpr, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(216,220,255,${moonAlpha})`;
-      ctx.fill();
+      const phase8 =
+        Math.floor((this._skyClockMs / DAY_LENGTH_MS) * 8) % 8;
+      const moonImg =
+        phase8 >= 2 && phase8 <= 5
+          ? this._skyMoonFullImage
+          : this._skyMoonNewImage;
+      if (moonImg !== null && moonImg.naturalWidth > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = moonAlpha;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(moonImg, mx - celestialDim * 0.5, my - celestialDim * 0.5, celestialDim, celestialDim);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = moonAlpha;
+        ctx.beginPath();
+        ctx.arc(mx, my, celestialDim * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgb(216,220,255)";
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    const flash = this._skyLightningAlpha;
+    if (flash > 0.002) {
+      ctx.fillStyle = `rgba(255,255,255,${flash * 0.58})`;
+      ctx.fillRect(0, 0, cw, ch);
     }
   }
 
@@ -367,10 +530,12 @@ export class RenderPipeline implements RenderPipelineLayers {
     const dpr = effectiveDevicePixelRatio();
     const cw = Math.max(1, Math.round(this.mount.clientWidth * dpr));
     const ch = Math.max(1, Math.round(this.mount.clientHeight * dpr));
+    const li = this._skyLightningAlpha;
     if (
       this._skyClockMs === this._lastSkyCanvasPaintMs &&
       cw === this._lastSkyCanvasPaintCw &&
-      ch === this._lastSkyCanvasPaintCh
+      ch === this._lastSkyCanvasPaintCh &&
+      li === this._lastSkyCanvasPaintLightning
     ) {
       return;
     }
@@ -378,6 +543,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     this._lastSkyCanvasPaintMs = this._skyClockMs;
     this._lastSkyCanvasPaintCw = cw;
     this._lastSkyCanvasPaintCh = ch;
+    this._lastSkyCanvasPaintLightning = li;
   }
 
   /**
@@ -403,6 +569,8 @@ export class RenderPipeline implements RenderPipelineLayers {
       this.app.renderer.render({
         container: this.camera.worldRoot,
         target: this._albedoRT,
+        clear: true,
+        clearColor: "rgba(0,0,0,0)",
       });
       try {
         this.camera.worldRoot.visible = false;
@@ -413,174 +581,6 @@ export class RenderPipeline implements RenderPipelineLayers {
     } else {
       this.app.render();
     }
-  }
-
-  /**
-   * Capture a wide strip around the camera (multiple viewports stitched horizontally)
-   * including sky + background + lit world, and trigger a PNG download.
-   *
-   * Lighting is recomputed per tile using the last known world lighting parameters so shadows
-   * stay consistent with what the game was rendering.
-   */
-  takeScreenshot(): void {
-    if (!this.app) {
-      return;
-    }
-
-    const skyCanvas = this._skyCssCanvas;
-    const renderer = this.app.renderer;
-    const cam = this.camera;
-
-    if (this._lastSkyLighting === null) {
-      // No lighting params yet (e.g. very early in boot); fall back to a single-frame capture.
-      this.app.render();
-      const sceneCanvas = this.app.canvas;
-      if (!sceneCanvas) {
-        return;
-      }
-      const width = sceneCanvas.width;
-      const height = sceneCanvas.height;
-      if (width === 0 || height === 0) {
-        return;
-      }
-      const outSingle = document.createElement("canvas");
-      outSingle.width = width;
-      outSingle.height = height;
-      const ctxSingle = outSingle.getContext("2d");
-      if (!ctxSingle) {
-        return;
-      }
-      if (skyCanvas && skyCanvas.width > 0 && skyCanvas.height > 0) {
-        ctxSingle.drawImage(skyCanvas, 0, 0, width, height);
-      }
-      ctxSingle.drawImage(sceneCanvas, 0, 0, width, height);
-      const nowSingle = new Date();
-      const tsSingle = `${nowSingle.getFullYear()}-${String(
-        nowSingle.getMonth() + 1,
-      ).padStart(2, "0")}-${String(nowSingle.getDate()).padStart(2, "0")}_${String(
-        nowSingle.getHours(),
-      ).padStart(2, "0")}-${String(nowSingle.getMinutes()).padStart(
-        2,
-        "0",
-      )}-${String(nowSingle.getSeconds()).padStart(2, "0")}`;
-      outSingle.toBlob((blob) => {
-        if (!blob) return;
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `stratum_${tsSingle}.png`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, "image/png");
-      return;
-    }
-
-    // Read current camera state so we can restore it after stitching.
-    const origPos = cam.getPosition();
-    const origTarget = cam.getTarget();
-
-    // Ensure renderer dimensions are up to date.
-    this.syncSizeFromRenderer();
-    const baseCanvas = this.app.canvas;
-    if (!baseCanvas) {
-      return;
-    }
-    const baseWidth = baseCanvas.width;
-    const baseHeight = baseCanvas.height;
-    if (baseWidth === 0 || baseHeight === 0) {
-      return;
-    }
-
-    // How many viewports to stitch horizontally. 4x gives a wide world slice without huge textures.
-    const tilesX = 4;
-    const tilesY = 1;
-
-    const out = document.createElement("canvas");
-    out.width = baseWidth * tilesX;
-    out.height = baseHeight * tilesY;
-    const ctx = out.getContext("2d");
-    if (!ctx) {
-      return;
-    }
-
-    const zoom = cam.getZoom();
-    const viewWorldW = baseWidth / zoom;
-    const viewWorldH = baseHeight / zoom;
-
-    const centerX = origPos.x;
-    const centerY = origPos.y;
-    const xStart = -((tilesX - 1) / 2);
-    const yStart = -((tilesY - 1) / 2);
-
-    for (let ty = 0; ty < tilesY; ty++) {
-      for (let tx = 0; tx < tilesX; tx++) {
-        const offsetX = (xStart + tx) * viewWorldW;
-        const offsetY = (yStart + ty) * viewWorldH;
-
-        cam.setPositionImmediate(centerX + offsetX, centerY + offsetY);
-
-        if (this._albedoRT !== null && this._lightingComposer !== null) {
-          // Recompute lighting for this camera position so shadows line up with terrain.
-          const pos = cam.getPosition();
-          this._lightingComposer.update(
-            this._lastSkyLighting,
-            pos.x,
-            pos.y,
-            null,
-          );
-          cam.worldRoot.visible = true;
-          renderer.render({
-            container: cam.worldRoot,
-            target: this._albedoRT,
-          });
-          try {
-            cam.worldRoot.visible = false;
-            this.app.render();
-          } finally {
-            cam.worldRoot.visible = true;
-          }
-        } else {
-          this.app.render();
-        }
-
-        const sceneCanvas = this.app.canvas;
-        if (!sceneCanvas) {
-          continue;
-        }
-
-        const dstX = tx * baseWidth;
-        const dstY = ty * baseHeight;
-
-        // Draw CSS sky/background first (if available), then the lit scene on top.
-        if (skyCanvas && skyCanvas.width > 0 && skyCanvas.height > 0) {
-          ctx.drawImage(skyCanvas, 0, 0, skyCanvas.width, skyCanvas.height, dstX, dstY, baseWidth, baseHeight);
-        }
-        ctx.drawImage(sceneCanvas, 0, 0, baseWidth, baseHeight, dstX, dstY, baseWidth, baseHeight);
-      }
-    }
-
-    // Restore original camera state.
-    cam.setPositionImmediate(origPos.x, origPos.y);
-    cam.setTarget(origTarget.x, origTarget.y);
-
-    const now = new Date();
-    const ts = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}-${String(now.getSeconds()).padStart(2, "0")}`;
-
-    out.toBlob((blob) => {
-      if (!blob) {
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `stratum_${ts}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, "image/png");
   }
 
   /**
@@ -651,6 +651,12 @@ export class RenderPipeline implements RenderPipelineLayers {
   destroy(): void {
     window.removeEventListener("resize", this.onWindowResize);
     if (this.app) {
+      this._rainParticles?.destroy();
+      this._rainParticles = null;
+      this._rainTiling?.destroy();
+      this._rainTiling = null;
+      this._rainRoot?.destroy({ children: true });
+      this._rainRoot = null;
       this._lightingComposer?.destroy();
       this._lightingComposer = null;
       this._albedoRT?.destroy(true);

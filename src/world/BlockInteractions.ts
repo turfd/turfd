@@ -242,7 +242,14 @@ export class BlockInteractions {
   }
 
   /** Called once per fixed tick on the authority (host / offline). */
-  tick(dtSec: number, playerBlockX: number, playerBlockY: number): void {
+  tick(
+    dtSec: number,
+    playerBlockX: number,
+    playerBlockY: number,
+    opts?: { rainGrowthMul?: number },
+  ): void {
+    const growthMul = opts?.rainGrowthMul ?? 1;
+
     const expired: ScheduledEvent[] = [];
     for (let i = this.queue.length - 1; i >= 0; i--) {
       const ev = this.queue[i]!;
@@ -264,7 +271,13 @@ export class BlockInteractions {
         }
       }
 
-      ev.remaining -= dtSec;
+      const stepMul =
+        ev.kind === "sapling-grow" ||
+        ev.kind === "wheat-grow" ||
+        ev.kind === "grass-spread"
+          ? growthMul
+          : 1;
+      ev.remaining -= dtSec * stepMul;
       if (ev.remaining <= 0) {
         this.queue.splice(i, 1);
         this.pending.delete(eventKey(ev.wx, ev.wy, ev.kind));

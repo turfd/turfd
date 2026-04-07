@@ -6,6 +6,7 @@
  * Optional `_alt_N` files beside each base PNG are discovered automatically (HEAD probe `_alt_1`… until miss).
  */
 import { Rectangle, Texture, TextureSource } from "pixi.js";
+import { BLOCK_SIZE } from "../core/constants";
 import type { TextureManifestJson } from "../core/textureManifest";
 import { BLOCK_TEXTURE_MANIFEST_PATH } from "../core/textureManifest";
 import { resolveTextureMapKey } from "../core/textureKeyResolve";
@@ -75,6 +76,61 @@ type PackedEntry = {
   readonly w: number;
   readonly h: number;
 };
+
+/** One packed rect, optionally cropped from a larger spritesheet image. */
+type PackSlice = {
+  readonly name: string;
+  readonly w: number;
+  readonly h: number;
+  readonly img: HTMLImageElement;
+  readonly sx: number;
+  readonly sy: number;
+};
+
+/**
+ * Horizontal or vertical strips of `BLOCK_SIZE` square frames (e.g. `furnace_on.png`).
+ */
+function expandStripSlicesIfNeeded(
+  manifestName: string,
+  img: HTMLImageElement,
+): PackSlice[] {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (manifestName !== "furnace_on" || w < 1 || h < 1) {
+    return [{ name: manifestName, w, h, img, sx: 0, sy: 0 }];
+  }
+  if (h === BLOCK_SIZE && w > h && w % h === 0) {
+    const n = w / h;
+    const out: PackSlice[] = [];
+    for (let i = 0; i < n; i++) {
+      out.push({
+        name: `furnace_on_${i}`,
+        w: BLOCK_SIZE,
+        h: BLOCK_SIZE,
+        img,
+        sx: i * BLOCK_SIZE,
+        sy: 0,
+      });
+    }
+    return out;
+  }
+  if (w === BLOCK_SIZE && h > w && h % w === 0) {
+    const n = h / w;
+    const out: PackSlice[] = [];
+    for (let i = 0; i < n; i++) {
+      out.push({
+        name: `furnace_on_${i}`,
+        w: BLOCK_SIZE,
+        h: BLOCK_SIZE,
+        img,
+        sx: 0,
+        sy: i * BLOCK_SIZE,
+      });
+    }
+    return out;
+  }
+  return [{ name: manifestName, w, h, img, sx: 0, sy: 0 }];
+}
 
 const HSL_SAMPLE_ALPHA_MIN = 10;
 const HSL_MIN_SAT_FOR_VECTOR = 0.12;
@@ -186,7 +242,7 @@ export class AtlasLoader {
     errContext: string,
   ): Promise<void> {
     const names = Object.keys(raw).sort((a, b) => a.localeCompare(b));
-    const sizes: { name: string; w: number; h: number }[] = [];
+    const slices: PackSlice[] = [];
     const images = new Map<string, HTMLImageElement>();
 
     for (const name of names) {
@@ -202,10 +258,11 @@ export class AtlasLoader {
         throw new Error(`Invalid image dimensions for "${name}" (${url})`);
       }
       images.set(name, img);
-      sizes.push({ name, w, h });
+      slices.push(...expandStripSlicesIfNeeded(name, img));
     }
 
-    const { width, height, placements } = shelfPack(sizes);
+    const packSizes = slices.map((s) => ({ name: s.name, w: s.w, h: s.h }));
+    const { width, height, placements } = shelfPack(packSizes);
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -216,13 +273,12 @@ export class AtlasLoader {
     ctx.imageSmoothingEnabled = false;
 
     const byName = new Map(placements.map((p) => [p.name, p]));
-    for (const name of names) {
-      const p = byName.get(name);
-      const img = images.get(name);
-      if (p === undefined || img === undefined) {
+    for (const s of slices) {
+      const p = byName.get(s.name);
+      if (p === undefined) {
         continue;
       }
-      ctx.drawImage(img, p.x, p.y, p.w, p.h);
+      ctx.drawImage(s.img, s.sx, s.sy, s.w, s.h, p.x, p.y, p.w, p.h);
     }
 
     this.destroyPacked();
@@ -527,6 +583,21 @@ export class AtlasLoader {
 
   private buildVariantMap(): void {
     this.variantCache.clear();
+    const furnaceOnFrames: Texture[] = [];
+    for (let i = 0; i < 64; i++) {
+      const t = this.textureMap.get(`furnace_on_${i}`);
+      if (t === undefined) {
+        break;
+      }
+      furnaceOnFrames.push(t);
+    }
+    if (furnaceOnFrames.length > 0) {
+      this.variantCache.set("furnace_on", furnaceOnFrames);
+      if (!this.textureMap.has("furnace_on")) {
+        this.textureMap.set("furnace_on", furnaceOnFrames[0]!);
+      }
+    }
+
     const altGroups = new Map<string, { idx: number; tex: Texture }[]>();
 
     for (const [key, tex] of this.textureMap) {

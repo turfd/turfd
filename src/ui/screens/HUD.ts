@@ -70,37 +70,6 @@ export class HUD {
     ].join(";");
     saveIndicator.textContent = "World Saved";
 
-    const screenshotBtn = document.createElement("button");
-    screenshotBtn.title = "Take screenshot";
-    screenshotBtn.style.cssText = [
-      "position:absolute",
-      "top:0.65rem",
-      "right:0.75rem",
-      "pointer-events:auto",
-      "cursor:pointer",
-      "background:rgba(0,0,0,0.35)",
-      "border:1px solid rgba(255,255,255,0.18)",
-      "border-radius:6px",
-      "padding:4px 6px",
-      "color:#fff",
-      "font-size:1.1rem",
-      "line-height:1",
-      "display:flex",
-      "align-items:center",
-      "justify-content:center",
-      "transition:background 0.15s",
-    ].join(";");
-    screenshotBtn.textContent = "\u{1F4F7}";
-    screenshotBtn.addEventListener("mouseenter", () => {
-      screenshotBtn.style.background = "rgba(0,0,0,0.55)";
-    });
-    screenshotBtn.addEventListener("mouseleave", () => {
-      screenshotBtn.style.background = "rgba(0,0,0,0.35)";
-    });
-    screenshotBtn.addEventListener("click", () => {
-      bus.emit({ type: "ui:screenshot" });
-    });
-
     this.unsubs.push(
       bus.on("player:moved", (e) => {
         coords.textContent = `X: ${e.blockX}  Y: ${e.blockY}`;
@@ -128,7 +97,6 @@ export class HUD {
     wrap.appendChild(bgMode);
     wrap.appendChild(worldTitle);
     wrap.appendChild(saveIndicator);
-    wrap.appendChild(screenshotBtn);
     mount.appendChild(wrap);
     this.container = wrap;
   }

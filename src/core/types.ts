@@ -28,6 +28,8 @@ export type GameEvent =
   | { type: "game:saved" }
   | { type: "ui:save" }
   | { type: "ui:close-pause" }
+  /** In-game death overlay: respawn at world spawn (x=0). */
+  | { type: "ui:death-respawn" }
   | { type: "ui:quit" }
   | { type: "ui:toggle-multiplayer" }
   | { type: "ui:session-ended"; message: string }
@@ -76,21 +78,6 @@ export type GameEvent =
       bindings: Record<KeybindableAction, readonly string[]>;
     }
   | {
-      type: "network:chunk-received";
-      chunkX: number;
-      chunkY: number;
-      blocks: Uint16Array;
-      background?: Uint16Array;
-      /** Per-cell flags from host (e.g. tree trunks); omitted on legacy wire. */
-      metadata?: Uint8Array;
-    }
-  | {
-      type: "network:chunk-send-request";
-      peerId: string;
-      chunkX: number;
-      chunkY: number;
-    }
-  | {
       type: "game:block-changed";
       wx: number;
       wy: number;
@@ -119,9 +106,28 @@ export type GameEvent =
   | { type: "net:error"; message: string }
   | { type: "net:room-code"; roomCode: string | null }
   | { type: "net:message"; peerId: string; message: NetworkMessage }
+  /** Multiplayer client → Game: host-authoritative break (`TERRAIN_BREAK_COMMIT`). */
+  | {
+      type: "terrain:net-break-commit";
+      wx: number;
+      wy: number;
+      layer: "fg" | "bg";
+      expectedBlockId: number;
+      hotbarSlot: number;
+      heldItemId: number;
+    }
+  | { type: "terrain:net-door-toggle"; wx: number; wy: number }
+  | {
+      type: "terrain:net-place";
+      subtype: number;
+      wx: number;
+      wy: number;
+      hotbarSlot: number;
+      placesBlockId: number;
+      aux: number;
+    }
   | { type: "network:world-time-received"; worldTimeMs: number }
   | { type: "world:light-updated"; chunkX: number; chunkY: number }
-  | { type: "ui:screenshot" }
   | {
       type: "ui:chat-line";
       kind: "player" | "system";
@@ -141,6 +147,13 @@ export type GameEvent =
   | { type: "chest:open-request"; wx: number; wy: number }
   | { type: "crafting-table:open-request"; wx: number; wy: number }
   | { type: "furnace:open-request"; wx: number; wy: number }
+  /** Door opened/closed by proximity (not redstone latch); latch stays closed both frames. */
+  | {
+      type: "door:proximity-swing";
+      wx: number;
+      bottomWy: number;
+      opening: boolean;
+    }
   | { type: "mod:install-started"; modId: string }
   | { type: "mod:install-progress"; modId: string; percent: number }
   | { type: "mod:install-complete"; modId: string }

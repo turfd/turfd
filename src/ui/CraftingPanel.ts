@@ -858,7 +858,15 @@ export class CraftingPanel {
       recipes = recipes.filter((r) => this.recipeMatchesSearch(r, q));
     }
     if (this.showCraftableFilter) {
-      recipes = recipes.filter((r) => this.deps.recipeTouchesInventory(r, inv));
+      recipes = recipes.filter((r) => {
+        if (
+          r.category === "Furnace" &&
+          this.furnaceQueuedBatchesForRecipe(r) > 0
+        ) {
+          return true;
+        }
+        return this.deps.recipeTouchesInventory(r, inv);
+      });
     }
     for (let ri = 0; ri < recipes.length; ri++) {
       const recipe = recipes[ri]!;

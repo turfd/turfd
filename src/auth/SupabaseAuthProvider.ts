@@ -28,9 +28,14 @@ export class SupabaseAuthProvider implements IAuthProvider {
 
   constructor(url: string, anonKey: string) {
     this.client = createClient(url, anonKey);
-    void this.client.auth.getSession().then(({ data: { session } }) => {
-      void this.applyAuthSession(session);
-    });
+    void this.client.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        void this.applyAuthSession(session);
+      })
+      .catch((err: unknown) => {
+        console.warn("[SupabaseAuthProvider] getSession failed", err);
+      });
     this.client.auth.onAuthStateChange((_event, session) => {
       void this.applyAuthSession(session);
     });

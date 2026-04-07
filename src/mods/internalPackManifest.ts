@@ -40,6 +40,8 @@ export const ResourcePackManifestSchema = z
     textures: z.array(z.string()).default([]),
     texture_atlas_patch: z.string().optional(),
     item_textures: z.record(z.string()).default({}),
+    /** Optional paths to `sound_manifest.json` files (relative to pack root). */
+    sounds: z.array(z.string()).default([]),
   })
   .strip();
 

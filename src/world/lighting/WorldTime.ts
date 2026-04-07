@@ -460,7 +460,8 @@ export class WorldTime {
     const out = this._lightingCache;
     out.sunDir[0] = Math.cos(sunAngle - Math.PI / 2);
     out.sunDir[1] = Math.sin(sunAngle - Math.PI / 2);
-    const moonAngle = sunAngle + Math.PI;
+    /** Opposite angular velocity vs sun; offset so disc starts opposite the sun at t = 0. */
+    const moonAngle = -t * Math.PI * 2 + (3 * Math.PI) / 2;
     out.moonDir[0] = Math.cos(moonAngle - Math.PI / 2);
     out.moonDir[1] = Math.sin(moonAngle - Math.PI / 2);
 

@@ -1,3 +1,4 @@
+import type { AudioEngine } from "../../audio/AudioEngine";
 import { readVolumeStored, VOL_KEYS } from "../../audio/volumeSettings";
 import type { EventBus } from "../../core/EventBus";
 import type { GameEvent } from "../../core/types";
@@ -19,9 +20,17 @@ import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
 import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
 import { injectSettingsSharedStyles } from "./settingsSharedStyles";
 
+function applyStoredVolumesToEngine(audio: AudioEngine): void {
+  audio.setMasterVolume(readVolumeStored(VOL_KEYS.master, 80) / 100);
+  audio.setMusicVolume(readVolumeStored(VOL_KEYS.music, 60) / 100);
+  audio.setSfxVolume(readVolumeStored(VOL_KEYS.sfx, 100) / 100);
+}
+
 export type MountSettingsPanelOptions = {
   store: IndexedDBStore;
   getInstalled: () => readonly CachedMod[];
+  /** When set (e.g. main menu), sliders update this engine immediately while dragging. */
+  audio?: AudioEngine;
   /** When set, volume sliders emit live {@link GameEvent} `settings:volume`. */
   bus?: EventBus;
   /** When true and `bus` is set, key changes apply to the running game immediately. */
@@ -151,6 +160,9 @@ export async function mountSettingsPanel(
       val.textContent = slider.value;
       localStorage.setItem(key, slider.value);
       emitVolume();
+      if (opts.audio !== undefined) {
+        applyStoredVolumesToEngine(opts.audio);
+      }
     });
     row.appendChild(lbl);
     row.appendChild(slider);

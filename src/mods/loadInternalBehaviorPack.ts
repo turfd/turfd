@@ -3,7 +3,7 @@ import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { RecipeRegistry } from "../world/RecipeRegistry";
 import type { LootResolver } from "../items/LootResolver";
-import { parseBlockJson, type ParsedBlockDefinition } from "./parseBlockJson";
+import { parseBlockJson } from "./parseBlockJson";
 import { parseItemJson, type ParsedItemDefinition } from "./parseItemJson";
 import { parseRecipeJson } from "./parseRecipeJson";
 import { parseLootTablesJson, registerLootTablesForBlocks } from "./parseLootTablesJson";
@@ -34,11 +34,12 @@ export async function loadBehaviorPackBlocks(
   progress?: (loaded: number, total: number, file: string) => void,
 ): Promise<void> {
   const total = manifest.blocks.length;
-  const parsed: { file: string; def: ParsedBlockDefinition }[] = [];
-  for (const file of manifest.blocks) {
-    const raw = await fetchJson(`${packBaseUrl}blocks/${file}`);
-    parsed.push({ file, def: parseBlockJson(raw) });
-  }
+  const parsed = await Promise.all(
+    manifest.blocks.map(async (file) => {
+      const raw = await fetchJson(`${packBaseUrl}blocks/${file}`);
+      return { file, def: parseBlockJson(raw) };
+    }),
+  );
   parsed.sort((a, b) => a.def.numericId - b.def.numericId);
   let loaded = 0;
   for (const { file, def } of parsed) {

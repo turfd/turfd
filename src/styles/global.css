@@ -102,13 +102,50 @@ body {
   opacity: 1;
 }
 
+/* Local player death — same chrome as session overlay */
+.stratum-death-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1210;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1rem, 4vw, 2rem);
+  box-sizing: border-box;
+  font-family: "BoldPixels", "Courier New", monospace;
+  font-synthesis: none;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+  color: #f2f2f7;
+  background: rgba(24, 24, 26, 0.78);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.24s ease,
+    visibility 0.24s ease;
+}
+
+.stratum-death-overlay.stratum-death-overlay--open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.stratum-death-overlay.stratum-death-overlay--open .stratum-session-card {
+  transform: translateY(0);
+  opacity: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .stratum-session-overlay,
-  .stratum-session-card {
+  .stratum-session-card,
+  .stratum-death-overlay {
     transition: none;
   }
 
-  .stratum-session-overlay.stratum-session-overlay--open .stratum-session-card {
+  .stratum-session-overlay.stratum-session-overlay--open .stratum-session-card,
+  .stratum-death-overlay.stratum-death-overlay--open .stratum-session-card {
     transform: none;
   }
 }

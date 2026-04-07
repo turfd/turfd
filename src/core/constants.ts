@@ -310,6 +310,12 @@ export const MAX_FRAME_MS = 250;
 /** Minimum interval between footstep SFX while walking (seconds). */
 export const STEP_INTERVAL = 0.35;
 
+/**
+ * Mining “hit” SFX cadence while holding break (Minecraft-style ~4 game ticks at 20 TPS ≈ 0.2s),
+ * not tied to crack overlay stage.
+ */
+export const MINING_DIG_SOUND_INTERVAL_SEC = 0.2;
+
 /** Maximum sky light level (matches Minecraft-style 0–15 scale). */
 export const SKY_LIGHT_MAX = 15;
 
@@ -343,6 +349,12 @@ export const ITEM_PULL_SPEED_PX = 720;
 
 /** Collect when center-to-center distance is below this (world pixels). */
 export const ITEM_COLLECT_SNAP_PX = 10;
+
+/**
+ * Minimum time between world pickup pops while a stack is merging in over many fixed ticks
+ * (avoids ~60 Hz SFX when the player stays inside {@link ITEM_COLLECT_SNAP_PX}).
+ */
+export const ITEM_PICKUP_SFX_MIN_INTERVAL_MS = 180;
 
 /** Dropped item gravity acceleration (blocks per second²). */
 export const ITEM_GRAVITY = 20;
@@ -379,6 +391,12 @@ export const HOTBAR_SIZE = 9;
 
 /** Player health (integer HP). Each heart icon represents 2 HP. */
 export const PLAYER_MAX_HEALTH = 10;
+
+/** Local player death: tip-over + fade before the respawn / menu prompt. */
+export const PLAYER_DEATH_ANIM_DURATION_SEC = 2.25;
+
+/** Full-strength red flash on the local player sprite after taking damage (decays in {@link Player}). */
+export const PLAYER_DAMAGE_TINT_DURATION_SEC = 0.28;
 
 /**
  * Blocks fallen (downward feet travel) before fall damage starts. Matches vanilla-style ~3-block safe drop.

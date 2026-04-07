@@ -173,6 +173,11 @@ export class WorldGenerator {
     return this.terrain.getSurfaceHeight(wx);
   }
 
+  /** Same desert mask as surface sand/cacti (column `wx`). */
+  isDesertColumn(wx: number): boolean {
+    return this.terrain.isDesert(wx);
+  }
+
   /**
    * Terrain columns, caves, ores, backdrop — no sea fill, trees, or surface decor.
    * Pair with {@link applySeaLevelFloodToChunkRegion} + {@link decorateChunkSurface} for multi-chunk strips.

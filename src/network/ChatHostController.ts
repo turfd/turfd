@@ -78,6 +78,8 @@ export type ChatHostControllerDeps = {
   sendSystemTo: (peerId: PeerId, text: string) => void;
   /** Host-only: parse `/give` tail and grant items (local or remote client). */
   executeGive: (issuerPeerId: string, rest: string) => void;
+  /** Host-only: `/weather set rain|clear`. */
+  executeWeather: (issuerPeerId: string, rest: string) => void;
 };
 
 export class ChatHostController {
@@ -159,6 +161,18 @@ export class ChatHostController {
         return true;
       }
       this.d.executeGive(fromPeerId, rest);
+      return true;
+    }
+
+    if (cmd === "weather") {
+      if (!this.canModerate(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          "You do not have permission to use this command.",
+        );
+        return true;
+      }
+      this.d.executeWeather(fromPeerId, rest);
       return true;
     }
 

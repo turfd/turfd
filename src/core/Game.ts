@@ -1,7 +1,10 @@
 /**
  * Top-level coordinator: event bus, fixed game loop, persistence, rendering, and networking.
  */
-import { AudioEngine } from "../audio/AudioEngine";
+import { AudioEngine, type SfxOptions } from "../audio/AudioEngine";
+import { getBreakSound, getCloseSound, getOpenSound } from "../audio/blockSounds";
+import { fetchAndLoadSoundManifest } from "../audio/loadSoundManifest";
+import { RemotePlayerMovementSfx } from "../audio/remotePlayerSfx";
 import { readVolumeStored, VOL_KEYS } from "../audio/volumeSettings";
 import {
   BACKGROUND_RESIZE_DEBOUNCE_MS,
@@ -13,8 +16,14 @@ import {
   DAY_LENGTH_MS,
   FIXED_TIMESTEP_MS,
   FIXED_TIMESTEP_SEC,
+  HOTBAR_SIZE,
+  ITEM_PICKUP_SFX_MIN_INTERVAL_MS,
+  ITEM_THROW_SPAWN_OFFSET_PX,
+  ITEM_THROW_SPEED_PX,
+  PLAYER_DEATH_ANIM_DURATION_SEC,
   PLAYER_HEIGHT,
   PLAYER_WIDTH,
+  REACH_BLOCKS,
   RECIPE_STATION_CRAFTING_TABLE,
   RECIPE_STATION_FURNACE,
   TORCH_HELD_LIGHT_INTENSITY,
@@ -32,11 +41,16 @@ import {
 } from "../entities/CraftingSystem";
 import { EntityManager } from "../entities/EntityManager";
 import type { PlayerState } from "../entities/Player";
+import { getAimUnitVectorFromFeet } from "../input/aimDirection";
 import { InputManager } from "../input/InputManager";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
 import type { IModRepository } from "../mods/IModRepository";
-import { STRATUM_CORE_BEHAVIOR_PACK_PATH } from "../mods/internalPackManifest";
+import {
+  ResourcePackManifestSchema,
+  STRATUM_CORE_BEHAVIOR_PACK_PATH,
+  STRATUM_CORE_RESOURCE_PACK_PATH,
+} from "../mods/internalPackManifest";
 import {
   fetchBehaviorPackManifest,
   loadBehaviorPackBlocks,
@@ -98,8 +112,22 @@ import { UIShell } from "../ui/UIShell";
 import { BlockRegistry } from "../world/blocks/BlockRegistry";
 import { RecipeRegistry } from "../world/RecipeRegistry";
 import { WorldTime } from "../world/lighting/WorldTime";
+import { applyRainLightingTint } from "../world/weather/rainLighting";
+import {
+  RAIN_GROWTH_MUL,
+  WeatherController,
+} from "../world/weather/WeatherController";
 import { BlockInteractions } from "../world/BlockInteractions";
 import { World } from "../world/World";
+import { applyCommittedBreakOnWorld } from "../world/terrain/applyCommittedBreak";
+import { applyCommittedDoorToggle } from "../world/terrain/applyDoorToggle";
+import {
+  ACK_BUCKET_FILL_RESULT,
+  ACK_CONSUME_ONE,
+  ACK_TOOL_USE,
+  ACK_WATER_BUCKET_SPENT,
+  tryHostTerrainPlace,
+} from "../world/terrain/terrainHostPlace";
 import {
   applyFurnaceFuelSlotMouse,
   applyFurnaceOutputSlotMouse,
@@ -173,6 +201,10 @@ export type GameOptions = {
   accountId?: string | null;
   /** Optional workshop cache + download; omitted when Supabase is not configured. */
   modRepository?: IModRepository | null;
+  /**
+   * When set (e.g. from `main.ts` for menu OST), SFX/music share this engine and it is not destroyed with the game.
+   */
+  sharedAudio?: AudioEngine;
 };
 
 export type PlayerSavedState = {
@@ -260,9 +292,12 @@ export class Game {
   private breakOverlay: BreakOverlay | null = null;
   private blockBreakParticles: BlockBreakParticles | null = null;
   private leafFallParticles: LeafFallParticles | null = null;
+  private readonly _remotePlayerMovementSfx = new RemotePlayerMovementSfx();
   private saveGame: SaveGame | null = null;
   private _blockInteractions: BlockInteractions | null = null;
   private audio: AudioEngine | null = null;
+  /** When false, {@link destroy} leaves {@link audio} running (shared with main-menu OST). */
+  private _ownsAudioEngine = true;
   private inventoryUI: InventoryUI | null = null;
   private _craftingPanel: CraftingPanel | null = null;
   private _itemRegistry: ItemRegistry | null = null;
@@ -272,9 +307,19 @@ export class Game {
   private _chestPanel: ChestPanel | null = null;
   /** Storage anchor while chest UI is active. */
   private _activeChestAnchor: { ax: number; ay: number } | null = null;
+  /** Avoid repeating furnace crackle when re-triggering the same cell without closing inventory. */
+  private _lastFurnaceOpenSfxKey: string | null = null;
+  /** Throttle active furnace smelt crackle (~1 Hz per world furnace with a queue). */
+  private _furnaceSmeltSfxAccumSec = 0;
+  /** {@link ITEM_PICKUP_SFX_MIN_INTERVAL_MS}: avoid pickup spam while overlapping collect radius. */
+  private _lastItemPickupSfxMs = -Infinity;
   private cursorStackUI: CursorStackUI | null = null;
   private isInventoryOpen = false;
   private paused = false;
+  /** Full-screen death prompt (after death anim finishes). */
+  private _deathModalOpen = false;
+  /** One-shot chat + UI cleanup when local death starts. */
+  private _localDeathNotified = false;
 
   private lastRenderWallMs = 0;
   private started = false;
@@ -307,6 +352,24 @@ export class Game {
     crack: number;
   } | null = null;
   private readonly _worldTime: WorldTime;
+  private readonly _weather = new WeatherController();
+  /** Client mirror of host `rainRemainingSec` (updated from {@link MsgType.WEATHER_SYNC}). */
+  private _clientRainRemainingSec = 0;
+  /**
+   * Multiplayer client: waiters for {@link World.setAuthoritativeChunkFetcher} until CHUNK_DATA
+   * arrives for the same chunk key.
+   */
+  private readonly _chunkFetchWaitLists = new Map<string, Array<() => void>>();
+  /** `performance.now()` until which lightning sky flash decays. */
+  private _lightningAnimEndMs = 0;
+  /** Tracks dual-loop rain ambience ({@link AudioEngine.startSfxRainDualAmbient}). */
+  private _rainAmbientActive = false;
+  /** Fixed-update accumulator for cycling random rain loops. */
+  private _rainAmbientRefreshAccum = 0;
+  private static readonly RAIN_AMBIENT_REFRESH_SEC = 7;
+  /** Smoothed 0–1 for rain bus (open sky + weather); drives {@link AudioEngine.setSfxRainExposure}. */
+  private _rainAudioExposure = 0;
+  private static readonly RAIN_AUDIO_FADE_SEC = 2.75;
 
   private _roomRelayHeartbeat: ReturnType<typeof setInterval> | null = null;
 
@@ -359,6 +422,7 @@ export class Game {
   private _craftingSystem: CraftingSystem | null = null;
 
   private readonly _modRepository: IModRepository | null;
+  private readonly _sharedAudio: AudioEngine | undefined;
 
   constructor(options: GameOptions) {
     this.mount = options.mount;
@@ -374,13 +438,14 @@ export class Game {
     this._displayName = dn !== undefined && dn !== "" ? dn : "Player";
     this._accountId = options.accountId ?? null;
     this._modRepository = options.modRepository ?? null;
+    this._sharedAudio = options.sharedAudio;
     this.bus = new EventBus();
     const initialTimeMs =
       options.initialWorldTimeMs ?? DAY_LENGTH_MS * 0.15;
     this._worldTime = new WorldTime(initialTimeMs);
     this.adapter = new PeerJSAdapter(this.bus);
     this.adapter.setHandshakeProfile(this._displayName, this._accountId);
-    this._chunkSync = new ChunkSyncManager(this.adapter, this.bus);
+    this._chunkSync = new ChunkSyncManager(this.adapter);
     this._playerStateBroadcaster = new PlayerStateBroadcaster(this.adapter, () => {
       const em = this.entityManager;
       if (em === null) {
@@ -448,6 +513,12 @@ export class Game {
     this._moderation.loadFromPersisted(
       migrateModerationMetadata(metaLoaded?.moderation),
     );
+    if (this.multiplayerJoinRoomCode === undefined) {
+      const rs = metaLoaded?.rainRemainingSec;
+      if (rs !== undefined) {
+        this._weather.restoreFromSave(rs);
+      }
+    }
 
     this.quitUnsub = this.bus.on("ui:quit", () => {
       this.stop();
@@ -457,6 +528,12 @@ export class Game {
         resolve();
       }
     });
+
+    this.networkUnsubs.push(
+      this.bus.on("ui:death-respawn", () => {
+        this._respawnLocalPlayerAfterDeath();
+      }),
+    );
 
     const registry = new BlockRegistry();
     const baseUrl = import.meta.env.BASE_URL;
@@ -644,6 +721,15 @@ export class Game {
       world.setChestBlockId(registry.getByIdentifier("stratum:chest").id);
     }
 
+    if (
+      this.adapter.state.status === "connected" &&
+      this.adapter.state.role === "client"
+    ) {
+      world.setAuthoritativeChunkFetcher((cx, cy) =>
+        this._awaitChunkFromHost(cx, cy),
+      );
+    }
+
     const pipeline = new RenderPipeline({ mount: this.mount });
     progressCallback?.({
       stage: "Initializing renderer",
@@ -651,6 +737,8 @@ export class Game {
     });
     await pipeline.init();
     pipeline.initLighting(world, this.bus, blockAtlas);
+    await pipeline.initWeatherOverlay();
+    await pipeline.initSkyCelestialTextures();
     this.pipeline = pipeline;
 
     const initCentreBx = playerSavedState !== undefined
@@ -686,6 +774,27 @@ export class Game {
     this._flushPendingAuthoritativeChunks();
     this._flushPendingRemotePlayerPackets();
 
+    if (
+      this.adapter.state.status === "connected" &&
+      this.adapter.state.role === "host"
+    ) {
+      world.setNetDropReplicationHook((p) => {
+        if (this.adapter.state.status === "connected") {
+          this.adapter.broadcast({
+            type: MsgType.DROP_SPAWN,
+            netId: p.netId,
+            itemId: p.itemId,
+            count: p.count,
+            x: p.x,
+            y: p.y,
+            vx: p.vx,
+            vy: p.vy,
+            damage: p.damage,
+          });
+        }
+      });
+    }
+
     this._blockInteractions = new BlockInteractions(world, registry, this.bus);
     this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
 
@@ -704,11 +813,23 @@ export class Game {
       },
     );
 
-    const audio = new AudioEngine();
+    const audio = this._sharedAudio ?? new AudioEngine();
+    this._ownsAudioEngine = this._sharedAudio === undefined;
     audio.setMasterVolume(readVolumeStored(VOL_KEYS.master, 80) / 100);
     audio.setMusicVolume(readVolumeStored(VOL_KEYS.music, 60) / 100);
     audio.setSfxVolume(readVolumeStored(VOL_KEYS.sfx, 100) / 100);
     this.audio = audio;
+
+    const stratumResBase = `${baseUrl}${STRATUM_CORE_RESOURCE_PACK_PATH}`;
+    const stratumResManifestRes = await fetch(`${stratumResBase}manifest.json`);
+    if (stratumResManifestRes.ok) {
+      const stratumResManifest = ResourcePackManifestSchema.parse(
+        await stratumResManifestRes.json(),
+      );
+      for (const rel of stratumResManifest.sounds) {
+        await fetchAndLoadSoundManifest(audio, stratumResBase, rel);
+      }
+    }
 
     const entityManager = new EntityManager(
       world,
@@ -721,6 +842,12 @@ export class Game {
     );
     entityManager.initVisual(pipeline);
     this.entityManager = entityManager;
+    {
+      const st = this.adapter.state;
+      entityManager.setMultiplayerTerrainClient(
+        st.status === "connected" && st.role === "client",
+      );
+    }
 
     const saveGame = new SaveGame(
       this.store,
@@ -740,6 +867,13 @@ export class Game {
           into[k] = v;
         }
         this._multiplayerLogoutSpawns.clear();
+      },
+      () => {
+        const st = this.adapter.state;
+        if (st.status === "connected" && st.role === "client") {
+          return undefined;
+        }
+        return this._weather.getRainRemainingSec();
       },
     );
     progressCallback?.({
@@ -783,17 +917,73 @@ export class Game {
       }),
     );
 
+    this.networkUnsubs.push(
+      this.bus.on("terrain:net-break-commit", (ev) => {
+        const st = this.adapter.state;
+        if (st.status !== "connected" || st.role !== "client") {
+          return;
+        }
+        const hid = st.lanHostPeerId;
+        if (hid === null) {
+          return;
+        }
+        this.adapter.send(hid as PeerId, {
+          type: MsgType.TERRAIN_BREAK_COMMIT,
+          wx: ev.wx,
+          wy: ev.wy,
+          layer: ev.layer === "bg" ? 1 : 0,
+          expectedBlockId: ev.expectedBlockId,
+          hotbarSlot: ev.hotbarSlot,
+          heldItemId: ev.heldItemId,
+        });
+      }),
+    );
+    this.networkUnsubs.push(
+      this.bus.on("terrain:net-door-toggle", (ev) => {
+        const st = this.adapter.state;
+        if (st.status !== "connected" || st.role !== "client") {
+          return;
+        }
+        const hid = st.lanHostPeerId;
+        if (hid === null) {
+          return;
+        }
+        this.adapter.send(hid as PeerId, {
+          type: MsgType.TERRAIN_DOOR_TOGGLE,
+          wx: ev.wx,
+          wy: ev.wy,
+        });
+      }),
+    );
+    this.networkUnsubs.push(
+      this.bus.on("terrain:net-place", (ev) => {
+        const st = this.adapter.state;
+        if (st.status !== "connected" || st.role !== "client") {
+          return;
+        }
+        const hid = st.lanHostPeerId;
+        if (hid === null) {
+          return;
+        }
+        this.adapter.send(hid as PeerId, {
+          type: MsgType.TERRAIN_PLACE,
+          subtype: ev.subtype,
+          wx: ev.wx,
+          wy: ev.wy,
+          hotbarSlot: ev.hotbarSlot,
+          placesBlockId: ev.placesBlockId,
+          aux: ev.aux,
+        });
+      }),
+    );
+
     this.bus.on("ui:close-pause", () => {
       if (!this.paused) {
         return;
       }
       this.paused = false;
-      this.input?.setWorldInputBlocked(false);
       this.uiShell?.setPauseOverlayOpen(false);
-    });
-
-    this.bus.on("ui:screenshot", () => {
-      this.pipeline?.takeScreenshot();
+      this._syncWorldInputBlocked();
     });
 
     const inventoryUI = new InventoryUI(
@@ -806,19 +996,49 @@ export class Game {
       (stack) => {
         const w = this.world;
         const em = this.entityManager;
-        if (w === null || em === null || stack.count <= 0) {
+        const input = this.input;
+        if (w === null || em === null || input === null || stack.count <= 0) {
           return;
         }
         const st = em.getPlayer().state;
-        const x = st.position.x;
-        const y = st.position.y + BLOCK_SIZE * 0.75;
+        const { dirX, dirY } = getAimUnitVectorFromFeet(
+          st.position.x,
+          st.position.y,
+          input.mouseWorldPos.x,
+          input.mouseWorldPos.y,
+          st.facingRight,
+        );
+        const spd = ITEM_THROW_SPEED_PX;
+        const vx = dirX * spd;
+        const vy = dirY * spd;
+        const chestY = st.position.y + PLAYER_HEIGHT * 0.5;
+        const off = ITEM_THROW_SPAWN_OFFSET_PX;
+        const sx = st.position.x + dirX * off;
+        const sy = chestY - dirY * off;
+        const net = this.adapter.state;
+        if (net.status === "connected" && net.role === "client") {
+          const hid = net.lanHostPeerId;
+          if (hid !== null) {
+            this.adapter.send(hid as PeerId, {
+              type: MsgType.THROW_CURSOR_STACK,
+              itemId: stack.itemId,
+              count: stack.count,
+              damage: stack.damage ?? 0,
+              x: sx,
+              y: sy,
+              vx,
+              vy,
+            });
+          }
+          return;
+        }
         w.spawnItem(
           stack.itemId,
           stack.count,
-          x,
-          y,
-          0,
-          0,
+          sx,
+          sy,
+          vx,
+          vy,
           stack.damage ?? 0,
         );
       },
@@ -905,6 +1125,17 @@ export class Game {
     );
 
     this.networkUnsubs.push(
+      this.bus.on("door:proximity-swing", (e) => {
+        this._sfxFromWorldCell(
+          e.wx,
+          e.bottomWy,
+          e.opening ? getOpenSound("door") : getCloseSound("door"),
+          { pitchVariance: 25 },
+        );
+      }),
+    );
+
+    this.networkUnsubs.push(
       this.bus.on("ui:chat-compose", (e) => {
         this.inventoryUI?.setHotbarStackVisible(!e.open);
       }),
@@ -947,6 +1178,28 @@ export class Game {
       registry,
       pipeline,
     );
+
+    const airBlockIdBreakSfx = world.getAirBlockId();
+    this.bus.on("game:block-changed", (e) => {
+      if (e.blockId !== airBlockIdBreakSfx) {
+        return;
+      }
+      if (
+        e.previousBlockId === undefined ||
+        e.previousBlockId === airBlockIdBreakSfx
+      ) {
+        return;
+      }
+      let def;
+      try {
+        def = registry.getById(e.previousBlockId);
+      } catch {
+        return;
+      }
+      this._sfxFromWorldCell(e.wx, e.wy, getBreakSound(def.material), {
+        pitchVariance: 50,
+      });
+    });
 
     this.leafFallParticles = new LeafFallParticles(
       this._worldSeed,
@@ -1012,17 +1265,7 @@ export class Game {
         playerSavedState.health,
       );
     } else {
-      const airId = world.getRegistry().getByIdentifier("stratum:air").id;
-      let surfaceY: number | null = null;
-      for (let wy = 0; wy < WORLD_Y_MAX; wy++) {
-        const solid = world.getBlock(0, wy);
-        const above = world.getBlock(0, wy + 1);
-        if (solid.solid && (above.id === airId || above.replaceable)) {
-          surfaceY = wy;
-          break;
-        }
-      }
-      player.spawnAt(0, ((surfaceY ?? 1) + 1) * BLOCK_SIZE);
+      player.spawnAt(0, this._computeWorldSpawnFeetY(world));
     }
 
     if (this._pendingAssignedSpawn !== null) {
@@ -1047,6 +1290,8 @@ export class Game {
     });
     this.bus.emit({ type: "game:worldLoaded", name: this.worldName } satisfies GameEvent);
     this.bus.emit({ type: "world:loaded" } satisfies GameEvent);
+    this._deathModalOpen = false;
+    this._localDeathNotified = false;
     await this._maybeAutoHostFromMenu();
     this._chatRoomAnnounceEnabled = true;
   }
@@ -1199,6 +1444,9 @@ export class Game {
     this._craftingSystem = null;
     this.isInventoryOpen = false;
     this.paused = false;
+    this._deathModalOpen = false;
+    this._localDeathNotified = false;
+    this.uiShell?.setDeathOverlayOpen(false);
     this._chatOverlay?.destroy();
     this._chatOverlay = null;
     this._nametagOverlay?.destroy();
@@ -1206,7 +1454,11 @@ export class Game {
     this._chatHost = null;
     this.uiShell?.destroy();
     this.uiShell = null;
-    this.audio?.destroy();
+    this.audio?.stopSfxAmbientLoop();
+    this._rainAmbientActive = false;
+    if (this._ownsAudioEngine) {
+      this.audio?.destroy();
+    }
     this.audio = null;
     this.breakOverlay?.destroy();
     this.breakOverlay = null;
@@ -1400,6 +1652,80 @@ export class Game {
               metadata,
             );
           }
+          this._resolveChunkFetchIfPending(msg.cx, msg.cy);
+          return;
+        }
+        if (msg.type === MsgType.TERRAIN_ACK) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this._applyTerrainAck(msg);
+          }
+          return;
+        }
+        if (msg.type === MsgType.DROP_SPAWN && this.world !== null) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this.world.applyAuthoritativeDropSpawn({
+              netId: msg.netId,
+              itemId: msg.itemId,
+              count: msg.count,
+              x: msg.x,
+              y: msg.y,
+              vx: msg.vx,
+              vy: msg.vy,
+              damage: msg.damage,
+            });
+          }
+          return;
+        }
+        if (msg.type === MsgType.DROP_DESPAWN && this.world !== null) {
+          this.world.removeAuthoritativeDropByNetId(msg.netId);
+          return;
+        }
+        if (
+          msg.type === MsgType.CHUNK_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          void this._hostHandleChunkRequest(e.peerId as PeerId, msg.cx, msg.cy);
+          return;
+        }
+        if (
+          msg.type === MsgType.TERRAIN_BREAK_COMMIT &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          this._hostHandleTerrainBreakCommit(e.peerId, msg);
+          return;
+        }
+        if (
+          msg.type === MsgType.TERRAIN_DOOR_TOGGLE &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          this._hostHandleTerrainDoorToggle(e.peerId, msg.wx, msg.wy);
+          return;
+        }
+        if (
+          msg.type === MsgType.TERRAIN_PLACE &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          this._hostHandleTerrainPlace(e.peerId, msg);
+          return;
+        }
+        if (
+          msg.type === MsgType.DROP_PICKUP_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          this._hostHandleDropPickupRequest(e.peerId as PeerId, msg.netId);
+          return;
+        }
+        if (
+          msg.type === MsgType.THROW_CURSOR_STACK &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          this._hostHandleThrowCursorStack(e.peerId, msg);
           return;
         }
         if (msg.type === MsgType.FURNACE_SNAPSHOT && this.world !== null) {
@@ -1575,6 +1901,16 @@ export class Game {
         }
         if (msg.type === MsgType.WORLD_TIME) {
           this._worldTime.sync(msg.worldTimeMs);
+          return;
+        }
+        if (msg.type === MsgType.WEATHER_SYNC) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this._clientRainRemainingSec = Math.max(0, msg.rainRemainingSec);
+          }
+          return;
+        }
+        if (msg.type === MsgType.WEATHER_LIGHTNING) {
+          this._playLightningStrikeLocal();
           return;
         }
         if (msg.type === MsgType.ASSIGNED_SPAWN) {
@@ -1801,6 +2137,10 @@ export class Game {
           this.adapter.broadcast({
             type: MsgType.WORLD_TIME,
             worldTimeMs: this._worldTime.ms,
+          });
+          this.adapter.send(newPeer, {
+            type: MsgType.WEATHER_SYNC,
+            rainRemainingSec: this._weather.getRainRemainingSec(),
           });
           void (async () => {
             let meta: WorldMetadata | undefined;
@@ -2120,6 +2460,9 @@ export class Game {
       executeGive: (issuerPeerId, rest) => {
         this._runGiveCore(issuerPeerId, rest);
       },
+      executeWeather: (issuerPeerId, rest) => {
+        this._executeWeatherCommand(issuerPeerId, rest);
+      },
     });
   }
 
@@ -2133,6 +2476,64 @@ export class Game {
       kind: "system",
       text,
     } satisfies GameEvent);
+  }
+
+  private _isRainingForVisual(): boolean {
+    const st = this.adapter.state;
+    const role = st.status === "connected" ? st.role : "offline";
+    if (role === "client") {
+      return this._clientRainRemainingSec > 0;
+    }
+    return this._weather.isRaining();
+  }
+
+  private _broadcastWeatherSyncToClients(): void {
+    const st = this.adapter.state;
+    if (st.status !== "connected" || st.role !== "host") {
+      return;
+    }
+    this.adapter.broadcast({
+      type: MsgType.WEATHER_SYNC,
+      rainRemainingSec: this._weather.getRainRemainingSec(),
+    });
+  }
+
+  private _playLightningStrikeLocal(): void {
+    this._lightningAnimEndMs = performance.now() + 300;
+    this.audio?.playSfx("weather_lightning", { volume: 0.9 });
+    window.setTimeout(() => {
+      this.audio?.playSfx("weather_lightning", { volume: 0.38 });
+    }, 110);
+  }
+
+  /**
+   * Host (`issuerPeerId` set) or solo (`null`). `rest` is the command tail after `/weather`.
+   */
+  private _executeWeatherCommand(issuerPeerId: string | null, rest: string): void {
+    const parts = rest.trim().toLowerCase().split(/\s+/).filter((p) => p.length > 0);
+    if (parts.length < 2 || parts[0] !== "set") {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Usage: /weather set <rain|clear>",
+      );
+      return;
+    }
+    if (parts[1] === "rain") {
+      this._weather.setRainFullDuration();
+      this._broadcastWeatherSyncToClients();
+      this._giveFeedbackToIssuer(issuerPeerId, "Weather set to rain.");
+      return;
+    }
+    if (parts[1] === "clear") {
+      this._weather.clear();
+      this._broadcastWeatherSyncToClients();
+      this._giveFeedbackToIssuer(issuerPeerId, "Weather set to clear.");
+      return;
+    }
+    this._giveFeedbackToIssuer(
+      issuerPeerId,
+      "Usage: /weather set <rain|clear>",
+    );
   }
 
   /**
@@ -2345,6 +2746,20 @@ export class Game {
       this._runGiveCore(null, rest);
       return;
     }
+    const weatherMatch = /^\/weather(\s+.*)?$/i.exec(trimmed);
+    if (weatherMatch !== null && st.status !== "connected") {
+      const rest = (weatherMatch[1] ?? "").trim();
+      if (rest === "") {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Usage: /weather set <rain|clear>",
+        } satisfies GameEvent);
+        return;
+      }
+      this._executeWeatherCommand(null, rest);
+      return;
+    }
     if (st.status !== "connected") {
       this.bus.emit({
         type: "ui:chat-line",
@@ -2372,7 +2787,99 @@ export class Game {
   private _onChatClosed(): void {
     this._chatOpen = false;
     this.input?.setChatOpen(false);
-    this.input?.setWorldInputBlocked(this.paused || this.isInventoryOpen);
+    this._syncWorldInputBlocked();
+  }
+
+  private _isLocalDeathBlocking(): boolean {
+    const pl = this.entityManager?.getPlayer().state;
+    return this._deathModalOpen || pl?.deathAnimT !== null;
+  }
+
+  private _syncWorldInputBlocked(): void {
+    const input = this.input;
+    if (input === null) {
+      return;
+    }
+    input.setWorldInputBlocked(
+      this.paused ||
+        this.isInventoryOpen ||
+        this._chatOpen ||
+        this._isLocalDeathBlocking(),
+    );
+  }
+
+  private _computeWorldSpawnFeetY(world: World): number {
+    const airId = world.getRegistry().getByIdentifier("stratum:air").id;
+    let surfaceY: number | null = null;
+    for (let wy = 0; wy < WORLD_Y_MAX; wy++) {
+      const solid = world.getBlock(0, wy);
+      const above = world.getBlock(0, wy + 1);
+      if (solid.solid && (above.id === airId || above.replaceable)) {
+        surfaceY = wy;
+        break;
+      }
+    }
+    return ((surfaceY ?? 1) + 1) * BLOCK_SIZE;
+  }
+
+  private _respawnLocalPlayerAfterDeath(): void {
+    const world = this.world;
+    const em = this.entityManager;
+    if (world === null || em === null) {
+      return;
+    }
+    const player = em.getPlayer();
+    player.spawnAt(0, this._computeWorldSpawnFeetY(world));
+    this._localDeathNotified = false;
+    this._deathModalOpen = false;
+    this.uiShell?.setDeathOverlayOpen(false);
+    const bx = Math.floor(player.state.position.x / BLOCK_SIZE);
+    const by = Math.floor(player.state.position.y / BLOCK_SIZE);
+    world.resetStreamCentre(bx, by);
+    this.pipeline?.getCamera().setPositionImmediate(
+      player.state.position.x,
+      -player.state.position.y - CAMERA_PLAYER_VERTICAL_OFFSET_PX,
+    );
+    this._syncWorldInputBlocked();
+  }
+
+  private _tickLocalPlayerDeath(dtSec: number): void {
+    const em = this.entityManager;
+    if (em === null) {
+      return;
+    }
+    const pl = em.getPlayer().state;
+    if (pl.deathAnimT === null) {
+      return;
+    }
+    if (!this._localDeathNotified) {
+      this._localDeathNotified = true;
+      if (this._chatOpen) {
+        this._chatOpen = false;
+        this.input?.setChatOpen(false);
+        this.bus.emit({ type: "ui:chat-set-open", open: false } satisfies GameEvent);
+      }
+      if (this.isInventoryOpen) {
+        this.isInventoryOpen = false;
+        this._applyInventoryPanelsOpen(false);
+      }
+      if (this.paused) {
+        this.paused = false;
+        this.uiShell?.setPauseOverlayOpen(false);
+      }
+      this.bus.emit({
+        type: "ui:chat-line",
+        kind: "system",
+        text: `${this._displayName} died.`,
+      } satisfies GameEvent);
+      this._deathModalOpen = true;
+      this.uiShell?.setDeathOverlayOpen(true);
+      this._syncWorldInputBlocked();
+    }
+    pl.deathAnimT = Math.min(
+      1,
+      pl.deathAnimT + dtSec / PLAYER_DEATH_ANIM_DURATION_SEC,
+    );
   }
 
   /** Crafting recipes loaded after {@link ItemRegistry} is populated (item keys validated). */
@@ -2385,9 +2892,38 @@ export class Game {
     return this._craftingSystem;
   }
 
+  /** Spatial SFX from a block cell (chest/furnace UI, block break bus, etc.). */
+  private _sfxFromWorldCell(
+    wx: number,
+    wy: number,
+    name: string,
+    opts?: Omit<SfxOptions, "world">,
+  ): void {
+    const em = this.entityManager;
+    const snd = this.audio;
+    if (em === null || snd === null) {
+      return;
+    }
+    const pl = em.getPlayer().state.position;
+    snd.playSfx(name, {
+      ...opts,
+      world: {
+        listenerX: pl.x,
+        listenerY: pl.y,
+        sourceX: wx * BLOCK_SIZE + BLOCK_SIZE * 0.5,
+        sourceY: wy * BLOCK_SIZE + BLOCK_SIZE * 0.5,
+      },
+    });
+  }
+
   private _applyInventoryPanelsOpen(open: boolean): void {
+    const chestAnchorForCloseSfx =
+      !open && this._activeChestAnchor !== null
+        ? this._activeChestAnchor
+        : null;
     if (!open) {
       this._activeChestAnchor = null;
+      this._lastFurnaceOpenSfxKey = null;
     }
     const chestActive = open && this._activeChestAnchor !== null;
 
@@ -2399,6 +2935,18 @@ export class Game {
 
     /* Chest UI and recipe sidebar are mutually exclusive (no empty chest gap, no recipes on chest). */
     this._craftingPanel?.setOpen(open && !chestActive);
+
+    if (chestAnchorForCloseSfx !== null) {
+      this._sfxFromWorldCell(
+        chestAnchorForCloseSfx.ax,
+        chestAnchorForCloseSfx.ay,
+        getCloseSound("chest"),
+        {
+          pitchVariance: 18,
+          volume: 0.85,
+        },
+      );
+    }
   }
 
   private _broadcastFurnaceSnapshotNow(wx: number, wy: number): void {
@@ -2417,6 +2965,37 @@ export class Game {
       });
     }
     this._furnaceNetSentAt.set(`${wx},${wy}`, performance.now());
+  }
+
+  /** ~1 Hz crackle at each furnace that has smelts in progress (queue non-empty). */
+  private _tickFurnaceSmeltAmbient(dtSec: number): void {
+    const w = this.world;
+    const em = this.entityManager;
+    const snd = this.audio;
+    if (w === null || em === null || snd === null) {
+      return;
+    }
+    this._furnaceSmeltSfxAccumSec += dtSec;
+    if (this._furnaceSmeltSfxAccumSec < 1) {
+      return;
+    }
+    this._furnaceSmeltSfxAccumSec -= 1;
+    const pl = em.getPlayer().state.position;
+    w.forEachFurnaceTile((wx, wy, tile) => {
+      if (tile.queue.length === 0) {
+        return;
+      }
+      snd.playSfx(getOpenSound("furnace"), {
+        volume: 0.38,
+        pitchVariance: 28,
+        world: {
+          listenerX: pl.x,
+          listenerY: pl.y,
+          sourceX: wx * BLOCK_SIZE + BLOCK_SIZE * 0.5,
+          sourceY: wy * BLOCK_SIZE + BLOCK_SIZE * 0.5,
+        },
+      });
+    });
   }
 
   private _maybeBroadcastFurnaceSnapshotThrottled(wx: number, wy: number, nowMs: number): void {
@@ -2746,6 +3325,340 @@ export class Game {
     this._broadcastFurnaceSnapshotNow(cell.wx, cell.wy);
   }
 
+  private _resolveChunkFetchIfPending(cx: number, cy: number): void {
+    const key = `${cx},${cy}`;
+    const list = this._chunkFetchWaitLists.get(key);
+    if (list === undefined) {
+      return;
+    }
+    this._chunkFetchWaitLists.delete(key);
+    for (const r of list) {
+      r();
+    }
+  }
+
+  private _awaitChunkFromHost(cx: number, cy: number): Promise<void> {
+    const st = this.adapter.state;
+    if (
+      st.status !== "connected" ||
+      st.role !== "client" ||
+      st.lanHostPeerId === null
+    ) {
+      return Promise.reject(
+        new Error("awaitChunkFromHost: not a connected multiplayer client"),
+      );
+    }
+    const key = `${cx},${cy}`;
+    return new Promise<void>((resolve, reject) => {
+      let list = this._chunkFetchWaitLists.get(key);
+      if (list === undefined) {
+        list = [];
+        this._chunkFetchWaitLists.set(key, list);
+      }
+      const timeoutId = setTimeout(() => {
+        const L = this._chunkFetchWaitLists.get(key);
+        if (L === undefined) {
+          return;
+        }
+        const i = L.indexOf(done);
+        if (i >= 0) {
+          L.splice(i, 1);
+        }
+        if (L.length === 0) {
+          this._chunkFetchWaitLists.delete(key);
+        }
+        reject(new Error("Chunk request timed out"));
+      }, 90_000);
+      const done = (): void => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
+      list.push(done);
+      if (list.length === 1) {
+        this.adapter.send(st.lanHostPeerId as PeerId, {
+          type: MsgType.CHUNK_REQUEST,
+          cx,
+          cy,
+        });
+      }
+    });
+  }
+
+  private _terrainCellWithinReachForPeer(
+    wx: number,
+    wy: number,
+    peerId: string,
+  ): boolean {
+    const w = this.world;
+    if (w === null) {
+      return false;
+    }
+    const localId = this.adapter.getLocalPeerId();
+    let feetX: number;
+    let feetY: number;
+    if (localId !== null && peerId === localId && this.entityManager !== null) {
+      const p = this.entityManager.getPlayer().state.position;
+      feetX = p.x;
+      feetY = p.y;
+    } else {
+      const rp = w.getRemotePlayers().get(peerId);
+      if (rp === undefined) {
+        return false;
+      }
+      const f = rp.getAuthorityFeet();
+      feetX = f.x;
+      feetY = f.y;
+    }
+    const pcx = Math.floor(feetX / BLOCK_SIZE);
+    const pcy = Math.floor(feetY / BLOCK_SIZE);
+    return (
+      Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= REACH_BLOCKS
+    );
+  }
+
+  private _applyTerrainAck(msg: {
+    ok: boolean;
+    hotbarSlot: number;
+    effects: number;
+  }): void {
+    const em = this.entityManager;
+    const ir = this._itemRegistry;
+    if (em === null || ir === null || !msg.ok) {
+      return;
+    }
+    const pl = em.getPlayer();
+    const slot = ((msg.hotbarSlot % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
+    const efx = msg.effects;
+    if ((efx & ACK_TOOL_USE) !== 0) {
+      pl.inventory.applyToolUseFromMining(slot);
+    }
+    if ((efx & ACK_CONSUME_ONE) !== 0) {
+      pl.inventory.consumeOneFromSlot(slot);
+    }
+    if ((efx & ACK_WATER_BUCKET_SPENT) !== 0) {
+      const b = ir.getByKey("stratum:bucket");
+      if (b !== undefined) {
+        pl.inventory.setStack(slot, { itemId: b.id, count: 1 });
+      }
+    }
+    if ((efx & ACK_BUCKET_FILL_RESULT) !== 0) {
+      const wb = ir.getByKey("stratum:water_bucket");
+      if (wb !== undefined) {
+        pl.inventory.setStack(slot, { itemId: wb.id, count: 1 });
+      }
+    }
+  }
+
+  private async _hostHandleChunkRequest(
+    peerId: PeerId,
+    cx: number,
+    cy: number,
+  ): Promise<void> {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    try {
+      await w.loadOrGenerateChunkAt(cx, cy);
+    } catch {
+      return;
+    }
+    const chunk = w.getChunk(cx, cy);
+    if (chunk === undefined) {
+      return;
+    }
+    this.adapter.send(peerId, {
+      type: MsgType.CHUNK_DATA,
+      cx,
+      cy,
+      blocks: chunk.blocks.slice(),
+      background: chunk.background.slice(),
+      metadata: chunk.metadata.slice(),
+      furnaces: w.getFurnaceEntitiesForChunk(cx, cy),
+      chests: w.getChestEntitiesForChunk(cx, cy),
+    });
+  }
+
+  private _hostHandleTerrainBreakCommit(
+    peerId: string,
+    msg: {
+      wx: number;
+      wy: number;
+      layer: 0 | 1;
+      expectedBlockId: number;
+      hotbarSlot: number;
+      heldItemId: number;
+    },
+  ): void {
+    const w = this.world;
+    const ir = this._itemRegistry;
+    if (w === null || ir === null) {
+      return;
+    }
+    if (!this._terrainCellWithinReachForPeer(msg.wx, msg.wy, peerId)) {
+      return;
+    }
+    const airId = w.getAirBlockId();
+    if (msg.layer === 1) {
+      if (w.getBackgroundId(msg.wx, msg.wy) !== msg.expectedBlockId) {
+        return;
+      }
+    } else if (w.getBlock(msg.wx, msg.wy).id !== msg.expectedBlockId) {
+      return;
+    }
+    let heldDef;
+    try {
+      heldDef =
+        msg.heldItemId !== 0
+          ? ir.getById(msg.heldItemId as ItemId)
+          : undefined;
+    } catch {
+      heldDef = undefined;
+    }
+    const layer = msg.layer === 1 ? "bg" : "fg";
+    applyCommittedBreakOnWorld(
+      w,
+      w.getRegistry(),
+      ir,
+      msg.wx,
+      msg.wy,
+      layer,
+      airId,
+      heldDef,
+    );
+    this.adapter.send(peerId as PeerId, {
+      type: MsgType.TERRAIN_ACK,
+      ok: true,
+      hotbarSlot: msg.hotbarSlot,
+      effects: ACK_TOOL_USE,
+    });
+  }
+
+  private _hostHandleTerrainDoorToggle(
+    peerId: string,
+    wx: number,
+    wy: number,
+  ): void {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    if (!this._terrainCellWithinReachForPeer(wx, wy, peerId)) {
+      return;
+    }
+    applyCommittedDoorToggle(w, wx, wy);
+  }
+
+  private _hostHandleTerrainPlace(
+    peerId: string,
+    msg: {
+      subtype: number;
+      wx: number;
+      wy: number;
+      hotbarSlot: number;
+      placesBlockId: number;
+      aux: number;
+    },
+  ): void {
+    const w = this.world;
+    const ir = this._itemRegistry;
+    if (w === null || ir === null) {
+      return;
+    }
+    if (!this._terrainCellWithinReachForPeer(msg.wx, msg.wy, peerId)) {
+      return;
+    }
+    let feet: { x: number; y: number };
+    const localId = this.adapter.getLocalPeerId();
+    if (localId !== null && peerId === localId && this.entityManager !== null) {
+      feet = this.entityManager.getPlayer().state.position;
+    } else {
+      const rp = w.getRemotePlayers().get(peerId);
+      if (rp === undefined) {
+        return;
+      }
+      feet = rp.getAuthorityFeet();
+    }
+    const waterId = w.getWaterBlockId();
+    const { ok, effects } = tryHostTerrainPlace(
+      w,
+      w.getRegistry(),
+      ir,
+      w.getAirBlockId(),
+      waterId,
+      feet,
+      w.getRemotePlayers(),
+      msg.subtype,
+      msg.wx,
+      msg.wy,
+      msg.hotbarSlot,
+      msg.placesBlockId,
+      msg.aux,
+    );
+    this.adapter.send(peerId as PeerId, {
+      type: MsgType.TERRAIN_ACK,
+      ok,
+      hotbarSlot: msg.hotbarSlot,
+      effects,
+    });
+  }
+
+  private _hostHandleDropPickupRequest(peerId: PeerId, netId: number): void {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    const id = `n${netId}`;
+    const item = w.getDroppedItems().get(id);
+    if (item === undefined) {
+      return;
+    }
+    const wx = Math.floor(item.x / BLOCK_SIZE);
+    const wy = Math.floor(item.y / BLOCK_SIZE);
+    if (!this._terrainCellWithinReachForPeer(wx, wy, peerId)) {
+      return;
+    }
+    this.adapter.send(peerId, {
+      type: MsgType.GIVE_ITEM_STACK,
+      itemId: item.itemId,
+      count: item.count,
+    });
+    w.removeAuthoritativeDropByNetId(netId);
+    this.adapter.broadcast({ type: MsgType.DROP_DESPAWN, netId });
+  }
+
+  private _hostHandleThrowCursorStack(
+    peerId: string,
+    msg: {
+      itemId: number;
+      count: number;
+      damage: number;
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+    },
+  ): void {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    const wx = Math.floor(msg.x / BLOCK_SIZE);
+    const wy = Math.floor(msg.y / BLOCK_SIZE);
+    if (!this._terrainCellWithinReachForPeer(wx, wy, peerId)) {
+      return;
+    }
+    w.spawnItem(
+      msg.itemId as ItemId,
+      msg.count,
+      msg.x,
+      msg.y,
+      msg.vx,
+      msg.vy,
+      msg.damage,
+    );
+  }
+
   private _chestWithinReach(anchor: { ax: number; ay: number }): boolean {
     const w = this.world;
     const em = this.entityManager;
@@ -2784,6 +3697,12 @@ export class Game {
     if (!this._chestWithinReach(anchor)) {
       return;
     }
+    this._lastFurnaceOpenSfxKey = null;
+    const prevAnchor = this._activeChestAnchor;
+    const chestAnchorChanged =
+      prevAnchor === null ||
+      prevAnchor.ax !== anchor.ax ||
+      prevAnchor.ay !== anchor.ay;
     this._activeChestAnchor = anchor;
     w.syncChestStorageToLayout(wx, wy);
     if (!this.isInventoryOpen) {
@@ -2791,6 +3710,12 @@ export class Game {
       input.setWorldInputBlocked(true);
     }
     this._applyInventoryPanelsOpen(true);
+    if (chestAnchorChanged) {
+      this._sfxFromWorldCell(wx, wy, getOpenSound("chest"), {
+        pitchVariance: 22,
+        volume: 0.9,
+      });
+    }
     this._chestPanel?.update();
   }
 
@@ -2826,6 +3751,7 @@ export class Game {
     if (!this._craftingTableCellWithinReach(wx, wy)) {
       return;
     }
+    this._lastFurnaceOpenSfxKey = null;
     this._activeChestAnchor = null;
     if (!this.isInventoryOpen) {
       this.isInventoryOpen = true;
@@ -2875,6 +3801,14 @@ export class Game {
     this._applyInventoryPanelsOpen(true);
     this._craftingPanel?.selectCategoryIfAvailable("Furnace");
     this._craftingPanel?.update(em.getPlayer().inventory);
+    const furnaceKey = `${wx},${wy}`;
+    if (this._lastFurnaceOpenSfxKey !== furnaceKey) {
+      this._lastFurnaceOpenSfxKey = furnaceKey;
+      this._sfxFromWorldCell(wx, wy, getOpenSound("furnace"), {
+        pitchVariance: 35,
+        volume: 0.5,
+      });
+    }
   }
 
   private _chestWithinReachForPeer(
@@ -3419,16 +4353,6 @@ export class Game {
   }
 
   private _handleCraftRequest(recipeId: string, batches: number, shiftKey: boolean): void {
-    const net = this.adapter.state;
-    if (net.status === "connected" && net.role === "client") {
-      this.bus.emit({
-        type: "craft:result",
-        ok: false,
-        reason: "Crafting as a client will be enabled with host confirmation.",
-      } satisfies GameEvent);
-      return;
-    }
-
     const crafting = this._craftingSystem;
     const em = this.entityManager;
     if (crafting === null || em === null) {
@@ -3457,6 +4381,16 @@ export class Game {
       recipe.station === RECIPE_STATION_FURNACE &&
       recipe.smeltingSourceId !== undefined
     ) {
+      const net = this.adapter.state;
+      if (net.status === "connected" && net.role === "client") {
+        this.bus.emit({
+          type: "craft:result",
+          ok: false,
+          reason:
+            "Furnace smelting from here is host-only. Open the furnace UI to queue smelts.",
+        } satisfies GameEvent);
+        return;
+      }
       const w = this.world;
       const items = this._itemRegistry;
       if (w === null) {
@@ -3552,16 +4486,18 @@ export class Game {
       input.updateMouseWorldPos(pipeline.getCamera());
 
       if (input.isJustPressed("pause")) {
-        if (this._chatOpen) {
+        if (this._isLocalDeathBlocking()) {
+          // Pause / inventory / chat are disabled until respawn or main menu.
+        } else if (this._chatOpen) {
           this.bus.emit({ type: "ui:chat-set-open", open: false } satisfies GameEvent);
         } else if (this.isInventoryOpen) {
           this.isInventoryOpen = false;
           this._applyInventoryPanelsOpen(false);
-          input.setWorldInputBlocked(false);
+          this._syncWorldInputBlocked();
         } else {
           this.paused = !this.paused;
-          input.setWorldInputBlocked(this.paused);
           this.uiShell?.setPauseOverlayOpen(this.paused);
+          this._syncWorldInputBlocked();
         }
       }
 
@@ -3570,17 +4506,17 @@ export class Game {
         return;
       }
 
-      if (input.isJustPressed("chat") && !this._chatOpen) {
+      if (input.isJustPressed("chat") && !this._chatOpen && !this._isLocalDeathBlocking()) {
         this._chatOpen = true;
-        input.setWorldInputBlocked(true);
         input.setChatOpen(true);
         this.bus.emit({ type: "ui:chat-set-open", open: true } satisfies GameEvent);
+        this._syncWorldInputBlocked();
       }
 
-      if (input.isJustPressed("inventory")) {
+      if (input.isJustPressed("inventory") && !this._isLocalDeathBlocking()) {
         this.isInventoryOpen = !this.isInventoryOpen;
-        input.setWorldInputBlocked(this.isInventoryOpen);
         this._applyInventoryPanelsOpen(this.isInventoryOpen);
+        this._syncWorldInputBlocked();
       }
 
       this._worldTime.tick(FIXED_TIMESTEP_MS);
@@ -3597,10 +4533,79 @@ export class Game {
             type: MsgType.WORLD_TIME,
             worldTimeMs: this._worldTime.ms,
           });
+          this.adapter.broadcast({
+            type: MsgType.WEATHER_SYNC,
+            rainRemainingSec: this._weather.getRainRemainingSec(),
+          });
+        }
+      }
+
+      if (role === "host" || role === "offline") {
+        const wr = this._weather.tickAuthority(FIXED_TIMESTEP_SEC);
+        if (wr.lightningStrike) {
+          if (
+            netStateForTime.status === "connected" &&
+            netStateForTime.role === "host"
+          ) {
+            this.adapter.broadcast({
+              type: MsgType.WEATHER_LIGHTNING,
+            });
+          }
+          this._playLightningStrikeLocal();
+        }
+        if (wr.rainJustStarted || wr.rainJustEnded) {
+          this._broadcastWeatherSyncToClients();
+        }
+      } else if (role === "client" && this._clientRainRemainingSec > 0) {
+        this._clientRainRemainingSec = Math.max(
+          0,
+          this._clientRainRemainingSec - FIXED_TIMESTEP_SEC,
+        );
+      }
+
+      const wantRain = this._isRainingForVisual();
+      const px = entityManager.getPlayer().state.position.x;
+      const py = entityManager.getPlayer().state.position.y;
+      const rainColumnWx = Math.floor((px + PLAYER_WIDTH * 0.5) / BLOCK_SIZE);
+      const outdoorRain =
+        world.canHearOpenSkyRain(rainColumnWx, py);
+      const rainAudibleTarget = wantRain && outdoorRain ? 1 : 0;
+      const fadeK = 1 - Math.exp(-FIXED_TIMESTEP_SEC / Game.RAIN_AUDIO_FADE_SEC);
+      this._rainAudioExposure +=
+        (rainAudibleTarget - this._rainAudioExposure) * fadeK;
+      this.audio?.setSfxRainExposure(this._rainAudioExposure);
+
+      if (wantRain && outdoorRain && !this._rainAmbientActive) {
+        this.audio?.startSfxRainDualAmbient("weather_rain_ambient", 0.24);
+        this._rainAmbientActive = true;
+        this._rainAmbientRefreshAccum = 0;
+      }
+
+      if (
+        this._rainAmbientActive &&
+        this._rainAudioExposure < 0.02 &&
+        (!wantRain || !outdoorRain)
+      ) {
+        this.audio?.stopSfxRainDualAmbient();
+        this._rainAmbientActive = false;
+        this._rainAmbientRefreshAccum = 0;
+      }
+
+      if (
+        this._rainAmbientActive &&
+        wantRain &&
+        this._rainAudioExposure > 0.12
+      ) {
+        this._rainAmbientRefreshAccum += FIXED_TIMESTEP_SEC;
+        if (this._rainAmbientRefreshAccum >= Game.RAIN_AMBIENT_REFRESH_SEC) {
+          this._rainAmbientRefreshAccum = 0;
+          this.audio?.refreshSfxRainDualAmbient("weather_rain_ambient", 0.24);
         }
       }
 
       entityManager.update(dtSec);
+
+      this._tickLocalPlayerDeath(dtSec);
 
       const plState = entityManager.getPlayer().state;
       const brk = plState.breakTarget;
@@ -3639,6 +4644,26 @@ export class Game {
         this._playerStateBroadcaster.tick();
       }
       world.updateRemotePlayers(dtSec);
+      {
+        const em = this.entityManager;
+        const w = this.world;
+        const snd = this.audio;
+        if (em !== null && w !== null && snd !== null) {
+          const pl = em.getPlayer().state.position;
+          this._remotePlayerMovementSfx.tick(
+            dtSec,
+            performance.now(),
+            w,
+            w.getRemotePlayers(),
+            snd,
+            pl.x,
+            pl.y,
+            w.getAirBlockId(),
+          );
+          this._tickFurnaceSmeltAmbient(dtSec);
+        }
+      }
+      const dropNet = this.adapter.state;
       world.updateDroppedItems(
         dtSec,
         {
@@ -3646,12 +4671,46 @@ export class Game {
           y: pl.y + PLAYER_HEIGHT * 0.5,
         },
         entityManager.getPlayer().inventory,
+        () => {
+          const snd = this.audio;
+          if (snd === null) {
+            return;
+          }
+          const now = performance.now();
+          if (now - this._lastItemPickupSfxMs < ITEM_PICKUP_SFX_MIN_INTERVAL_MS) {
+            return;
+          }
+          this._lastItemPickupSfxMs = now;
+          snd.playSfx("item_pickup", { pitchVariance: 120 });
+        },
+        dropNet.status === "connected" && dropNet.role === "client"
+          ? (netId) => {
+              const hid = dropNet.lanHostPeerId;
+              if (hid !== null) {
+                this.adapter.send(hid as PeerId, {
+                  type: MsgType.DROP_PICKUP_REQUEST,
+                  netId,
+                });
+              }
+            }
+          : undefined,
+        dropNet.status === "connected" && dropNet.role === "host"
+          ? (netId) => {
+              this.adapter.broadcast({
+                type: MsgType.DROP_DESPAWN,
+                netId,
+              });
+            }
+          : undefined,
       );
 
       if (this._blockInteractions !== null && role !== "client") {
         const pbx = Math.floor(pl.x / BLOCK_SIZE);
         const pby = Math.floor(pl.y / BLOCK_SIZE);
-        this._blockInteractions.tick(dtSec, pbx, pby);
+        const rainGrowthMul = this._weather.isRaining() ? RAIN_GROWTH_MUL : 1;
+        this._blockInteractions.tick(dtSec, pbx, pby, {
+          rainGrowthMul,
+        });
       }
 
       if (role !== "client" && this._itemRegistry !== null) {
@@ -3681,16 +4740,20 @@ export class Game {
       const p = entityManager.getPlayer().state.position;
       const bx = Math.floor(p.x / BLOCK_SIZE);
       const by = Math.floor(p.y / BLOCK_SIZE);
-      this.fixedAsyncChain = this.fixedAsyncChain.then(() =>
-        world.streamChunksAroundPlayer(bx, by).then(() => {
-          const st = this.adapter.state;
-          const authority =
-            st.status !== "connected" || st.role !== "client";
-          if (authority && this._blockInteractions !== null) {
-            this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
-          }
-        }),
-      );
+      this.fixedAsyncChain = this.fixedAsyncChain
+        .then(() =>
+          world.streamChunksAroundPlayer(bx, by).then(() => {
+            const st = this.adapter.state;
+            const authority =
+              st.status !== "connected" || st.role !== "client";
+            if (authority && this._blockInteractions !== null) {
+              this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
+            }
+          }),
+        )
+        .catch((err: unknown) => {
+          console.warn("[Game] streamChunksAroundPlayer failed", err);
+        });
     }
 
     this.bus.emit({
@@ -3807,7 +4870,9 @@ export class Game {
           ? cm.getLoadedChunks()
           : cm.getChunksWithinDistance(centre, VIEW_DISTANCE_CHUNKS);
       this.chunkRenderer.syncChunks(visible);
-      this.chunkRenderer.updateFoliageWind(now * 0.001);
+      const tSec = now * 0.001;
+      this.chunkRenderer.updateFoliageWind(tSec);
+      this.chunkRenderer.updateFurnaceFire(tSec);
     }
 
     if (this.entityManager !== null && this.pipeline !== null) {
@@ -3879,8 +4944,32 @@ export class Game {
     }
     this.pipeline?.prepareFrame();
     if (this.pipeline !== null) {
-      const lightingParams = this._worldTime.getLightingParams();
-      this.pipeline.updateSky(lightingParams, this._worldTime.ms);
+      const baseLighting = this._worldTime.getLightingParams();
+      const rainingGlobal = this._isRainingForVisual();
+      let rainVisual = rainingGlobal;
+      if (
+        rainingGlobal &&
+        this.world !== null &&
+        this.entityManager !== null
+      ) {
+        const st = this.entityManager.getPlayer().state;
+        const pwx = Math.floor((st.position.x + PLAYER_WIDTH * 0.5) / BLOCK_SIZE);
+        if (this.world.isDesertColumn(pwx)) {
+          rainVisual = false;
+        }
+      }
+      const lightingParams = applyRainLightingTint(
+        baseLighting,
+        rainVisual ? 1 : 0,
+      );
+      const lightningAlpha =
+        rainVisual && this._lightningAnimEndMs > now
+          ? ((this._lightningAnimEndMs - now) / 300) * 0.95
+          : 0;
+      this.pipeline.updateSky(lightingParams, this._worldTime.ms, {
+        lightningAlpha,
+      });
+      this.pipeline.updateWeatherOverlay(rainVisual, dtSec);
       if (this.world !== null && this.entityManager !== null) {
         const cam = this.pipeline.getCamera();
         const pos = cam.getPosition();

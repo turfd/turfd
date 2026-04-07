@@ -8,13 +8,13 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%2374b3ff' width='32' height='32' rx='6'/%3E%3C/svg%3E"
     />
-    <!-- Menu sky top (#74b3ff) so the shell isn’t white before the JS bundle runs. -->
+    <!-- Match {@link MENU_SKY_FALLBACK_GRADIENT} / menuSkyPaint so the shell matches the menu before JS runs. -->
     <style>
       html,
       body {
         margin: 0;
         min-height: 100%;
-        background: #74b3ff;
+        background: linear-gradient(180deg, #74b3ff 0%, #a8d8ff 52%, #6a8a9a 100%);
       }
     </style>
   </head>

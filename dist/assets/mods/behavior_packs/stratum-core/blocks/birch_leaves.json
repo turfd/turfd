@@ -15,7 +15,7 @@
       "stratum:hardness": 0.2,
       "stratum:light_emission": 0,
       "stratum:light_absorption": 0,
-      "stratum:material": "wood",
+      "stratum:material": "grass",
       "stratum:loot_table": "stratum:birch_leaves",
       "stratum:numeric_id": 47
     }

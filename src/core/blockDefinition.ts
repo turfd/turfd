@@ -5,7 +5,11 @@ export type BlockMaterial =
   | "wood"
   | "grass"
   | "sand"
+  | "gravel"
   | "glass"
+  | "door"
+  | "chest"
+  | "furnace"
   | "generic";
 
 /** Shared block fields (no registry id) — used by JSON parsing and {@link BlockDefinition}. */

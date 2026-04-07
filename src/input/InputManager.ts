@@ -186,7 +186,8 @@ export class InputManager {
       this.worldInputBlocked &&
       action !== "inventory" &&
       action !== "pause" &&
-      action !== "chat"
+      action !== "chat" &&
+      action !== "dropItem"
     ) {
       return false;
     }
@@ -222,7 +223,8 @@ export class InputManager {
       this.worldInputBlocked &&
       action !== "inventory" &&
       action !== "pause" &&
-      action !== "chat"
+      action !== "chat" &&
+      action !== "dropItem"
     ) {
       return false;
     }

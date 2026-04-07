@@ -3,6 +3,7 @@ import { yieldToNextFrame } from "../core/asyncYield";
 import { unixRandom01 } from "../core/unixRandom";
 import {
   BLOCK_SIZE,
+  PLAYER_HEIGHT,
   CHEST_DOUBLE_SLOTS,
   CHEST_SINGLE_SLOTS,
   CHUNK_SIZE,
@@ -163,6 +164,28 @@ export class World {
   private readonly bus?: EventBus;
   private readonly _droppedItems = new Map<string, DroppedItem>();
   private _dropSeq = 0;
+  private _nextNetDropId = 1;
+  /** When set (multiplayer host), spawned drops use net ids and invoke this hook. */
+  private _netDropReplicate:
+    | ((p: {
+        netId: number;
+        itemId: number;
+        count: number;
+        x: number;
+        y: number;
+        vx: number;
+        vy: number;
+        damage: number;
+      }) => void)
+    | null = null;
+  /** Multiplayer client: pending pickup requests (avoid duplicate RPC). */
+  private readonly _dropPickupPending = new Set<number>();
+  /**
+   * When set (multiplayer client), chunks missing from IndexedDB are fetched via this promise
+   * (host CHUNK_DATA) instead of local procedural generation.
+   */
+  private _authoritativeChunkFetch: ((cx: number, cy: number) => Promise<void>) | null =
+    null;
   private readonly _lootResolver: ILootResolver;
   private readonly _lootRng: GeneratorContext;
   private _lootForkSeq = 0;
@@ -210,6 +233,11 @@ export class World {
   private readonly _doorPlayerSamples: DoorPlayerSample[] = [];
   /** Last door render signature per bottom key — drives chunk mesh dirty when open state or swing hinge changes. */
   private readonly _doorRenderSig = new Map<string, string>();
+  /** Previous effective-open + latch for {@link refreshDoorProximityMeshDirty} proximity SFX (no double-play with click). */
+  private readonly _doorProximitySfxState = new Map<
+    string,
+    { effective: boolean; latched: boolean }
+  >();
 
   constructor(
     registry: BlockRegistry,
@@ -253,6 +281,65 @@ export class World {
   /** Call once after items are registered (before chunk IO that reads chest/furnace tails). */
   setItemRegistry(registry: ItemRegistry): void {
     this._itemRegistry = registry;
+  }
+
+  /** Multiplayer client: load missing chunks from host instead of {@link WorldGenerator}. */
+  setAuthoritativeChunkFetcher(
+    fetch: ((cx: number, cy: number) => Promise<void>) | null,
+  ): void {
+    this._authoritativeChunkFetch = fetch;
+  }
+
+  /** Multiplayer host: replicate every {@link spawnItem} to clients. */
+  setNetDropReplicationHook(
+    hook:
+      | ((p: {
+          netId: number;
+          itemId: number;
+          count: number;
+          x: number;
+          y: number;
+          vx: number;
+          vy: number;
+          damage: number;
+        }) => void)
+      | null,
+  ): void {
+    this._netDropReplicate = hook;
+  }
+
+  /** Apply a host-authored drop on clients (`DROP_SPAWN`). */
+  applyAuthoritativeDropSpawn(p: {
+    netId: number;
+    itemId: number;
+    count: number;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    damage: number;
+  }): void {
+    const id = `n${p.netId}`;
+    if (this._droppedItems.has(id)) {
+      return;
+    }
+    const drop = new DroppedItem(
+      id,
+      p.itemId as ItemId,
+      p.count,
+      p.x,
+      p.y,
+      p.vx,
+      p.vy,
+      p.damage,
+    );
+    this._droppedItems.set(id, drop);
+  }
+
+  /** Remove replicated drop everywhere (`DROP_DESPAWN`). */
+  removeAuthoritativeDropByNetId(netId: number): void {
+    this._dropPickupPending.delete(netId);
+    this._droppedItems.delete(`n${netId}`);
   }
 
   private requireItemRegistry(): ItemRegistry {
@@ -300,6 +387,11 @@ export class World {
   /** Terrain surface world-Y at column `wx` (deterministic noise). */
   getSurfaceHeight(wx: number): number {
     return this.worldGen.getSurfaceHeight(wx);
+  }
+
+  /** Desert biome at world block column `wx` (matches terrain generator). */
+  isDesertColumn(wx: number): boolean {
+    return this.worldGen.isDesertColumn(wx);
   }
 
   getBlock(wx: number, wy: number): BlockDefinition {
@@ -435,9 +527,31 @@ export class World {
       const comma = key.indexOf(",");
       const wx = Number(key.slice(0, comma));
       const bottomWy = Number(key.slice(comma + 1));
+      const meta = this.getMetadata(wx, bottomWy);
+      const latched = doorLatchedOpenFromMeta(meta);
       const effective = this.isDoorEffectivelyOpen(wx, bottomWy);
       const hingeR = this.getDoorRenderHingeRight(wx, bottomWy);
       const sig = `${effective ? 1 : 0}:${hingeR ? 1 : 0}`;
+      const prevSig = this._doorProximitySfxState.get(key);
+      if (prevSig !== undefined) {
+        const { effective: prevEff, latched: prevLatch } = prevSig;
+        if (effective && !prevEff && !latched) {
+          this.bus?.emit({
+            type: "door:proximity-swing",
+            wx,
+            bottomWy,
+            opening: true,
+          } satisfies GameEvent);
+        } else if (!effective && prevEff && !prevLatch && !latched) {
+          this.bus?.emit({
+            type: "door:proximity-swing",
+            wx,
+            bottomWy,
+            opening: false,
+          } satisfies GameEvent);
+        }
+      }
+      this._doorProximitySfxState.set(key, { effective, latched });
       const prev = this._doorRenderSig.get(key);
       if (prev !== sig) {
         this._doorRenderSig.set(key, sig);
@@ -463,9 +577,13 @@ export class World {
     if (oldId !== 0) {
       const od = this.registry.getById(oldId);
       if (od.doorHalf === "bottom") {
-        this._doorBottomKeys.delete(`${wx},${wy}`);
+        const k = `${wx},${wy}`;
+        this._doorBottomKeys.delete(k);
+        this._doorProximitySfxState.delete(k);
       } else if (od.doorHalf === "top" && wy > WORLD_Y_MIN) {
-        this._doorBottomKeys.delete(`${wx},${wy - 1}`);
+        const k = `${wx},${wy - 1}`;
+        this._doorBottomKeys.delete(k);
+        this._doorProximitySfxState.delete(k);
       }
     }
     if (newId !== 0) {
@@ -494,6 +612,7 @@ export class World {
     }
     for (const k of del) {
       this._doorBottomKeys.delete(k);
+      this._doorProximitySfxState.delete(k);
     }
   }
 
@@ -567,6 +686,22 @@ export class World {
   /** True if the block cell at world block coordinates is solid. */
   isSolid(worldBlockX: number, worldBlockY: number): boolean {
     return this.getBlock(worldBlockX, worldBlockY).solid;
+  }
+
+  /**
+   * Minecraft-style outdoor rain: ray from above the player's head to the top of the world.
+   * Solid non-transparent blocks (not glass/leaves) block rain sound.
+   */
+  canHearOpenSkyRain(worldBlockX: number, feetPixelY: number): boolean {
+    const headTopPx = feetPixelY + PLAYER_HEIGHT;
+    const headWy = Math.floor((Math.max(0, headTopPx) - 1) / BLOCK_SIZE);
+    for (let wy = headWy + 1; wy <= WORLD_Y_MAX; wy++) {
+      const b = this.getBlock(worldBlockX, wy);
+      if (b.solid && !b.transparent) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** Screen-space (Pixi Y down) collidable block AABBs overlapping `region` — same contract as {@link getSolidAABBs}. */
@@ -675,7 +810,23 @@ export class World {
     vy = 0,
     damage = 0,
   ): void {
-    const id = `drop-${++this._dropSeq}`;
+    let id: string;
+    if (this._netDropReplicate !== null) {
+      const netId = this._nextNetDropId++;
+      id = `n${netId}`;
+      this._netDropReplicate({
+        netId,
+        itemId,
+        count,
+        x,
+        y,
+        vx,
+        vy,
+        damage,
+      });
+    } else {
+      id = `drop-${++this._dropSeq}`;
+    }
     const drop = new DroppedItem(id, itemId, count, x, y, vx, vy, damage);
     this._droppedItems.set(id, drop);
   }
@@ -688,10 +839,29 @@ export class World {
     dt: number,
     playerPos: { x: number; y: number },
     inventory: { addItemStack(stack: ItemStack): ItemStack | null },
+    onItemPickedUp?: () => void,
+    /** When set, replicated drops (`n*`) request host pickup instead of local inventory. */
+    networkPickupRequest?: (netId: number) => void,
+    /**
+     * Multiplayer host: after fully collecting a replicated drop (`n*`), broadcast despawn to clients.
+     */
+    hostReplicatedPickupDespawn?: (netId: number) => void,
   ): void {
     for (const [id, item] of [...this._droppedItems.entries()]) {
       const collected = item.update(dt, this, playerPos, this._dropSolidScratch);
       if (!collected) {
+        continue;
+      }
+      if (
+        networkPickupRequest !== undefined &&
+        id.startsWith("n") &&
+        id.length > 1
+      ) {
+        const netId = Number.parseInt(id.slice(1), 10);
+        if (Number.isFinite(netId) && !this._dropPickupPending.has(netId)) {
+          this._dropPickupPending.add(netId);
+          networkPickupRequest(netId);
+        }
         continue;
       }
       const stack: ItemStack = {
@@ -699,11 +869,27 @@ export class World {
         count: item.count,
         ...(item.damage > 0 ? { damage: item.damage } : {}),
       };
+      const beforeCount = stack.count;
       const overflow = inventory.addItemStack(stack);
+      const absorbed =
+        overflow === null || overflow.count < beforeCount;
+      if (absorbed) {
+        onItemPickedUp?.();
+      }
       if (overflow !== null) {
         item.count = overflow.count;
         item.damage = overflow.damage ?? 0;
       } else {
+        if (
+          hostReplicatedPickupDespawn !== undefined &&
+          id.startsWith("n") &&
+          id.length > 1
+        ) {
+          const netId = Number.parseInt(id.slice(1), 10);
+          if (Number.isFinite(netId)) {
+            hostReplicatedPickupDespawn(netId);
+          }
+        }
         this._droppedItems.delete(id);
       }
     }
@@ -1175,6 +1361,43 @@ export class World {
     return this.chunks.getChunkXY(chunkX, chunkY);
   }
 
+  /**
+   * Host / solo: ensure one chunk exists (IndexedDB or procedural), with lighting.
+   * Used when a multiplayer client requests an authoritative chunk from the host.
+   */
+  async loadOrGenerateChunkAt(cx: number, cy: number): Promise<void> {
+    const coord: ChunkCoord = { cx, cy };
+    if (this.chunks.getChunk(coord) !== undefined) {
+      return;
+    }
+    const record = await this.store.loadChunk(this.worldUuid, coord);
+    if (record !== undefined) {
+      const chunk = this.chunkFromRecord(record);
+      this.chunks.putChunk(chunk);
+      if (record.furnaces !== undefined && record.furnaces.length > 0) {
+        this.applyFurnaceEntitiesForChunk(
+          coord.cx,
+          coord.cy,
+          record.furnaces,
+          this._needsItemIdLayoutMigration,
+        );
+      }
+      if (record.chests !== undefined && record.chests.length > 0) {
+        this.applyChestEntitiesForChunk(
+          coord.cx,
+          coord.cy,
+          record.chests,
+          this._needsItemIdLayoutMigration,
+        );
+      }
+      this.invalidateSkyTopStripForChunk(coord.cx);
+    } else {
+      this.chunks.putChunk(this._chunkGen(coord));
+      this.invalidateSkyTopStripForChunk(coord.cx);
+    }
+    this.recomputeChunkLight(cx, cy);
+  }
+
   /** Iterable of all loaded chunk grid coordinates [cx, cy]. */
   *loadedChunkCoords(): Generator<[number, number], void, undefined> {
     for (const chunk of this.chunks.getLoadedChunks()) {
@@ -1262,8 +1485,8 @@ export class World {
 
   /**
    * Loads or generates chunks in the view ring. Prefer DB, then procedural gen.
-   * Multiplayer clients still generate locally for newly entered rings until on-demand
-   * authoritative chunk fetch exists (join sync only covers chunks the host had loaded).
+   * Multiplayer clients use {@link setAuthoritativeChunkFetcher} to request `CHUNK_DATA` from the host
+   * for missing chunks instead of local procedural generation.
    */
   async loadChunksAroundCentre(
     centreCx: number,
@@ -1332,6 +1555,22 @@ export class World {
             coord.cy,
             record.chests,
             this._needsItemIdLayoutMigration,
+          );
+        }
+        this.invalidateSkyTopStripForChunk(coord.cx);
+        loaded++;
+        progressCallback?.({
+          loaded,
+          total,
+          source: "db",
+          cx: coord.cx,
+          cy: coord.cy,
+        });
+      } else if (this._authoritativeChunkFetch !== null) {
+        await this._authoritativeChunkFetch(coord.cx, coord.cy);
+        if (this.chunks.getChunk(coord) === undefined) {
+          throw new Error(
+            `Authoritative chunk fetch did not provide (${coord.cx},${coord.cy})`,
           );
         }
         this.invalidateSkyTopStripForChunk(coord.cx);
@@ -1650,8 +1889,51 @@ export class World {
     return this._furnaceTiles.get(furnaceCellKey(wx, wy));
   }
 
+  /** True when the furnace has smelting work (queue or in-progress cook) — drives lit block texture. */
+  isFurnaceVisuallyLit(wx: number, wy: number): boolean {
+    const st = this.getFurnaceTile(wx, wy);
+    if (st === undefined) {
+      return false;
+    }
+    return this.isFurnaceVisuallyLitFromState(st);
+  }
+
+  private isFurnaceVisuallyLitFromState(st: FurnaceTileState): boolean {
+    return st.queue.length > 0 || st.cookProgressSec > 1e-6;
+  }
+
+  /** Iterate known furnace tile states (skips stale keys if the block was replaced). */
+  forEachFurnaceTile(
+    callback: (wx: number, wy: number, tile: FurnaceTileState) => void,
+  ): void {
+    if (this._furnaceBlockId === null) {
+      return;
+    }
+    const fid = this._furnaceBlockId;
+    for (const [key, tile] of this._furnaceTiles) {
+      const parts = key.split(",");
+      const wx = Number.parseInt(parts[0] ?? "", 10);
+      const wy = Number.parseInt(parts[1] ?? "", 10);
+      if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+        continue;
+      }
+      if (this.getBlock(wx, wy).id !== fid) {
+        continue;
+      }
+      callback(wx, wy, tile);
+    }
+  }
+
   setFurnaceTile(wx: number, wy: number, state: FurnaceTileState): void {
-    this._furnaceTiles.set(furnaceCellKey(wx, wy), state);
+    const key = furnaceCellKey(wx, wy);
+    const prev = this._furnaceTiles.get(key);
+    const prevLit =
+      prev !== undefined && this.isFurnaceVisuallyLitFromState(prev);
+    const nextLit = this.isFurnaceVisuallyLitFromState(state);
+    this._furnaceTiles.set(key, state);
+    if (prevLit !== nextLit) {
+      this.markForegroundChunkDirtyAtWorldCell(wx, wy);
+    }
   }
 
   removeFurnaceTile(wx: number, wy: number): void {
@@ -1739,6 +2021,10 @@ export class World {
       const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
       this._furnaceTiles.set(furnaceCellKey(wx, wy), persistedToFurnaceTile(e, items));
     }
+    const chunk = this.chunks.getChunk({ cx, cy });
+    if (chunk !== undefined) {
+      chunk.dirty = true;
+    }
   }
 
   removeFurnaceTilesInChunk(cx: number, cy: number): void {
@@ -1793,8 +2079,13 @@ export class World {
         continue;
       }
       const next = stepFurnaceTile(prev, dtSec, worldTimeMs, items, smelting);
+      const prevLit = this.isFurnaceVisuallyLitFromState(prev);
+      const nextLit = this.isFurnaceVisuallyLitFromState(next);
       if (!furnaceTilesEqual(prev, next)) {
         changed.push(key);
+      }
+      if (prevLit !== nextLit) {
+        this.markForegroundChunkDirtyAtWorldCell(wx, wy);
       }
       this._furnaceTiles.set(key, next);
     }
@@ -1810,10 +2101,16 @@ export class World {
       return;
     }
     const norm = normalizeFurnacePersistedChunk(data as unknown) ?? data;
-    this._furnaceTiles.set(
-      furnaceCellKey(wx, wy),
-      persistedToFurnaceTile(norm, this.requireItemRegistry()),
-    );
+    const key = furnaceCellKey(wx, wy);
+    const prev = this._furnaceTiles.get(key);
+    const prevLit =
+      prev !== undefined && this.isFurnaceVisuallyLitFromState(prev);
+    const nextTile = persistedToFurnaceTile(norm, this.requireItemRegistry());
+    const nextLit = this.isFurnaceVisuallyLitFromState(nextTile);
+    this._furnaceTiles.set(key, nextTile);
+    if (prevLit !== nextLit) {
+      this.markForegroundChunkDirtyAtWorldCell(wx, wy);
+    }
   }
 
   setChestBlockId(id: number | null): void {

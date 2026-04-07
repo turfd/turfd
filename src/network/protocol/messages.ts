@@ -53,6 +53,28 @@ export enum MessageType {
   CHEST_PUT_REQUEST = 0x15,
   /** Client → host: shift-quick-move a stack from player inventory into chest (host will snapshot). */
   CHEST_QUICKMOVE_TO_CHEST = 0x16,
+  /** Host → clients: rain remaining (real-time seconds); 0 = clear. */
+  WEATHER_SYNC = 0x17,
+  /** Host → clients: lightning flash + thunder cue. */
+  WEATHER_LIGHTNING = 0x18,
+  /** Client → host: request authoritative chunk (host replies with CHUNK_DATA). */
+  CHUNK_REQUEST = 0x19,
+  /** Client → host: commit a finished block break (host validates + applies). */
+  TERRAIN_BREAK_COMMIT = 0x1a,
+  /** Client → host: toggle door latch at clicked cell. */
+  TERRAIN_DOOR_TOGGLE = 0x1b,
+  /** Client → host: place block / use item on world (see subtype in payload). */
+  TERRAIN_PLACE = 0x1c,
+  /** Host → requesting client: inventory / tool follow-up after terrain RPC. */
+  TERRAIN_ACK = 0x1d,
+  /** Host → clients: replicated dropped item spawn. */
+  DROP_SPAWN = 0x1e,
+  /** Host → clients: remove replicated drop (picked up or merged). */
+  DROP_DESPAWN = 0x1f,
+  /** Client → host: request pickup of replicated drop by net id. */
+  DROP_PICKUP_REQUEST = 0x20,
+  /** Client → host: cursor stack thrown into the world (host spawns replicated drop). */
+  THROW_CURSOR_STACK = 0x21,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -90,6 +112,90 @@ export type WorldSyncMsg = {
 export type WorldTimeMsg = {
   type: MessageType.WORLD_TIME;
   worldTimeMs: number;
+};
+
+export type WeatherSyncMsg = {
+  type: MessageType.WEATHER_SYNC;
+  rainRemainingSec: number;
+};
+
+export type WeatherLightningMsg = {
+  type: MessageType.WEATHER_LIGHTNING;
+};
+
+export type ChunkRequestMsg = {
+  type: MessageType.CHUNK_REQUEST;
+  cx: number;
+  cy: number;
+};
+
+export type TerrainBreakCommitMsg = {
+  type: MessageType.TERRAIN_BREAK_COMMIT;
+  wx: number;
+  wy: number;
+  /** 0 = foreground, 1 = background. */
+  layer: 0 | 1;
+  expectedBlockId: number;
+  hotbarSlot: number;
+  heldItemId: number;
+};
+
+export type TerrainDoorToggleMsg = {
+  type: MessageType.TERRAIN_DOOR_TOGGLE;
+  wx: number;
+  wy: number;
+};
+
+export type TerrainPlaceMsg = {
+  type: MessageType.TERRAIN_PLACE;
+  subtype: number;
+  wx: number;
+  wy: number;
+  hotbarSlot: number;
+  placesBlockId: number;
+  aux: number;
+};
+
+export type TerrainAckMsg = {
+  type: MessageType.TERRAIN_ACK;
+  ok: boolean;
+  /** Client hotbar slot for tool-use / consume. */
+  hotbarSlot: number;
+  /** Bitmask: see terrainHostPlace ACK_* constants. */
+  effects: number;
+};
+
+export type DropSpawnMsg = {
+  type: MessageType.DROP_SPAWN;
+  netId: number;
+  itemId: number;
+  count: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  damage: number;
+};
+
+export type DropDespawnMsg = {
+  type: MessageType.DROP_DESPAWN;
+  netId: number;
+};
+
+export type DropPickupRequestMsg = {
+  type: MessageType.DROP_PICKUP_REQUEST;
+  netId: number;
+};
+
+export type ThrowCursorStackMsg = {
+  type: MessageType.THROW_CURSOR_STACK;
+  itemId: number;
+  count: number;
+  damage: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
 };
 
 export type PackStackMsg = {
@@ -296,6 +402,17 @@ export type NetworkMessage =
   | ChestQuickMoveToChestMsg
   | WorldSyncMsg
   | WorldTimeMsg
+  | WeatherSyncMsg
+  | WeatherLightningMsg
+  | ChunkRequestMsg
+  | TerrainBreakCommitMsg
+  | TerrainDoorToggleMsg
+  | TerrainPlaceMsg
+  | TerrainAckMsg
+  | DropSpawnMsg
+  | DropDespawnMsg
+  | DropPickupRequestMsg
+  | ThrowCursorStackMsg
   | SessionEndedMsg
   | PackStackMsg
   | FurnaceSnapshotMsg
@@ -660,6 +777,119 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       return buf;
     }
 
+    case MessageType.WEATHER_SYNC: {
+      const buf = new ArrayBuffer(9);
+      const view = new DataView(buf);
+      view.setUint8(0, MessageType.WEATHER_SYNC);
+      view.setFloat64(1, msg.rainRemainingSec, LE);
+      return buf;
+    }
+
+    case MessageType.WEATHER_LIGHTNING: {
+      const buf = new ArrayBuffer(1);
+      new DataView(buf).setUint8(0, MessageType.WEATHER_LIGHTNING);
+      return buf;
+    }
+
+    case MessageType.CHUNK_REQUEST: {
+      const buf = new ArrayBuffer(9);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.CHUNK_REQUEST);
+      v.setInt32(1, msg.cx, LE);
+      v.setInt32(5, msg.cy, LE);
+      return buf;
+    }
+
+    case MessageType.TERRAIN_BREAK_COMMIT: {
+      const buf = new ArrayBuffer(16);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.TERRAIN_BREAK_COMMIT);
+      v.setInt32(1, msg.wx, LE);
+      v.setInt32(5, msg.wy, LE);
+      v.setUint8(9, msg.layer & 1);
+      v.setUint16(10, msg.expectedBlockId & 0xffff, LE);
+      v.setUint8(12, msg.hotbarSlot & 0xff);
+      v.setUint16(13, msg.heldItemId & 0xffff, LE);
+      return buf;
+    }
+
+    case MessageType.TERRAIN_DOOR_TOGGLE: {
+      const buf = new ArrayBuffer(9);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.TERRAIN_DOOR_TOGGLE);
+      v.setInt32(1, msg.wx, LE);
+      v.setInt32(5, msg.wy, LE);
+      return buf;
+    }
+
+    case MessageType.TERRAIN_PLACE: {
+      const buf = new ArrayBuffer(16);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.TERRAIN_PLACE);
+      v.setUint8(1, msg.subtype & 0xff);
+      v.setInt32(2, msg.wx, LE);
+      v.setInt32(6, msg.wy, LE);
+      v.setUint8(10, msg.hotbarSlot & 0xff);
+      v.setUint16(11, msg.placesBlockId & 0xffff, LE);
+      v.setUint16(13, msg.aux & 0xffff, LE);
+      return buf;
+    }
+
+    case MessageType.TERRAIN_ACK: {
+      const buf = new ArrayBuffer(4);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.TERRAIN_ACK);
+      v.setUint8(1, msg.ok ? 1 : 0);
+      v.setUint8(2, msg.hotbarSlot & 0xff);
+      v.setUint8(3, msg.effects & 0xff);
+      return buf;
+    }
+
+    case MessageType.DROP_SPAWN: {
+      const buf = new ArrayBuffer(39);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.DROP_SPAWN);
+      v.setUint32(1, msg.netId >>> 0, LE);
+      v.setUint32(5, msg.itemId >>> 0, LE);
+      v.setUint32(9, msg.count >>> 0, LE);
+      v.setFloat64(13, msg.x, LE);
+      v.setFloat64(21, msg.y, LE);
+      v.setFloat32(29, msg.vx, LE);
+      v.setFloat32(33, msg.vy, LE);
+      v.setUint16(37, msg.damage & 0xffff, LE);
+      return buf;
+    }
+
+    case MessageType.DROP_DESPAWN: {
+      const buf = new ArrayBuffer(5);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.DROP_DESPAWN);
+      v.setUint32(1, msg.netId >>> 0, LE);
+      return buf;
+    }
+
+    case MessageType.DROP_PICKUP_REQUEST: {
+      const buf = new ArrayBuffer(5);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.DROP_PICKUP_REQUEST);
+      v.setUint32(1, msg.netId >>> 0, LE);
+      return buf;
+    }
+
+    case MessageType.THROW_CURSOR_STACK: {
+      const buf = new ArrayBuffer(41);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.THROW_CURSOR_STACK);
+      v.setUint32(1, msg.itemId >>> 0, LE);
+      v.setUint32(5, msg.count >>> 0, LE);
+      v.setUint32(9, msg.damage >>> 0, LE);
+      v.setFloat64(13, msg.x, LE);
+      v.setFloat64(21, msg.y, LE);
+      v.setFloat64(29, msg.vx, LE);
+      v.setFloat64(37, msg.vy, LE);
+      return buf;
+    }
+
     case MessageType.SESSION_ENDED: {
       const encoded = textEnc.encode(msg.reason);
       if (encoded.byteLength > 65_000) {
@@ -1019,6 +1249,137 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       return {
         type: MessageType.WORLD_TIME,
         worldTimeMs: v.getFloat64(1, LE),
+      };
+    }
+
+    case MessageType.WEATHER_SYNC: {
+      if (v.byteLength < 9) {
+        throw new Error("WEATHER_SYNC: buffer too short");
+      }
+      return {
+        type: MessageType.WEATHER_SYNC,
+        rainRemainingSec: v.getFloat64(1, LE),
+      };
+    }
+
+    case MessageType.WEATHER_LIGHTNING: {
+      return { type: MessageType.WEATHER_LIGHTNING };
+    }
+
+    case MessageType.CHUNK_REQUEST: {
+      if (v.byteLength < 9) {
+        throw new Error("CHUNK_REQUEST: buffer too short");
+      }
+      return {
+        type: MessageType.CHUNK_REQUEST,
+        cx: v.getInt32(1, LE),
+        cy: v.getInt32(5, LE),
+      };
+    }
+
+    case MessageType.TERRAIN_BREAK_COMMIT: {
+      if (v.byteLength < 16) {
+        throw new Error("TERRAIN_BREAK_COMMIT: buffer too short");
+      }
+      return {
+        type: MessageType.TERRAIN_BREAK_COMMIT,
+        wx: v.getInt32(1, LE),
+        wy: v.getInt32(5, LE),
+        layer: v.getUint8(9) === 1 ? 1 : 0,
+        expectedBlockId: v.getUint16(10, LE),
+        hotbarSlot: v.getUint8(12),
+        heldItemId: v.getUint16(13, LE),
+      };
+    }
+
+    case MessageType.TERRAIN_DOOR_TOGGLE: {
+      if (v.byteLength < 9) {
+        throw new Error("TERRAIN_DOOR_TOGGLE: buffer too short");
+      }
+      return {
+        type: MessageType.TERRAIN_DOOR_TOGGLE,
+        wx: v.getInt32(1, LE),
+        wy: v.getInt32(5, LE),
+      };
+    }
+
+    case MessageType.TERRAIN_PLACE: {
+      if (v.byteLength < 16) {
+        throw new Error("TERRAIN_PLACE: buffer too short");
+      }
+      return {
+        type: MessageType.TERRAIN_PLACE,
+        subtype: v.getUint8(1),
+        wx: v.getInt32(2, LE),
+        wy: v.getInt32(6, LE),
+        hotbarSlot: v.getUint8(10),
+        placesBlockId: v.getUint16(11, LE),
+        aux: v.getUint16(13, LE),
+      };
+    }
+
+    case MessageType.TERRAIN_ACK: {
+      if (v.byteLength < 4) {
+        throw new Error("TERRAIN_ACK: buffer too short");
+      }
+      return {
+        type: MessageType.TERRAIN_ACK,
+        ok: v.getUint8(1) !== 0,
+        hotbarSlot: v.getUint8(2),
+        effects: v.getUint8(3),
+      };
+    }
+
+    case MessageType.DROP_SPAWN: {
+      if (v.byteLength < 39) {
+        throw new Error("DROP_SPAWN: buffer too short");
+      }
+      return {
+        type: MessageType.DROP_SPAWN,
+        netId: v.getUint32(1, LE),
+        itemId: v.getUint32(5, LE),
+        count: v.getUint32(9, LE),
+        x: v.getFloat64(13, LE),
+        y: v.getFloat64(21, LE),
+        vx: v.getFloat32(29, LE),
+        vy: v.getFloat32(33, LE),
+        damage: v.getUint16(37, LE),
+      };
+    }
+
+    case MessageType.DROP_DESPAWN: {
+      if (v.byteLength < 5) {
+        throw new Error("DROP_DESPAWN: buffer too short");
+      }
+      return {
+        type: MessageType.DROP_DESPAWN,
+        netId: v.getUint32(1, LE),
+      };
+    }
+
+    case MessageType.DROP_PICKUP_REQUEST: {
+      if (v.byteLength < 5) {
+        throw new Error("DROP_PICKUP_REQUEST: buffer too short");
+      }
+      return {
+        type: MessageType.DROP_PICKUP_REQUEST,
+        netId: v.getUint32(1, LE),
+      };
+    }
+
+    case MessageType.THROW_CURSOR_STACK: {
+      if (v.byteLength < 41) {
+        throw new Error("THROW_CURSOR_STACK: buffer too short");
+      }
+      return {
+        type: MessageType.THROW_CURSOR_STACK,
+        itemId: v.getUint32(1, LE),
+        count: v.getUint32(5, LE),
+        damage: v.getUint32(9, LE),
+        x: v.getFloat64(13, LE),
+        y: v.getFloat64(21, LE),
+        vx: v.getFloat64(29, LE),
+        vy: v.getFloat64(37, LE),
       };
     }
 

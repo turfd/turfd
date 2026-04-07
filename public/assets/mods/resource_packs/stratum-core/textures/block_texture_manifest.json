@@ -44,6 +44,7 @@
     "spruce_planks": "assets/mods/resource_packs/stratum-core/textures/tiles/spruce_planks.png",
     "crafting_table": "assets/mods/resource_packs/stratum-core/textures/tiles/crafting_table.png",
     "furnace": "assets/mods/resource_packs/stratum-core/textures/tiles/furnace.png",
+    "furnace_on": "assets/mods/resource_packs/stratum-core/textures/tiles/furnace_on.png",
     "chest": "assets/mods/resource_packs/stratum-core/textures/tiles/chest.png",
     "chest_double": "assets/mods/resource_packs/stratum-core/textures/tiles/chest_double.png",
     "oak_sapling": "assets/mods/resource_packs/stratum-core/textures/tiles/oak_sapling.png",
