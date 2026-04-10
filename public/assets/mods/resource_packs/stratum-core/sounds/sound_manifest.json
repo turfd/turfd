@@ -472,6 +472,33 @@
       "sounds/water/splash2.ogg",
       "sounds/water/splash3.ogg"
     ],
+    "entity_sheep_idle": [
+      "sounds/entity/sheep/say1.ogg",
+      "sounds/entity/sheep/say2.ogg",
+      "sounds/entity/sheep/say3.ogg"
+    ],
+    "entity_sheep_step": [
+      "sounds/entity/sheep/step1.ogg",
+      "sounds/entity/sheep/step2.ogg",
+      "sounds/entity/sheep/step3.ogg",
+      "sounds/entity/sheep/step4.ogg",
+      "sounds/entity/sheep/step5.ogg"
+    ],
+    "entity_pig_idle": [
+      "sounds/entity/pig/say1.ogg",
+      "sounds/entity/pig/say2.ogg",
+      "sounds/entity/pig/say3.ogg"
+    ],
+    "entity_pig_step": [
+      "sounds/entity/pig/step1.ogg",
+      "sounds/entity/pig/step2.ogg",
+      "sounds/entity/pig/step3.ogg",
+      "sounds/entity/pig/step4.ogg",
+      "sounds/entity/pig/step5.ogg"
+    ],
+    "entity_pig_death": [
+      "sounds/entity/pig/death.ogg"
+    ],
     "water_swim": [
       "sounds/water/swim1.ogg",
       "sounds/water/swim2.ogg",

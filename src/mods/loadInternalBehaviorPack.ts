@@ -6,7 +6,11 @@ import type { LootResolver } from "../items/LootResolver";
 import { parseBlockJson } from "./parseBlockJson";
 import { parseItemJson, type ParsedItemDefinition } from "./parseItemJson";
 import { parseRecipeJson } from "./parseRecipeJson";
-import { parseLootTablesJson, registerLootTablesForBlocks } from "./parseLootTablesJson";
+import {
+  parseLootTablesJson,
+  registerEntityLootTables,
+  registerLootTablesForBlocks,
+} from "./parseLootTablesJson";
 import { parseFurnaceFuelJson, parseSmeltingRecipesJson } from "./parseSmeltingJson";
 import type { SmeltingRegistry } from "../world/SmeltingRegistry";
 import {
@@ -154,6 +158,7 @@ export async function loadBehaviorPackLoot(
     const raw = await fetchJson(`${packBaseUrl}${rel}`);
     const data = parseLootTablesJson(raw);
     registerLootTablesForBlocks(registry, resolver, data);
+    registerEntityLootTables(resolver, data);
   }
 }
 

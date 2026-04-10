@@ -34,6 +34,8 @@ import {
   PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT,
   PLAYER_DAMAGE_TINT_DURATION_SEC,
   PLAYER_HAND_SWING_VISUAL_DURATION_SEC,
+  PLAYER_SPRINT_SPEED_PX,
+  PLAYER_WALK_SPEED_PX,
   REACH_BLOCKS,
   STEP_INTERVAL,
   MINING_DIG_SOUND_INTERVAL_SEC,
@@ -56,6 +58,11 @@ import {
 } from "../world/blocks/stairMetadata";
 import type { World } from "../world/World";
 import {
+  isGrassDirtOrFarmlandSurface,
+  isSaplingIdentifier,
+} from "../world/plant/soil";
+import {
+  SUB_BED_PAIR,
   SUB_BG,
   SUB_BUCKET_FILL,
   SUB_DOOR_PAIR,
@@ -65,6 +72,10 @@ import {
   SUB_WHEAT,
 } from "../world/terrain/terrainHostPlace";
 import { getFeetSupportBlock } from "../world/footstepSurface";
+import {
+  bedHeadPlusXFromMeta,
+  packBedMetadata,
+} from "../world/bed/bedMetadata";
 import {
   doorLatchedOpenFromMeta,
   packDoorMetadata,
@@ -78,16 +89,15 @@ import { getSolidAABBs } from "./physics/Collision";
 import { createAABB, overlaps, sweepAABB, type AABB } from "./physics/AABB";
 
 /**
- * Horizontal caps in blocks/s (1 block ≈ 1 m). Sprint is ~30% over walk (5.612 / 4.317 ≈ 1.3).
+ * Horizontal caps in blocks/s (1 block ≈ 1 m). Ground walk uses {@link PLAYER_WALK_SPEED_PX};
+ * sprint uses {@link PLAYER_SPRINT_SPEED_PX}.
  * While sprinting in the air with a move input, use the sprint-jump reference horizontal speed
  * (vanilla-style average over hop cycles ≈ 7.127 m/s).
  */
-const WALK_SPEED_BLOCKS_PER_SEC = 4.317;
-const SPRINT_SPEED_BLOCKS_PER_SEC = 5.612;
 const SPRINT_JUMP_HORIZONTAL_BLOCKS_PER_SEC = 7.127;
 
-const WALK_SPEED = WALK_SPEED_BLOCKS_PER_SEC * BLOCK_SIZE;
-const SPRINT_SPEED = SPRINT_SPEED_BLOCKS_PER_SEC * BLOCK_SIZE;
+const WALK_SPEED = PLAYER_WALK_SPEED_PX;
+const SPRINT_SPEED = PLAYER_SPRINT_SPEED_PX;
 /** Sprint + airborne + strafe: higher horizontal cap so repeated sprint-jumps match ~7.127 m/s average. */
 const SPRINT_AIR_SPEED = SPRINT_JUMP_HORIZONTAL_BLOCKS_PER_SEC * BLOCK_SIZE;
 const GRAVITY = 640;
@@ -165,6 +175,10 @@ export type PlayerState = {
   deathAnimT: number | null;
   /** Seconds of red damage tint remaining (rendered on the local body + held item). */
   damageTintRemainSec: number;
+  /** True while the local player is in a bed sleep transition. */
+  sleeping: boolean;
+  /** Seconds remaining for the sleep pose/input lock. */
+  sleepRemainSec: number;
 };
 
 function feetToScreenAABB(pos: { x: number; y: number }): AABB {
@@ -349,6 +363,8 @@ export class Player {
     dead: false,
     deathAnimT: null,
     damageTintRemainSec: 0,
+    sleeping: false,
+    sleepRemainSec: 0,
   };
 
   public readonly inventory: PlayerInventory;
@@ -370,6 +386,8 @@ export class Player {
   private waterSwimSfxAccum = 0;
   /** When true, block/place mutations go to the host via bus (`terrain:net-*`). */
   private _mpTerrainClient = false;
+  private lastMovedBlockX = Number.NaN;
+  private lastMovedBlockY = Number.NaN;
 
   constructor(registry: BlockRegistry, bus: EventBus, audio: AudioEngine, itemRegistry: ItemRegistry) {
     this.bus = bus;
@@ -436,6 +454,8 @@ export class Player {
     this.fallDistanceBlocks = 0;
     this.wasInWater = false;
     this.waterSwimSfxAccum = 0;
+    this.lastMovedBlockX = Number.NaN;
+    this.lastMovedBlockY = Number.NaN;
   }
 
   /** Reduce health; amount is floored. HP does not go below 0. */
@@ -476,6 +496,26 @@ export class Player {
   /** Same mining-style swing as breaking blocks (body + held item), for place / use feedback. */
   private startHandSwingVisual(): void {
     this.state.handSwingRemainSec = PLAYER_HAND_SWING_VISUAL_DURATION_SEC;
+  }
+
+  /**
+   * Trigger the mining-style hand/held-item swing visual (used for melee clicks even if nothing is hit).
+   */
+  swingHand(): void {
+    this.startHandSwingVisual();
+  }
+
+  beginSleep(durationSec: number): void {
+    const d = Number.isFinite(durationSec) ? Math.max(0, durationSec) : 0;
+    this.state.sleeping = d > 0;
+    this.state.sleepRemainSec = d;
+    if (this.state.sleeping) {
+      this.state.breakTarget = null;
+      this.state.breakAccum = 0;
+      this.state.breakProgress = 0;
+      this.miningDigSoundAccum = 0;
+      this.state.handSwingRemainSec = 0;
+    }
   }
 
   /** Restore position, hotbar, and inventory from persistence. */
@@ -547,6 +587,21 @@ export class Player {
 
     if (state.damageTintRemainSec > 0) {
       state.damageTintRemainSec = Math.max(0, state.damageTintRemainSec - dt);
+    }
+
+    if (state.sleepRemainSec > 0) {
+      state.sleepRemainSec = Math.max(0, state.sleepRemainSec - dt);
+      if (state.sleepRemainSec <= 0) {
+        state.sleeping = false;
+      }
+      state.prevPosition.x = state.position.x;
+      state.prevPosition.y = state.position.y;
+      state.velocity.x = 0;
+      state.velocity.y = 0;
+      this.fallDistanceBlocks = 0;
+      this.wasInWater = false;
+      this.waterSwimSfxAccum = 0;
+      return;
     }
 
     if (state.dead) {
@@ -979,6 +1034,26 @@ export class Player {
                 if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
                 world.setBlock(wx, wy, 0);
               }
+            } else if (def.bedHalf === "foot" || def.bedHalf === "head") {
+              const meta = world.getMetadata(wx, wy);
+              const headPlusX = bedHeadPlusXFromMeta(meta);
+              const footWx =
+                def.bedHalf === "foot" ? wx : headPlusX ? wx - 1 : wx + 1;
+              const headWx =
+                def.bedHalf === "head" ? wx : headPlusX ? wx + 1 : wx - 1;
+              const footCell = world.getBlock(footWx, wy);
+              const headCell = world.getBlock(headWx, wy);
+              const fullBed =
+                footCell.bedHalf === "foot" && headCell.bedHalf === "head";
+
+              if (fullBed) {
+                if (dropsLoot) world.spawnLootForBrokenBlock(footCell.id, footWx, wy);
+                world.setBlock(headWx, wy, 0);
+                world.setBlock(footWx, wy, 0);
+              } else {
+                if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
+                world.setBlock(wx, wy, 0);
+              }
             } else {
               if (def.identifier === "stratum:furnace") {
                 world.spawnFurnaceItemDropsAt(wx, wy);
@@ -1084,6 +1159,14 @@ export class Player {
               }
             }
           }
+        }
+        else if (cell.bedHalf === "foot" || cell.bedHalf === "head") {
+          this.bus.emit({
+            type: "bed:sleep-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+          this.startHandSwingVisual();
         }
       } else if (!input.isWorldInputBlocked()) {
       let placeHandled = false;
@@ -1209,8 +1292,11 @@ export class Player {
             const placesBlockId = itemPlacesBlock(itemDef);
             if (placesBlockId !== 0) {
               const placedDef = this.registry.getById(placesBlockId);
-              if (placedDef.tallGrass === "bottom") {
-                // two-tall plants not supported on back layer
+              if (
+                placedDef.tallGrass === "bottom" ||
+                placedDef.bedHalf === "foot"
+              ) {
+                // two-tall / two-wide blocks not supported on back layer
               } else if (this._mpTerrainClient) {
                 this.emitNetPlace(
                   SUB_BG,
@@ -1249,8 +1335,57 @@ export class Player {
             const plantFlowerLike =
               plantTallBottom || isFlowerOrShortGrass(placedDef.identifier);
 
-            if (plantFlowerLike && !isGrassOrDirtSurface(below)) {
+            const isSugarCane = placedDef.identifier === "stratum:sugar_cane";
+            let sugarCaneValid = true;
+            if (isSugarCane) {
+              sugarCaneValid = false;
+              if (!cell.water) {
+                const soilOk =
+                  below.identifier === "stratum:sand" ||
+                  below.identifier === "stratum:grass" ||
+                  below.identifier === "stratum:dirt";
+                const belowIsSugarCane = below.identifier === "stratum:sugar_cane";
+                if (soilOk || belowIsSugarCane) {
+                  let baseY = wy;
+                  if (belowIsSugarCane) {
+                    baseY = wy - 1;
+                    while (baseY - 1 >= WORLD_Y_MIN) {
+                      const b = world.getBlock(wx, baseY - 1);
+                      if (b.identifier !== "stratum:sugar_cane") {
+                        break;
+                      }
+                      baseY -= 1;
+                    }
+                  }
+                  const soilY = baseY - 1;
+                  const soil = world.getBlock(wx, soilY);
+                  const soilOk2 =
+                    soil.identifier === "stratum:sand" ||
+                    soil.identifier === "stratum:grass" ||
+                    soil.identifier === "stratum:dirt";
+                  const waterAdj =
+                    world.getBlock(wx - 1, soilY).water ||
+                    world.getBlock(wx + 1, soilY).water ||
+                    world.getBlock(wx, soilY - 1).water ||
+                    world.getBlock(wx, soilY + 1).water ||
+                    world.getBlock(wx - 1, soilY - 1).water ||
+                    world.getBlock(wx + 1, soilY - 1).water;
+                  if (soilOk2 && waterAdj) {
+                    sugarCaneValid = true;
+                  }
+                }
+              }
+            }
+
+            if (isSugarCane && !sugarCaneValid) {
+              // invalid: sugar cane needs sand/grass/dirt (or stacked cane) and adjacent water at the base
+            } else if (plantFlowerLike && !isGrassOrDirtSurface(below)) {
               // invalid: flowers and tall grass need grass or dirt below
+            } else if (
+              isSaplingIdentifier(placedDef.identifier) &&
+              !isGrassDirtOrFarmlandSurface(below)
+            ) {
+              // invalid: saplings need grass, dirt, or farmland below
             } else if (plantTallBottom) {
               const topCell = world.getBlock(wx, wy + 1);
               if (topCell.solid && !topCell.replaceable) {
@@ -1319,6 +1454,108 @@ export class Player {
                     this.sfxAtBlock(wx, wy, getPlaceSound(placed.material), {
                       pitchVariance: 30,
                     });
+                  }
+                }
+              }
+            } else if (placedDef.bedHalf === "foot") {
+              const surfaceBelow = world.getBlock(wx, wy - 1);
+              const cellLeft = wx * BLOCK_SIZE;
+              const cellRight = (wx + 1) * BLOCK_SIZE;
+              const px = state.position.x;
+              const headPlusX =
+                Math.abs(px - cellRight) <= Math.abs(px - cellLeft);
+              const hx = headPlusX ? wx + 1 : wx - 1;
+              const surfaceBelowHead = world.getBlock(hx, wy - 1);
+              const surfaceOk =
+                surfaceBelow.solid &&
+                !surfaceBelow.replaceable &&
+                !surfaceBelow.water &&
+                surfaceBelowHead.solid &&
+                !surfaceBelowHead.replaceable &&
+                !surfaceBelowHead.water;
+              if (!surfaceOk) {
+                //
+              } else if (
+                !world.hasForegroundPlacementSupport(wx, wy) ||
+                !world.hasForegroundPlacementSupport(hx, wy)
+              ) {
+                //
+              } else {
+                const headCell = world.getBlock(hx, wy);
+                if (headCell.solid && !headCell.replaceable && !headCell.water) {
+                  //
+                } else {
+                  const aabbFoot = createAABB(
+                    wx * BLOCK_SIZE,
+                    -(wy + 1) * BLOCK_SIZE,
+                    BLOCK_SIZE,
+                    BLOCK_SIZE,
+                  );
+                  const aabbHead = createAABB(
+                    hx * BLOCK_SIZE,
+                    -(wy + 1) * BLOCK_SIZE,
+                    BLOCK_SIZE,
+                    BLOCK_SIZE,
+                  );
+                  const playerAabb = feetToScreenAABB(state.position);
+                  let overlapsAnyPlayer =
+                    overlaps(playerAabb, aabbFoot) ||
+                    overlaps(playerAabb, aabbHead);
+                  if (!overlapsAnyPlayer) {
+                    for (const remote of world.getRemotePlayers().values()) {
+                      const feet = remote.getAuthorityFeet();
+                      const remoteAabb = feetToScreenAABB({ x: feet.x, y: feet.y });
+                      if (
+                        overlaps(remoteAabb, aabbFoot) ||
+                        overlaps(remoteAabb, aabbHead)
+                      ) {
+                        overlapsAnyPlayer = true;
+                        break;
+                      }
+                    }
+                  }
+                  const footId = placesBlockId;
+                  const headId = this.registry.getByIdentifier("stratum:bed_head").id;
+                  if (
+                    !overlapsAnyPlayer &&
+                    world.canPlaceForegroundWithCactusRules(wx, wy, footId) &&
+                    world.canPlaceForegroundWithCactusRules(hx, wy, headId)
+                  ) {
+                    if (this._mpTerrainClient) {
+                      this.emitNetPlace(
+                        SUB_BED_PAIR,
+                        wx,
+                        wy,
+                        hotbarSlot,
+                        0,
+                        headPlusX ? 1 : 0,
+                      );
+                      this.startHandSwingVisual();
+                      this.sfxAtBlock(wx, wy, getPlaceSound(placedDef.material), {
+                        pitchVariance: 30,
+                      });
+                    } else {
+                      const bedMeta = packBedMetadata(0, headPlusX);
+                      if (!world.setBlock(wx, wy, footId, {
+                        cellMetadata: bedMeta,
+                      })) {
+                        //
+                      } else if (
+                        !world.setBlock(hx, wy, headId, {
+                          cellMetadata: bedMeta,
+                        })
+                      ) {
+                        world.setBlock(wx, wy, 0);
+                      } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                        world.setBlock(wx, wy, 0);
+                        world.setBlock(hx, wy, 0);
+                      } else {
+                        this.startHandSwingVisual();
+                        this.sfxAtBlock(wx, wy, getPlaceSound(placedDef.material), {
+                          pitchVariance: 30,
+                        });
+                      }
+                    }
                   }
                 }
               }
@@ -1556,6 +1793,13 @@ export class Player {
           wx,
           wy,
         } satisfies GameEvent);
+      } else if (cell.bedHalf === "foot" || cell.bedHalf === "head") {
+        this.bus.emit({
+          type: "bed:sleep-request",
+          wx,
+          wy,
+        } satisfies GameEvent);
+        this.startHandSwingVisual();
       }
       }
 
@@ -1656,12 +1900,16 @@ export class Player {
 
     const blockX = Math.floor(state.position.x / BLOCK_SIZE);
     const blockY = Math.floor(state.position.y / BLOCK_SIZE);
-    this.bus.emit({
-      type: "player:moved",
-      wx: blockX,
-      wy: blockY,
-      blockX,
-      blockY,
-    } satisfies GameEvent);
+    if (blockX !== this.lastMovedBlockX || blockY !== this.lastMovedBlockY) {
+      this.lastMovedBlockX = blockX;
+      this.lastMovedBlockY = blockY;
+      this.bus.emit({
+        type: "player:moved",
+        wx: blockX,
+        wy: blockY,
+        blockX,
+        blockY,
+      } satisfies GameEvent);
+    }
   }
 }

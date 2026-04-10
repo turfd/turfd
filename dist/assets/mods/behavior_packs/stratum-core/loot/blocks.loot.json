@@ -36,6 +36,11 @@
         { "itemKey": "stratum:cactus", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
+    "stratum:sugar_cane": {
+      "entries": [
+        { "itemKey": "stratum:sugar_cane", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
     "stratum:dead_bush": {
       "entries": [
         { "itemKey": "stratum:stick", "countMin": 1, "countMax": 2, "chance": 1.0 }
@@ -265,6 +270,91 @@
     "stratum:birch_log_stairs": {
       "entries": [
         { "itemKey": "stratum:birch_log_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:white_wool": {
+      "entries": [
+        { "itemKey": "stratum:white_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:orange_wool": {
+      "entries": [
+        { "itemKey": "stratum:orange_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:magenta_wool": {
+      "entries": [
+        { "itemKey": "stratum:magenta_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:light_blue_wool": {
+      "entries": [
+        { "itemKey": "stratum:light_blue_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:yellow_wool": {
+      "entries": [
+        { "itemKey": "stratum:yellow_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:lime_wool": {
+      "entries": [
+        { "itemKey": "stratum:lime_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:pink_wool": {
+      "entries": [
+        { "itemKey": "stratum:pink_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:gray_wool": {
+      "entries": [
+        { "itemKey": "stratum:gray_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:light_gray_wool": {
+      "entries": [
+        { "itemKey": "stratum:light_gray_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:cyan_wool": {
+      "entries": [
+        { "itemKey": "stratum:cyan_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:purple_wool": {
+      "entries": [
+        { "itemKey": "stratum:purple_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:blue_wool": {
+      "entries": [
+        { "itemKey": "stratum:blue_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:green_wool": {
+      "entries": [
+        { "itemKey": "stratum:green_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:brown_wool": {
+      "entries": [
+        { "itemKey": "stratum:brown_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:red_wool": {
+      "entries": [
+        { "itemKey": "stratum:red_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:black_wool": {
+      "entries": [
+        { "itemKey": "stratum:black_wool", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:bed": {
+      "entries": [
+        { "itemKey": "stratum:bed", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     }
   }

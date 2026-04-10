@@ -13,12 +13,17 @@ import {
   computePlacedStairShape,
   withStairShape,
 } from "../blocks/stairMetadata";
+import { packBedMetadata } from "../bed/bedMetadata";
 import { packDoorMetadata } from "../door/doorMetadata";
 import {
   isWaterSourceMetadata,
   withWaterFlowLevel,
 } from "../water/waterMetadata";
 import type { World } from "../World";
+import {
+  isGrassDirtOrFarmlandSurface,
+  isSaplingIdentifier,
+} from "../plant/soil";
 import type { RemotePlayer } from "../entities/RemotePlayer";
 import { createAABB, overlaps, type AABB } from "../../entities/physics/AABB";
 
@@ -30,6 +35,7 @@ export const SUB_WHEAT = 3;
 export const SUB_HOE = 4;
 export const SUB_BUCKET_FILL = 5;
 export const SUB_BG = 6;
+export const SUB_BED_PAIR = 7;
 
 /** Bitmask for `TERRAIN_ACK.effects` on the wire. */
 export const ACK_TOOL_USE = 1;
@@ -124,6 +130,93 @@ function tryPlaceTallGrass(
     return false;
   }
   if (!world.setBlock(wx, wy + 1, topId)) {
+    world.setBlock(wx, wy, 0);
+    return false;
+  }
+  return true;
+}
+
+function tryPlaceBedPair(
+  world: World,
+  registry: BlockRegistry,
+  airId: number,
+  peerFeet: { x: number; y: number },
+  remotePlayers: ReadonlyMap<string, RemotePlayer>,
+  wx: number,
+  wy: number,
+  headPlusX: boolean,
+): boolean {
+  const footId = registry.getByIdentifier("stratum:bed").id;
+  const headId = registry.getByIdentifier("stratum:bed_head").id;
+  const headWx = headPlusX ? wx + 1 : wx - 1;
+
+  const footCell = world.getBlock(wx, wy);
+  const headCell = world.getBlock(headWx, wy);
+  const canFoot =
+    footCell.id === airId || footCell.replaceable || footCell.water;
+  const canHead =
+    headCell.id === airId || headCell.replaceable || headCell.water;
+  if (!canFoot || !canHead) {
+    return false;
+  }
+
+  const belowFoot = world.getBlock(wx, wy - 1);
+  const belowHead = world.getBlock(headWx, wy - 1);
+  const surfaceOk = (b: typeof belowFoot): boolean =>
+    b.solid && !b.replaceable && !b.water;
+  if (!surfaceOk(belowFoot) || !surfaceOk(belowHead)) {
+    return false;
+  }
+  if (
+    !world.hasForegroundPlacementSupport(wx, wy) ||
+    !world.hasForegroundPlacementSupport(headWx, wy)
+  ) {
+    return false;
+  }
+
+  const aabbFoot = createAABB(
+    wx * BLOCK_SIZE,
+    -(wy + 1) * BLOCK_SIZE,
+    BLOCK_SIZE,
+    BLOCK_SIZE,
+  );
+  const aabbHead = createAABB(
+    headWx * BLOCK_SIZE,
+    -(wy + 1) * BLOCK_SIZE,
+    BLOCK_SIZE,
+    BLOCK_SIZE,
+  );
+  const playerAabb = feetToScreenAABB(peerFeet);
+  let overlapsAnyPlayer =
+    overlaps(playerAabb, aabbFoot) || overlaps(playerAabb, aabbHead);
+  if (!overlapsAnyPlayer) {
+    for (const rp of remotePlayers.values()) {
+      const feet = rp.getAuthorityFeet();
+      const remoteAabb = feetToScreenAABB({ x: feet.x, y: feet.y });
+      if (
+        overlaps(remoteAabb, aabbFoot) ||
+        overlaps(remoteAabb, aabbHead)
+      ) {
+        overlapsAnyPlayer = true;
+        break;
+      }
+    }
+  }
+  if (
+    overlapsAnyPlayer ||
+    !world.canPlaceForegroundWithCactusRules(wx, wy, footId) ||
+    !world.canPlaceForegroundWithCactusRules(headWx, wy, headId)
+  ) {
+    return false;
+  }
+
+  const bedMeta = packBedMetadata(0, headPlusX);
+  if (
+    !world.setBlock(wx, wy, footId, { cellMetadata: bedMeta })
+  ) {
+    return false;
+  }
+  if (!world.setBlock(headWx, wy, headId, { cellMetadata: bedMeta })) {
     world.setBlock(wx, wy, 0);
     return false;
   }
@@ -240,6 +333,12 @@ function tryPlaceSimpleForeground(
   if (plantFlowerLike && !isGrassOrDirtSurface(below)) {
     return fail();
   }
+  if (
+    isSaplingIdentifier(placedDef.identifier) &&
+    !isGrassDirtOrFarmlandSurface(below)
+  ) {
+    return fail();
+  }
 
   if (plantTallBottom) {
     if (
@@ -251,6 +350,28 @@ function tryPlaceSimpleForeground(
         remotePlayers,
         wx,
         wy,
+      )
+    ) {
+      return { ok: true, effects: ACK_CONSUME_ONE };
+    }
+    return fail();
+  }
+
+  if (placedDef.bedHalf === "foot") {
+    const cellLeft = wx * BLOCK_SIZE;
+    const cellRight = (wx + 1) * BLOCK_SIZE;
+    const headPlusX =
+      Math.abs(playerFeetX - cellRight) <= Math.abs(playerFeetX - cellLeft);
+    if (
+      tryPlaceBedPair(
+        world,
+        registry,
+        airId,
+        peerFeet,
+        remotePlayers,
+        wx,
+        wy,
+        headPlusX,
       )
     ) {
       return { ok: true, effects: ACK_CONSUME_ONE };
@@ -407,6 +528,25 @@ export function tryHostTerrainPlace(
     return fail();
   }
 
+  if (subtype === SUB_BED_PAIR) {
+    const headPlusX = aux !== 0;
+    if (
+      tryPlaceBedPair(
+        world,
+        registry,
+        airId,
+        peerFeet,
+        remotePlayers,
+        wx,
+        wy,
+        headPlusX,
+      )
+    ) {
+      return { ok: true, effects: ACK_CONSUME_ONE };
+    }
+    return fail();
+  }
+
   if (subtype === SUB_WHEAT) {
     const farmlandDryId = registry.getByIdentifier("stratum:farmland_dry").id;
     const farmlandMoistId = registry.getByIdentifier("stratum:farmland_moist").id;
@@ -476,7 +616,7 @@ export function tryHostTerrainPlace(
       return fail();
     }
     const placedDef = registry.getById(placesBlockId);
-    if (placedDef.tallGrass === "bottom") {
+    if (placedDef.tallGrass === "bottom" || placedDef.bedHalf === "foot") {
       return fail();
     }
     if (world.setBackgroundBlock(wx, wy, placesBlockId)) {

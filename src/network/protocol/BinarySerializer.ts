@@ -54,7 +54,7 @@ const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 const CHUNK_METADATA_MAGIC = 0x54_41_44_4d; // 'TADM' LE — per-cell flags (e.g. WORLDGEN_NO_COLLIDE)
 
 /** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 14;
+export const WIRE_PROTOCOL_VERSION = 15;
 
 /** Max UTF-8 bytes for handshake display name (profile + guest labels). */
 export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;

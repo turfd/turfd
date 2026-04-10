@@ -17,7 +17,11 @@ import {
   workshopPackLoadsBlocks,
   workshopPackLoadsTextures,
 } from "./workshopTypes";
-import { parseLootTablesJson, registerLootTablesForBlocks } from "./parseLootTablesJson";
+import {
+  parseLootTablesJson,
+  registerEntityLootTables,
+  registerLootTablesForBlocks,
+} from "./parseLootTablesJson";
 import type { LootResolver } from "../items/LootResolver";
 import type { WorkshopModRef } from "../persistence/IndexedDBStore";
 
@@ -140,6 +144,7 @@ export function loadWorkshopLootIntoResolver(
       const raw = readUtf8Json(c.files, rel);
       const data = parseLootTablesJson(raw);
       registerLootTablesForBlocks(registry, lootResolver, data);
+      registerEntityLootTables(lootResolver, data);
     }
   }
 }

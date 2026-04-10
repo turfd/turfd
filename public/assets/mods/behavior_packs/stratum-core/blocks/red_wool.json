@@ -1,0 +1,25 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": {
+      "identifier": "stratum:red_wool"
+    },
+    "components": {
+      "stratum:display_name": "Red Wool",
+      "stratum:texture": {
+        "all": "red_wool"
+      },
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 0.8,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:loot_table": "stratum:red_wool",
+      "stratum:tags": [
+        "stratum:wool"
+      ],
+      "stratum:numeric_id": 76
+    }
+  }
+}

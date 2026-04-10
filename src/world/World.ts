@@ -63,6 +63,7 @@ import {
   doorHingeRightFromMeta,
   doorLatchedOpenFromMeta,
 } from "./door/doorMetadata";
+import { bedHeadPlusXFromMeta } from "./bed/bedMetadata";
 import { GeneratorContext } from "./gen/GeneratorContext";
 import { WorldGenerator } from "./gen/WorldGenerator";
 import { resimulateWaterFromSources, tickWaterFlow } from "./water/WaterSimulation";
@@ -112,6 +113,30 @@ function isValidCactusSupportBelow(def: BlockDefinition, cactusBlockId: number):
   return def.id === cactusBlockId || def.identifier === "stratum:sand";
 }
 
+function isValidSugarCaneSupportBelow(
+  supportBelow: BlockDefinition,
+  sugarCaneBlockId: number,
+): boolean {
+  return (
+    supportBelow.id === sugarCaneBlockId ||
+    supportBelow.identifier === "stratum:sand" ||
+    supportBelow.identifier === "stratum:grass" ||
+    supportBelow.identifier === "stratum:dirt"
+  );
+}
+
+function sugarCaneBaseHasAdjacentWater(world: World, wx: number, wy: number): boolean {
+  return (
+    world.getBlock(wx - 1, wy).water ||
+    world.getBlock(wx + 1, wy).water ||
+    world.getBlock(wx, wy - 1).water ||
+    world.getBlock(wx, wy + 1).water ||
+    // Shore columns often hold water one block below our soil; count as adjacent for growth rules.
+    world.getBlock(wx - 1, wy - 1).water ||
+    world.getBlock(wx + 1, wy - 1).water
+  );
+}
+
 /** Keeps streaming centre stable until the player moves `hystBlocks` into the target chunk. */
 function applyChunkHysteresisAxis(
   streamChunk: number,
@@ -147,6 +172,13 @@ function packChunkCoordKey(cx: number, cy: number): number {
   return ((cx + CHUNK_COORD_PACK_BIAS) << 16) | (cy + CHUNK_COORD_PACK_BIAS);
 }
 
+function unpackChunkCoordKey(key: number): ChunkCoord {
+  return {
+    cx: (key >>> 16) - CHUNK_COORD_PACK_BIAS,
+    cy: (key & 0xffff) - CHUNK_COORD_PACK_BIAS,
+  };
+}
+
 export class World {
   private readonly registry: BlockRegistry;
   private readonly chunks: ChunkManager;
@@ -155,6 +187,7 @@ export class World {
   private readonly _chunkGen: ChunkGenerator;
   private readonly airId: number;
   private readonly cactusBlockId: number;
+  private readonly sugarCaneBlockId: number;
   private readonly seed: number;
   private readonly store: IndexedDBStore;
   private readonly worldUuid: string;
@@ -189,6 +222,7 @@ export class World {
   private readonly _lootResolver: ILootResolver;
   private readonly _lootRng: GeneratorContext;
   private _lootForkSeq = 0;
+  private _mobForkSeq = 0;
   private readonly _dropSolidScratch: AABB[] = [];
   /** Cached `getSkyExposureTop` per world column `wx` (invalidated on block / chunk changes). */
   private readonly _skyTopByWx = new Map<number, number>();
@@ -209,6 +243,8 @@ export class World {
   private _waterBlockId: number | null = null;
   /** When true, next {@link tickWaterSystems} rebuilds flowing water from remaining sources. */
   private _pendingWaterTopologyResim = false;
+  /** Loaded chunks whose water may still spread on future ticks. */
+  private readonly _activeWaterChunkKeys = new Set<number>();
 
   /** When set, chunk loads remap stored numeric ids through identifiers (`WorldMetadata.blockIdPalette`). */
   private readonly _blockLoadPalette: readonly string[] | undefined;
@@ -254,6 +290,7 @@ export class World {
     this.worldGen = new WorldGenerator(seed, registry);
     this.airId = registry.getByIdentifier("stratum:air").id;
     this.cactusBlockId = registry.getByIdentifier("stratum:cactus").id;
+    this.sugarCaneBlockId = registry.getByIdentifier("stratum:sugar_cane").id;
     this.seed = seed;
     this.store = store;
     this.worldUuid = worldUuid;
@@ -352,6 +389,11 @@ export class World {
   /** Seeded RNG fork for each block-break loot roll (deterministic order for a given seed). */
   private takeLootRng(): GeneratorContext {
     return this._lootRng.fork(this._lootForkSeq++);
+  }
+
+  /** Seeded RNG fork for mob AI / spawn / death loot (host-only). */
+  forkMobRng(): GeneratorContext {
+    return this._lootRng.fork(this._mobForkSeq++);
   }
 
   /**
@@ -1079,6 +1121,7 @@ export class World {
     this.breakPlantsIfSupportLost(wx, wy);
 
     this.emitForegroundBlockChanged(wx, wy, oldId, id, oldMeta, newMeta);
+    this.markWaterActiveForBlockChange(wx, wy, oldId, id);
     if (
       oldId !== id &&
       this.registry.getById(oldId).water &&
@@ -1179,6 +1222,45 @@ export class World {
       return;
     }
 
+    if (above.bedHalf === "foot") {
+      const okSupport =
+        support.solid && !support.replaceable && !support.water;
+      if (!okSupport) {
+        const fy = wy + 1;
+        const meta = this.getMetadata(wx, fy);
+        const headPlusX = bedHeadPlusXFromMeta(meta);
+        const headWx = headPlusX ? wx + 1 : wx - 1;
+        this.spawnLootForBrokenBlock(above.id, wx, fy);
+        this.setBlockWithoutPlantCascade(wx, fy, 0);
+        const headCell = this.getBlock(headWx, fy);
+        if (headCell.bedHalf === "head") {
+          this.setBlockWithoutPlantCascade(headWx, fy, 0);
+        }
+      }
+      return;
+    }
+
+    if (above.bedHalf === "head") {
+      const okSupport =
+        support.solid && !support.replaceable && !support.water;
+      if (!okSupport) {
+        const hy = wy + 1;
+        const meta = this.getMetadata(wx, hy);
+        const headPlusX = bedHeadPlusXFromMeta(meta);
+        const footWx = headPlusX ? wx - 1 : wx + 1;
+        const footCell = this.getBlock(footWx, hy);
+        if (footCell.bedHalf === "foot") {
+          this.spawnLootForBrokenBlock(footCell.id, footWx, hy);
+          this.setBlockWithoutPlantCascade(footWx, hy, 0);
+          this.setBlockWithoutPlantCascade(wx, hy, 0);
+        } else {
+          this.spawnLootForBrokenBlock(above.id, wx, hy);
+          this.setBlockWithoutPlantCascade(wx, hy, 0);
+        }
+      }
+      return;
+    }
+
     const isFoliage =
       above.replaceable &&
       !above.solid &&
@@ -1197,6 +1279,23 @@ export class World {
         while (y <= WORLD_Y_MAX) {
           const cell = this.getBlock(wx, y);
           if (cell.id !== this.cactusBlockId) {
+            break;
+          }
+          this.spawnLootForBrokenBlock(cell.id, wx, y);
+          this.setBlockWithoutPlantCascade(wx, y, 0);
+          y += 1;
+        }
+      }
+      if (
+        above.id === this.sugarCaneBlockId &&
+        (!isValidSugarCaneSupportBelow(support, this.sugarCaneBlockId) ||
+          (support.id !== this.sugarCaneBlockId &&
+            !sugarCaneBaseHasAdjacentWater(this, wx, wy)))
+      ) {
+        let y = wy + 1;
+        while (y <= WORLD_Y_MAX) {
+          const cell = this.getBlock(wx, y);
+          if (cell.id !== this.sugarCaneBlockId) {
             break;
           }
           this.spawnLootForBrokenBlock(cell.id, wx, y);
@@ -1291,6 +1390,7 @@ export class World {
       this.recomputeChunkLight(cx, cy + 1);
     }
     this.emitForegroundBlockChanged(wx, wy, oldId, id, oldMeta, 0);
+    this.markWaterActiveForBlockChange(wx, wy, oldId, id);
     if (
       oldId !== id &&
       this.registry.getById(oldId).water &&
@@ -1328,13 +1428,23 @@ export class World {
       const waterId = this.getWaterBlockId();
       if (this._pendingWaterTopologyResim) {
         this._pendingWaterTopologyResim = false;
+        this.clearActiveWaterChunkKeys();
         resimulateWaterFromSources(this, this.airId, waterId);
         this._waterSimTick += 1;
         return;
       }
       this._waterSimTick += 1;
-      if (this._waterSimTick % WATER_FLOW_EVERY_N_TICKS === 0) {
-        tickWaterFlow(this, this.airId, waterId);
+      if (
+        this._waterSimTick % WATER_FLOW_EVERY_N_TICKS === 0 &&
+        this._activeWaterChunkKeys.size > 0
+      ) {
+        const nextActive = tickWaterFlow(
+          this,
+          this.airId,
+          waterId,
+          this.takeActiveWaterChunkKeys(),
+        );
+        this.setActiveWaterChunkKeys(nextActive);
       }
     } catch {
       // Pack without water block
@@ -1350,6 +1460,65 @@ export class World {
     for (let i = 0; i < CHUNK_SIZE; i++) {
       this._skyTopByWx.delete(base + i);
     }
+  }
+
+  private markWaterNeighborhoodActiveAtChunk(cx: number, cy: number): void {
+    this._activeWaterChunkKeys.add(packChunkCoordKey(cx, cy));
+    this._activeWaterChunkKeys.add(packChunkCoordKey(cx - 1, cy));
+    this._activeWaterChunkKeys.add(packChunkCoordKey(cx + 1, cy));
+    this._activeWaterChunkKeys.add(packChunkCoordKey(cx, cy - 1));
+    this._activeWaterChunkKeys.add(packChunkCoordKey(cx, cy + 1));
+  }
+
+  private markWaterNeighborhoodActiveAtWorldCell(wx: number, wy: number): void {
+    const { cx, cy } = worldToChunk(wx, wy);
+    this.markWaterNeighborhoodActiveAtChunk(cx, cy);
+  }
+
+  private markWaterActiveForBlockChange(
+    wx: number,
+    wy: number,
+    oldId: number,
+    newId: number,
+  ): void {
+    let waterId: number;
+    try {
+      waterId = this.getWaterBlockId();
+    } catch {
+      return;
+    }
+    if (oldId === waterId || newId === waterId) {
+      this.markWaterNeighborhoodActiveAtWorldCell(wx, wy);
+      return;
+    }
+    if (
+      this.getForegroundBlockId(wx - 1, wy) === waterId ||
+      this.getForegroundBlockId(wx + 1, wy) === waterId ||
+      this.getForegroundBlockId(wx, wy - 1) === waterId ||
+      this.getForegroundBlockId(wx, wy + 1) === waterId
+    ) {
+      this.markWaterNeighborhoodActiveAtWorldCell(wx, wy);
+    }
+  }
+
+  takeActiveWaterChunkKeys(): Set<number> {
+    const keys = new Set(this._activeWaterChunkKeys);
+    this._activeWaterChunkKeys.clear();
+    return keys;
+  }
+
+  setActiveWaterChunkKeys(keys: ReadonlySet<number>): void {
+    this._activeWaterChunkKeys.clear();
+    for (const key of keys) {
+      const { cx, cy } = unpackChunkCoordKey(key);
+      if (this.getChunk(cx, cy) !== undefined) {
+        this._activeWaterChunkKeys.add(key);
+      }
+    }
+  }
+
+  clearActiveWaterChunkKeys(): void {
+    this._activeWaterChunkKeys.clear();
   }
 
   getChunkAt(wx: number, wy: number): Chunk | undefined {
@@ -1391,9 +1560,11 @@ export class World {
         );
       }
       this.invalidateSkyTopStripForChunk(coord.cx);
+      this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
     } else {
       this.chunks.putChunk(this._chunkGen(coord));
       this.invalidateSkyTopStripForChunk(coord.cx);
+      this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
     }
     this.recomputeChunkLight(cx, cy);
   }
@@ -1504,6 +1675,7 @@ export class World {
       this.removeFurnaceTilesInChunk(cx, cy);
       this.removeChestTilesInChunk(cx, cy);
       this.clearDoorBottomKeysInChunk(cx, cy);
+      this._activeWaterChunkKeys.delete(packChunkCoordKey(cx, cy));
     }
     for (const { cx } of evicted) {
       this.invalidateSkyTopStripForChunk(cx);
@@ -1558,6 +1730,7 @@ export class World {
           );
         }
         this.invalidateSkyTopStripForChunk(coord.cx);
+        this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
         loaded++;
         progressCallback?.({
           loaded,
@@ -1574,6 +1747,7 @@ export class World {
           );
         }
         this.invalidateSkyTopStripForChunk(coord.cx);
+        this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
         loaded++;
         progressCallback?.({
           loaded,
@@ -1585,6 +1759,7 @@ export class World {
       } else {
         this.chunks.putChunk(this._chunkGen(coord));
         this.invalidateSkyTopStripForChunk(coord.cx);
+        this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
         loaded++;
         progressCallback?.({
           loaded,
@@ -1800,6 +1975,7 @@ export class World {
         this.removeChestTilesInChunk(cx, cy);
       }
       this.indexDoorBottomsFromChunk(chunk);
+      this.markWaterNeighborhoodActiveAtChunk(cx, cy);
       applied.push(coord);
     }
     const affected = new Set<string>();

@@ -11,11 +11,13 @@ import { createNoise2D } from "simplex-noise";
 import {
   LAKE_BIOME_DEPTH_BLOCKS,
   LAKE_BIOME_DEPTH_JITTER_SCALE,
+  LAKE_BIOME_INFLUENCE_POW,
   LAKE_BIOME_MACRO_SMOOTH_HIGH,
   LAKE_BIOME_MACRO_SMOOTH_LOW,
   LAKE_BIOME_MICRO_SMOOTH_HIGH,
   LAKE_BIOME_MICRO_SMOOTH_LOW,
   LAKE_BIOME_SCALE_BLOCKS,
+  TERRAIN_BASE_SURFACE_BIAS_BLOCKS,
   WATER_SEA_LEVEL_WY,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
@@ -81,7 +83,8 @@ export class TerrainNoise {
     const microRaw = this.noise2D(wx / (LAKE_BIOME_SCALE_BLOCKS * 0.62), 1203) * 0.5 + 0.5;
     const macro = smoothstep(LAKE_BIOME_MACRO_SMOOTH_LOW, LAKE_BIOME_MACRO_SMOOTH_HIGH, macroRaw);
     const micro = smoothstep(LAKE_BIOME_MICRO_SMOOTH_LOW, LAKE_BIOME_MICRO_SMOOTH_HIGH, microRaw);
-    return Math.max(0, Math.min(1, macro * micro));
+    const product = Math.max(0, Math.min(1, macro * micro));
+    return Math.max(0, Math.min(1, product ** LAKE_BIOME_INFLUENCE_POW));
   }
 
   private computeBaseSurfaceHeight(wx: number): number {
@@ -92,7 +95,9 @@ export class TerrainNoise {
     const mountainFactor = Math.max(0, (mountainSelector - 0.45) / 0.55);
     const mountain = mountainFactor * mountainFactor * 40;
 
-    const h = Math.round(base + detail + mountain);
+    const h = Math.round(
+      base + detail + mountain + TERRAIN_BASE_SURFACE_BIAS_BLOCKS,
+    );
     const lo = WORLD_Y_MIN + 10;
     const hi = WORLD_Y_MAX - 10;
     return Math.min(hi, Math.max(lo, h));

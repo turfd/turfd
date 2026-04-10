@@ -15,6 +15,7 @@ import { chunkToWorldOrigin, localIndex } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
 import type { AtlasLoader } from "../AtlasLoader";
 import { chestVisualRole } from "../../world/chest/chestVisual";
+import { bedHeadPlusXFromMeta } from "../../world/bed/bedMetadata";
 import { doorHingeRightFromMeta } from "../../world/door/doorMetadata";
 import { DOOR_PANEL_WIDTH_PX } from "../../world/door/doorWorld";
 
@@ -176,7 +177,7 @@ function windForegroundQuadsForCell(def: BlockDefinition, ly: number): number {
   if (def.isStair === true) {
     return 2;
   }
-  if (def.doorHalf !== "none") {
+  if (def.doorHalf !== "none" || def.bedHalf !== "none") {
     return 1;
   }
   const maxWind = def.windSwayMaxPx ?? 0;
@@ -313,6 +314,17 @@ function buildGeometryFromCells(
       } else if (chestDoubleCell === "east") {
         leftU = u1;
         rightU = u0;
+      } else if (def.bedHalf === "foot" || def.bedHalf === "head") {
+        const meta = chunk.metadata[localIndex(lx, ly)]!;
+        const headPlusX = bedHeadPlusXFromMeta(meta);
+        const uMid = (u0 + u1) * 0.5;
+        if (def.bedHalf === "foot") {
+          leftU = headPlusX ? u0 : uMid;
+          rightU = headPlusX ? uMid : u1;
+        } else {
+          leftU = headPlusX ? uMid : u0;
+          rightU = headPlusX ? u1 : uMid;
+        }
       } else {
         const flipX =
           def.randomFlipX === true && shouldFlipTextureX(worldX, worldY, id);

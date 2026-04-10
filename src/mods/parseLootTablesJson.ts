@@ -4,6 +4,7 @@
 import { z } from "zod";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { LootEntry, LootResolver, LootTable } from "../items/LootResolver";
+import { MobType } from "../entities/mobs/mobTypes";
 
 const lootEntrySchema = z
   .object({
@@ -72,5 +73,27 @@ export function registerLootTablesForBlocks(
       continue;
     }
     resolver.registerTable(block.id, table);
+  }
+}
+
+/**
+ * Entity death loot (keys like `stratum:sheep` → wire mob type id).
+ * Same JSON shape as block loot tables.
+ */
+export function registerEntityLootTables(
+  resolver: LootResolver,
+  data: LootTablesFile,
+): void {
+  const sheep = data.loot_tables["stratum:sheep"];
+  if (sheep !== undefined) {
+    resolver.registerEntityTable(MobType.Sheep, sheep);
+  }
+  const pig = data.loot_tables["stratum:pig"];
+  if (pig !== undefined) {
+    resolver.registerEntityTable(MobType.Pig, pig);
+  }
+  const zombie = data.loot_tables["stratum:zombie"];
+  if (zombie !== undefined) {
+    resolver.registerEntityTable(MobType.Zombie, zombie);
   }
 }

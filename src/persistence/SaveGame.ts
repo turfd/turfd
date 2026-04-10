@@ -32,10 +32,42 @@ export class SaveGame {
     | ((into: Record<string, { x: number; y: number }>) => void)
     | null;
   /**
+   * When set (host), merges multiplayer guest spawn points into `multiplayerSpawnPoints`
+   * then clears the pending map (see Game).
+   */
+  private readonly mergeMultiplayerSpawnPoints:
+    | ((into: Record<string, { x: number; y: number }>) => void)
+    | null;
+  /** When set (solo/host), persisted as `playerSpawnX/Y`. */
+  private readonly getPlayerSpawnFeet:
+    | (() => { x: number; y: number } | null)
+    | null;
+  /**
    * When set: return seconds of rain left to persist. Return `undefined` to keep
    * `existing.rainRemainingSec` (multiplayer clients must not overwrite host value).
    */
   private readonly getRainRemainingSec: (() => number | undefined) | null;
+  private readonly getMobsForSave:
+    | (() => Array<{
+        id: number;
+        type: number;
+        x: number;
+        y: number;
+        woolColor?: number;
+        persistent?: boolean;
+      }>)
+    | null;
+  private readonly getDropsForSave:
+    | (() => Array<{
+        itemId: number;
+        count: number;
+        damage: number;
+        x: number;
+        y: number;
+        vx: number;
+        vy: number;
+      }>)
+    | null;
   private autoSaveId: ReturnType<typeof setInterval> | null = null;
   /** Serializes overlapping `save()` calls (autosave + manual) to avoid torn metadata/chunk batches. */
   private _saveSerial = Promise.resolve();
@@ -53,7 +85,28 @@ export class SaveGame {
     mergeMultiplayerLastPositions?: (
       into: Record<string, { x: number; y: number }>,
     ) => void,
+    mergeMultiplayerSpawnPoints?: (
+      into: Record<string, { x: number; y: number }>,
+    ) => void,
+    getPlayerSpawnFeet?: () => { x: number; y: number } | null,
     getRainRemainingSec?: () => number | undefined,
+    getMobsForSave?: () => Array<{
+      id: number;
+      type: number;
+      x: number;
+      y: number;
+      woolColor?: number;
+      persistent?: boolean;
+    }>,
+    getDropsForSave?: () => Array<{
+      itemId: number;
+      count: number;
+      damage: number;
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+    }>,
   ) {
     this.store = store;
     this.world = world;
@@ -65,7 +118,11 @@ export class SaveGame {
     this.capturePreview = capturePreview ?? null;
     this.getModerationForSave = getModerationForSave ?? null;
     this.mergeMultiplayerLastPositions = mergeMultiplayerLastPositions ?? null;
+    this.mergeMultiplayerSpawnPoints = mergeMultiplayerSpawnPoints ?? null;
+    this.getPlayerSpawnFeet = getPlayerSpawnFeet ?? null;
     this.getRainRemainingSec = getRainRemainingSec ?? null;
+    this.getMobsForSave = getMobsForSave ?? null;
+    this.getDropsForSave = getDropsForSave ?? null;
   }
 
   async init(): Promise<void> {
@@ -102,11 +159,19 @@ export class SaveGame {
       ...(existing?.multiplayerLastPositions ?? {}),
     };
     this.mergeMultiplayerLastPositions?.(mpMerged);
+    const mpSpawnMerged: Record<string, { x: number; y: number }> = {
+      ...(existing?.multiplayerSpawnPoints ?? {}),
+    };
+    this.mergeMultiplayerSpawnPoints?.(mpSpawnMerged);
     const rainFromSave = this.getRainRemainingSec?.();
     const rainRemainingSec =
       rainFromSave === undefined
         ? existing?.rainRemainingSec
         : rainFromSave;
+    const mobs = this.getMobsForSave?.() ?? existing?.mobs;
+    const drops = this.getDropsForSave?.() ?? existing?.drops;
+
+    const spawnFeet = this.getPlayerSpawnFeet?.() ?? null;
 
     const meta: WorldMetadata = {
       uuid: this.worldUuid,
@@ -137,6 +202,14 @@ export class SaveGame {
       ...(Object.keys(mpMerged).length > 0
         ? { multiplayerLastPositions: mpMerged }
         : {}),
+      ...(Object.keys(mpSpawnMerged).length > 0
+        ? { multiplayerSpawnPoints: mpSpawnMerged }
+        : {}),
+      ...(spawnFeet !== null
+        ? { playerSpawnX: spawnFeet.x, playerSpawnY: spawnFeet.y }
+        : {}),
+      ...(mobs !== undefined ? { mobs } : {}),
+      ...(drops !== undefined ? { drops } : {}),
     };
     await this.store.saveWorld(meta);
     this.bus.emit({ type: "game:saved" } satisfies GameEvent);

@@ -7,6 +7,7 @@ import type { BlockRegistry } from "../blocks/BlockRegistry";
 import { canHarvestDrops } from "../../core/mining";
 import type { World } from "../World";
 import { WORLD_Y_MAX, WORLD_Y_MIN } from "../../core/constants";
+import { bedHeadPlusXFromMeta } from "../bed/bedMetadata";
 
 export type BreakTargetLayer = "fg" | "bg";
 
@@ -95,6 +96,31 @@ export function applyCommittedBreakOnWorld(
       }
       world.setBlock(wx, topWy, 0);
       world.setBlock(wx, bottomWy, 0);
+    } else {
+      if (dropsLoot) {
+        world.spawnLootForBrokenBlock(def.id, wx, wy);
+      }
+      world.setBlock(wx, wy, 0);
+    }
+    return true;
+  }
+
+  if (def.bedHalf === "foot" || def.bedHalf === "head") {
+    const meta = world.getMetadata(wx, wy);
+    const headPlusX = bedHeadPlusXFromMeta(meta);
+    const footWx = def.bedHalf === "foot" ? wx : headPlusX ? wx - 1 : wx + 1;
+    const headWx = def.bedHalf === "head" ? wx : headPlusX ? wx + 1 : wx - 1;
+    const footCell = world.getBlock(footWx, wy);
+    const headCell = world.getBlock(headWx, wy);
+    const fullBed =
+      footCell.bedHalf === "foot" && headCell.bedHalf === "head";
+
+    if (fullBed) {
+      if (dropsLoot) {
+        world.spawnLootForBrokenBlock(footCell.id, footWx, wy);
+      }
+      world.setBlock(headWx, wy, 0);
+      world.setBlock(footWx, wy, 0);
     } else {
       if (dropsLoot) {
         world.spawnLootForBrokenBlock(def.id, wx, wy);

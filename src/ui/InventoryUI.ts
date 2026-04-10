@@ -57,9 +57,13 @@ export class InventoryUI {
   private readonly hotbarSlots: HTMLDivElement[] = [];
   private readonly hotbarIcons: HTMLDivElement[] = [];
   private readonly hotbarCounts: HTMLSpanElement[] = [];
+  private readonly hotbarDurabilityWraps: HTMLDivElement[] = [];
+  private readonly hotbarDurabilityFills: HTMLDivElement[] = [];
   private readonly overlaySlots: HTMLDivElement[] = [];
   private readonly overlayIcons: HTMLDivElement[] = [];
   private readonly overlayCounts: HTMLSpanElement[] = [];
+  private readonly overlayDurabilityWraps: HTMLDivElement[] = [];
+  private readonly overlayDurabilityFills: HTMLDivElement[] = [];
   private readonly itemRegistry: ItemRegistry;
   private readonly getInventory: GetInventory;
   private iconUrlLookup: Map<string, string> | null = null;
@@ -76,9 +80,11 @@ export class InventoryUI {
   private readonly itemTooltipEl: HTMLDivElement;
   private tooltipActiveSlot: number | null = null;
   private inventoryOpen = false;
+  private overlayDirty = true;
 
   private prevHotbarSlotForLabel = -1;
   private prevHotbarSelectionKey = "";
+  private prevSelectedHotbarSlot = -1;
   private hotbarNameHideTimer: ReturnType<typeof setTimeout> | null = null;
   private hotbarNameClearTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -354,6 +360,8 @@ export class InventoryUI {
       this.hotbarSlots.push(slot);
       this.hotbarIcons.push(icon);
       this.hotbarCounts.push(count);
+      this.hotbarDurabilityWraps.push(dur);
+      this.hotbarDurabilityFills.push(durFill);
       this.bindSlotElement(slot, i);
       this.bindSlotTooltip(slot, i);
     }
@@ -385,11 +393,15 @@ export class InventoryUI {
     gridMain.className = "inv-grid inv-grid--main";
     for (let i = 0; i < 27; i++) {
       const slotIndex = 9 + i;
-      const { slot, icon, count } = this.makeSlotElements(String(slotIndex));
+      const { slot, icon, count, dur, durFill } = this.makeSlotElements(
+        String(slotIndex),
+      );
       gridMain.appendChild(slot);
       this.overlaySlots.push(slot);
       this.overlayIcons.push(icon);
       this.overlayCounts.push(count);
+      this.overlayDurabilityWraps.push(dur);
+      this.overlayDurabilityFills.push(durFill);
       this.bindSlotElement(slot, slotIndex);
       this.bindSlotTooltip(slot, slotIndex);
     }
@@ -404,11 +416,15 @@ export class InventoryUI {
     const gridHot = document.createElement("div");
     gridHot.className = "inv-grid";
     for (let i = 0; i < HOTBAR_SIZE; i++) {
-      const { slot, icon, count } = this.makeSlotElements(String(i));
+      const { slot, icon, count, dur, durFill } = this.makeSlotElements(
+        String(i),
+      );
       gridHot.appendChild(slot);
       this.overlaySlots.push(slot);
       this.overlayIcons.push(icon);
       this.overlayCounts.push(count);
+      this.overlayDurabilityWraps.push(dur);
+      this.overlayDurabilityFills.push(durFill);
       this.bindSlotElement(slot, i);
       this.bindSlotTooltip(slot, i);
     }
@@ -527,6 +543,8 @@ export class InventoryUI {
     slot: HTMLDivElement;
     icon: HTMLDivElement;
     count: HTMLSpanElement;
+    dur: HTMLDivElement;
+    durFill: HTMLDivElement;
   } {
     const slot = document.createElement("div");
     slot.className = "inv-slot";
@@ -544,7 +562,7 @@ export class InventoryUI {
     slot.appendChild(icon);
     slot.appendChild(dur);
     slot.appendChild(count);
-    return { slot, icon, count };
+    return { slot, icon, count, dur, durFill };
   }
 
   /** Resolved PNG URLs for DOM item icons (block + item manifests). */
@@ -597,6 +615,7 @@ export class InventoryUI {
     }
     this.root.style.setProperty("--inv-anim-ms", `${INVENTORY_ANIM_MS}ms`);
     if (open) {
+      this.overlayDirty = true;
       this.overlay.classList.add("inv-overlay--open");
       this.overlay.setAttribute("aria-hidden", "false");
       this.root.classList.add("inv-root--open");
@@ -617,13 +636,14 @@ export class InventoryUI {
       0,
       Math.min(PLAYER_MAX_HEALTH, Math.floor(health)),
     );
-    if (h !== this.prevHealthForAria) {
-      this.prevHealthForAria = h;
-      this.heartsRowEl.setAttribute(
-        "aria-label",
-        `Health: ${h} of ${PLAYER_MAX_HEALTH}`,
-      );
+    if (h === this.prevHealthForAria) {
+      return;
     }
+    this.prevHealthForAria = h;
+    this.heartsRowEl.setAttribute(
+      "aria-label",
+      `Health: ${h} of ${PLAYER_MAX_HEALTH}`,
+    );
     for (let i = 0; i < PLAYER_HEART_COUNT; i++) {
       const clip = this.heartClipEls[i]!;
       const hpThis = h - i * 2;
@@ -653,21 +673,30 @@ export class InventoryUI {
 
     this.syncHearts(health);
 
+    const initialSync = this.prevInventoryKeys === null;
     const bumpSlots = new Set<number>();
-    if (this.prevInventoryKeys === null) {
+    if (initialSync) {
       this.prevInventoryKeys = [];
       for (let s = 0; s < INVENTORY_SIZE; s++) {
         this.prevInventoryKeys[s] = InventoryUI.slotKey(inventory.getStack(s));
       }
     } else {
+      const prevKeys = this.prevInventoryKeys;
+      if (prevKeys === null) {
+        return;
+      }
       for (let s = 0; s < INVENTORY_SIZE; s++) {
         const k = InventoryUI.slotKey(inventory.getStack(s));
-        if (this.prevInventoryKeys[s] !== k) {
-          this.prevInventoryKeys[s] = k;
+        if (prevKeys[s] !== k) {
+          prevKeys[s] = k;
           bumpSlots.add(s);
         }
       }
     }
+
+    const prevSel = this.prevSelectedHotbarSlot;
+    const selectionChanged = sel !== prevSel;
+    this.prevSelectedHotbarSlot = sel;
 
     const selStack = inventory.getStack(sel);
     const selKey =
@@ -693,11 +722,20 @@ export class InventoryUI {
     }
 
     for (let i = 0; i < HOTBAR_SIZE; i++) {
+      if (
+        !initialSync &&
+        !bumpSlots.has(i) &&
+        !(selectionChanged && (i === sel || i === prevSel))
+      ) {
+        continue;
+      }
       this.fillSlot(
         inventory.getStack(i),
         this.hotbarIcons[i]!,
         this.hotbarCounts[i]!,
         this.hotbarSlots[i]!,
+        this.hotbarDurabilityWraps[i]!,
+        this.hotbarDurabilityFills[i]!,
         urlLookup,
         displayPx,
         i === sel,
@@ -705,21 +743,43 @@ export class InventoryUI {
       );
     }
 
+    if (!this.inventoryOpen) {
+      if (selectionChanged || bumpSlots.size > 0) {
+        this.overlayDirty = true;
+      }
+      return;
+    }
+
+    const forceOverlaySync = initialSync || this.overlayDirty;
     for (let i = 0; i < this.overlayIcons.length; i++) {
       const slotIndex = i < 27 ? 9 + i : i - 27;
       const stack = inventory.getStack(slotIndex);
       const isOverlayHotbarRow = i >= 27;
+      if (
+        !forceOverlaySync &&
+        !bumpSlots.has(slotIndex) &&
+        !(
+          isOverlayHotbarRow &&
+          selectionChanged &&
+          (slotIndex === sel || slotIndex === prevSel)
+        )
+      ) {
+        continue;
+      }
       this.fillSlot(
         stack,
         this.overlayIcons[i]!,
         this.overlayCounts[i]!,
         this.overlaySlots[i]!,
+        this.overlayDurabilityWraps[i]!,
+        this.overlayDurabilityFills[i]!,
         urlLookup,
         displayPx,
         isOverlayHotbarRow && slotIndex === sel,
         bumpSlots.has(slotIndex),
       );
     }
+    this.overlayDirty = false;
   }
 
   private fillSlot(
@@ -727,6 +787,8 @@ export class InventoryUI {
     iconEl: HTMLDivElement,
     countEl: HTMLSpanElement,
     slotEl: HTMLDivElement,
+    durWrap: HTMLDivElement,
+    durFill: HTMLDivElement,
     urlLookup: ItemIconUrlLookup | null,
     displayPx: number,
     selected: boolean,
@@ -738,20 +800,15 @@ export class InventoryUI {
       slotEl.classList.remove("inv-slot--selected");
     }
 
-    const durWrap = slotEl.querySelector<HTMLElement>(".inv-slot-durability");
-    const durFill = slotEl.querySelector<HTMLElement>(".inv-slot-durability-fill");
-
     if (stack === null || stack.count <= 0) {
       iconEl.style.cssText = "";
       iconEl.removeAttribute("title");
       slotEl.removeAttribute("title");
       slotEl.removeAttribute("aria-label");
       countEl.textContent = "";
-      durWrap?.classList.add("inv-slot-durability--hidden");
-      if (durFill) {
-        durFill.style.width = "0%";
-        durFill.classList.remove("inv-slot-durability-fill--low");
-      }
+      durWrap.classList.add("inv-slot-durability--hidden");
+      durFill.style.width = "0%";
+      durFill.classList.remove("inv-slot-durability-fill--low");
       if (playBump) {
         this.triggerSlotIconBump(iconEl);
       }
@@ -765,11 +822,9 @@ export class InventoryUI {
       slotEl.removeAttribute("title");
       slotEl.removeAttribute("aria-label");
       countEl.textContent = stack.count > 1 ? String(stack.count) : "";
-      durWrap?.classList.add("inv-slot-durability--hidden");
-      if (durFill) {
-        durFill.style.width = "0%";
-        durFill.classList.remove("inv-slot-durability-fill--low");
-      }
+      durWrap.classList.add("inv-slot-durability--hidden");
+      durFill.style.width = "0%";
+      durFill.classList.remove("inv-slot-durability-fill--low");
       if (playBump) {
         this.triggerSlotIconBump(iconEl);
       }
@@ -791,7 +846,7 @@ export class InventoryUI {
     }
 
     const maxD = def.maxDurability;
-    if (maxD !== undefined && maxD > 0 && durWrap !== null && durFill !== null) {
+    if (maxD !== undefined && maxD > 0) {
       durWrap.classList.remove("inv-slot-durability--hidden");
       const dmg = stack.damage ?? 0;
       const rem = Math.max(0, maxD - dmg);
@@ -799,11 +854,9 @@ export class InventoryUI {
       durFill.style.width = `${pct}%`;
       durFill.classList.toggle("inv-slot-durability-fill--low", pct <= 25);
     } else {
-      durWrap?.classList.add("inv-slot-durability--hidden");
-      if (durFill) {
-        durFill.style.width = "0%";
-        durFill.classList.remove("inv-slot-durability-fill--low");
-      }
+      durWrap.classList.add("inv-slot-durability--hidden");
+      durFill.style.width = "0%";
+      durFill.classList.remove("inv-slot-durability-fill--low");
     }
 
     if (playBump) {

@@ -1,10 +1,15 @@
 {
   "textures": {
     "bread": "assets/mods/resource_packs/stratum-core/textures/items/bread.png",
+    "porkchop": "assets/mods/resource_packs/stratum-core/textures/items/porkchop.png",
+    "cooked_porkchop": "assets/mods/resource_packs/stratum-core/textures/items/cooked_porkchop.png",
     "bucket": "assets/mods/resource_packs/stratum-core/textures/items/bucket.png",
     "water_bucket": "assets/mods/resource_packs/stratum-core/textures/items/water_bucket.png",
     "wheat": "assets/mods/resource_packs/stratum-core/textures/items/wheat.png",
     "wheat_seeds": "assets/mods/resource_packs/stratum-core/textures/items/wheat_seeds.png",
+    "sugar_cane": "assets/mods/resource_packs/stratum-core/textures/items/sugar_cane.png",
+    "sugar": "assets/mods/resource_packs/stratum-core/textures/items/sugar.png",
+    "paper": "assets/mods/resource_packs/stratum-core/textures/items/sugar.png",
     "charcoal": "assets/mods/resource_packs/stratum-core/textures/items/charcoal.png",
     "coal": "assets/mods/resource_packs/stratum-core/textures/items/coal.png",
     "diamond": "assets/mods/resource_packs/stratum-core/textures/items/diamond.png",
@@ -34,6 +39,11 @@
     "stone_pickaxe": "assets/mods/resource_packs/stratum-core/textures/items/stone_pickaxe.png",
     "stone_axe": "assets/mods/resource_packs/stratum-core/textures/items/stone_axe.png",
     "stone_shovel": "assets/mods/resource_packs/stratum-core/textures/items/stone_shovel.png",
-    "stone_hoe": "assets/mods/resource_packs/stratum-core/textures/items/stone_hoe.png"
+    "stone_hoe": "assets/mods/resource_packs/stratum-core/textures/items/stone_hoe.png",
+    "wooden_sword": "assets/mods/resource_packs/stratum-core/textures/items/wooden_sword.png",
+    "stone_sword": "assets/mods/resource_packs/stratum-core/textures/items/stone_sword.png",
+    "iron_sword": "assets/mods/resource_packs/stratum-core/textures/items/iron_sword.png",
+    "gold_sword": "assets/mods/resource_packs/stratum-core/textures/items/golden_sword.png",
+    "diamond_sword": "assets/mods/resource_packs/stratum-core/textures/items/diamond_sword.png"
   }
 }

@@ -9,7 +9,7 @@
 import type { EventBus } from "../core/EventBus";
 import { unixRandom01 } from "../core/unixRandom";
 import type { GameEvent } from "../core/types";
-import { CHUNK_SIZE, WORLDGEN_NO_COLLIDE } from "../core/constants";
+import { CHUNK_SIZE, WORLD_Y_MAX, WORLD_Y_MIN, WORLDGEN_NO_COLLIDE } from "../core/constants";
 import type { BlockRegistry } from "./blocks/BlockRegistry";
 import type { World } from "./World";
 import { getBlock } from "./chunk/Chunk";
@@ -85,6 +85,11 @@ const FARMLAND_DRYOUT_MAX_SEC = 55;
 const WHEAT_GROW_MIN_SEC = 18;
 const WHEAT_GROW_MAX_SEC = 48;
 
+/** Delay between sugar cane growth attempts (seconds). */
+const SUGARCANE_GROW_MIN_SEC = 22;
+const SUGARCANE_GROW_MAX_SEC = 55;
+const SUGARCANE_MAX_HEIGHT = 3;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -96,7 +101,8 @@ type InteractionKind =
   | "sapling-grow"
   | "farmland-moisten"
   | "farmland-dryout"
-  | "wheat-grow";
+  | "wheat-grow"
+  | "sugarcane-grow";
 
 interface ScheduledEvent {
   wx: number;
@@ -136,6 +142,9 @@ export class BlockInteractions {
   /** `wheat_stage_0` … `wheat_stage_7` in order. */
   private readonly wheatStageIds: readonly number[];
   private readonly wheatStageByBlockId = new Map<number, number>();
+  private readonly sugarCaneId: number;
+  private readonly sandId: number;
+  private readonly sugarCaneHydratedChunkKeys = new Set<string>();
 
   /**
    * Chunk coords (`cx,cy`) whose immature wheat has already been given grow timers.
@@ -167,6 +176,8 @@ export class BlockInteractions {
     this.birchLeavesId = registry.getByIdentifier("stratum:birch_leaves").id;
     this.farmlandDryId = registry.getByIdentifier("stratum:farmland_dry").id;
     this.farmlandMoistId = registry.getByIdentifier("stratum:farmland_moist").id;
+    this.sugarCaneId = registry.getByIdentifier("stratum:sugar_cane").id;
+    this.sandId = registry.getByIdentifier("stratum:sand").id;
     this.wheatStageIds = [
       registry.getByIdentifier("stratum:wheat_stage_0").id,
       registry.getByIdentifier("stratum:wheat_stage_1").id,
@@ -238,6 +249,44 @@ export class BlockInteractions {
         }
       }
       this.wheatHydratedChunkKeys.add(key);
+    }
+  }
+
+  /**
+   * Sugar cane growth uses a timed queue like wheat. Hydrate timers for loaded chunks
+   * so persisted cane continues to grow.
+   */
+  hydrateSugarCaneSchedulesInLoadedWorld(): void {
+    const chunks = this.world.getChunkManager().getLoadedChunks();
+    const loadedKeys = new Set<string>();
+    for (const chunk of chunks) {
+      loadedKeys.add(`${chunk.coord.cx},${chunk.coord.cy}`);
+    }
+    const stale: string[] = [];
+    for (const key of this.sugarCaneHydratedChunkKeys) {
+      if (!loadedKeys.has(key)) {
+        stale.push(key);
+      }
+    }
+    for (const key of stale) {
+      this.sugarCaneHydratedChunkKeys.delete(key);
+    }
+    for (const chunk of chunks) {
+      const key = `${chunk.coord.cx},${chunk.coord.cy}`;
+      if (this.sugarCaneHydratedChunkKeys.has(key)) {
+        continue;
+      }
+      const { wx: ox, wy: oy } = chunkToWorldOrigin(chunk.coord);
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+          const id = getBlock(chunk, lx, ly);
+          if (id !== this.sugarCaneId) {
+            continue;
+          }
+          this.scheduleSugarCaneGrow(ox + lx, oy + ly);
+        }
+      }
+      this.sugarCaneHydratedChunkKeys.add(key);
     }
   }
 
@@ -322,6 +371,9 @@ export class BlockInteractions {
     const wheatIdx = this.wheatStageIndex(blockId);
     if (wheatIdx >= 0 && wheatIdx < 7) {
       this.scheduleWheatGrow(wx, wy);
+    }
+    if (blockId === this.sugarCaneId) {
+      this.scheduleSugarCaneGrow(wx, wy);
     }
 
     const def = this.registry.getById(blockId);
@@ -451,6 +503,13 @@ export class BlockInteractions {
     this.schedule(wx, wy, "wheat-grow", delay);
   }
 
+  private scheduleSugarCaneGrow(wx: number, wy: number): void {
+    const delay =
+      SUGARCANE_GROW_MIN_SEC +
+      unixRandom01() * (SUGARCANE_GROW_MAX_SEC - SUGARCANE_GROW_MIN_SEC);
+    this.schedule(wx, wy, "sugarcane-grow", delay);
+  }
+
   /** Drop queued sapling timers for this cell (e.g. sapling broken or replaced). */
   private cancelSaplingGrowAt(wx: number, wy: number): void {
     const key = eventKey(wx, wy, "sapling-grow");
@@ -502,6 +561,9 @@ export class BlockInteractions {
         break;
       case "wheat-grow":
         this.execWheatGrow(ev.wx, ev.wy);
+        break;
+      case "sugarcane-grow":
+        this.execSugarCaneGrow(ev.wx, ev.wy);
         break;
     }
   }
@@ -557,6 +619,62 @@ export class BlockInteractions {
     this.world.setBlock(wx, wy, this.wheatStageIds[idx + 1]!);
   }
 
+  private execSugarCaneGrow(wx: number, wy: number): void {
+    if (this.world.getBlock(wx, wy).id !== this.sugarCaneId) {
+      return;
+    }
+
+    // Find base of the column.
+    let baseY = wy;
+    while (baseY - 1 >= WORLD_Y_MIN && this.world.getBlock(wx, baseY - 1).id === this.sugarCaneId) {
+      baseY -= 1;
+    }
+
+    // Compute height and top.
+    let topY = baseY;
+    let h = 1;
+    while (topY + 1 <= WORLD_Y_MAX && this.world.getBlock(wx, topY + 1).id === this.sugarCaneId) {
+      topY += 1;
+      h += 1;
+      if (h >= SUGARCANE_MAX_HEIGHT) {
+        break;
+      }
+    }
+
+    // Validate base rules (adjacent water, on sand/grass/dirt) when column is grounded.
+    const belowBase = this.world.getBlock(wx, baseY - 1);
+    const soilOk =
+      belowBase.id === this.sandId ||
+      belowBase.identifier === "stratum:grass" ||
+      belowBase.identifier === "stratum:dirt";
+    const soilY = baseY - 1;
+    const waterOk =
+      this.world.getBlock(wx - 1, soilY).water ||
+      this.world.getBlock(wx + 1, soilY).water ||
+      this.world.getBlock(wx, soilY - 1).water ||
+      this.world.getBlock(wx, soilY + 1).water ||
+      this.world.getBlock(wx - 1, soilY - 1).water ||
+      this.world.getBlock(wx + 1, soilY - 1).water;
+
+    if (!soilOk || !waterOk) {
+      this.scheduleSugarCaneGrow(wx, wy);
+      return;
+    }
+
+    if (h < SUGARCANE_MAX_HEIGHT) {
+      const aboveTop = this.world.getBlock(wx, topY + 1);
+      if (aboveTop.id === this.airId || (aboveTop.replaceable && aboveTop.id !== this.airId)) {
+        if (aboveTop.id !== this.airId) {
+          this.world.spawnLootForBrokenBlock(aboveTop.id, wx, topY + 1);
+          this.world.setBlock(wx, topY + 1, this.airId);
+        }
+        this.world.setBlock(wx, topY + 1, this.sugarCaneId, { cellMetadata: WORLDGEN_NO_COLLIDE });
+      }
+    }
+
+    this.scheduleSugarCaneGrow(wx, wy);
+  }
+
   // -----------------------------------------------------------------------
   // Sapling growth
   // -----------------------------------------------------------------------
@@ -598,7 +716,22 @@ export class BlockInteractions {
 
   // -- Clearance checks ----------------------------------------------------
 
+  /** Sapling sits in `wy`; ground must be grass, dirt, or farmland (not stone, etc.). */
+  private isSoilGroundBelowSapling(wx: number, wy: number): boolean {
+    const ground = this.world.getBlock(wx, wy - 1);
+    const id = ground.id;
+    return (
+      id === this.grassId ||
+      id === this.dirtId ||
+      id === this.farmlandDryId ||
+      id === this.farmlandMoistId
+    );
+  }
+
   private canGrowOak(wx: number, wy: number): boolean {
+    if (!this.isSoilGroundBelowSapling(wx, wy)) {
+      return false;
+    }
     for (let dy = 1; dy <= OAK_CLEARANCE; dy++) {
       const blk = this.world.getBlock(wx, wy + dy);
       if (blk.id !== this.airId && !blk.replaceable) return false;
@@ -614,6 +747,9 @@ export class BlockInteractions {
   }
 
   private canGrowSpruce(wx: number, wy: number): boolean {
+    if (!this.isSoilGroundBelowSapling(wx, wy)) {
+      return false;
+    }
     for (let dy = 1; dy <= SPRUCE_CLEARANCE; dy++) {
       const blk = this.world.getBlock(wx, wy + dy);
       if (blk.id !== this.airId && !blk.replaceable) return false;
@@ -629,6 +765,9 @@ export class BlockInteractions {
   }
 
   private canGrowBirch(wx: number, wy: number): boolean {
+    if (!this.isSoilGroundBelowSapling(wx, wy)) {
+      return false;
+    }
     for (let dy = 1; dy <= BIRCH_CLEARANCE; dy++) {
       const blk = this.world.getBlock(wx, wy + dy);
       if (blk.id !== this.airId && !blk.replaceable) return false;
@@ -652,14 +791,11 @@ export class BlockInteractions {
     const radiusX = 2;
     const radiusY = 2;
 
+    this.placeTrunkFromSapling(wx, wy, trunkHeight, this.oakLogId);
+
     forEachDeciduousBushCell(wx, canopyCy, radiusX, radiusY, (cx, cy) => {
       this.placeTreeBlock(cx, cy, this.oakLeavesId);
     });
-
-    for (let dy = 0; dy < trunkHeight; dy++) {
-      this.placeTreeBlock(wx, wy + dy, this.oakLogId);
-    }
-
   }
 
   private growBirchTree(wx: number, wy: number): void {
@@ -668,14 +804,11 @@ export class BlockInteractions {
     const radiusX = 2;
     const radiusY = 2;
 
+    this.placeTrunkFromSapling(wx, wy, trunkHeight, this.birchLogId);
+
     forEachDeciduousBushCell(wx, canopyCy, radiusX, radiusY, (cx, cy) => {
       this.placeTreeBlock(cx, cy, this.birchLeavesId);
     });
-
-    for (let dy = 0; dy < trunkHeight; dy++) {
-      this.placeTreeBlock(wx, wy + dy, this.birchLogId);
-    }
-
   }
 
   private growSpruceTree(wx: number, wy: number): void {
@@ -687,14 +820,24 @@ export class BlockInteractions {
     const surfaceY = wy - 1;
     const canopyBottom = surfaceY + canopyStartDy;
 
+    this.placeTrunkFromSapling(wx, wy, trunkHeight, this.spruceLogId);
+
     forEachSpruceBushCell(wx, canopyBottom, canopyLayers, (cx, cy) => {
       this.placeTreeBlock(cx, cy, this.spruceLeavesId);
     });
+  }
 
-    for (let dy = 0; dy < trunkHeight; dy++) {
-      this.placeTreeBlock(wx, wy + dy, this.spruceLogId);
+  /** Bottom log always replaces the sapling cell; upper segments respect replaceable/air. */
+  private placeTrunkFromSapling(
+    wx: number,
+    wy: number,
+    height: number,
+    logId: number,
+  ): void {
+    this.world.setBlock(wx, wy, logId, { cellMetadata: WORLDGEN_NO_COLLIDE });
+    for (let dy = 1; dy < height; dy++) {
+      this.placeTreeBlock(wx, wy + dy, logId);
     }
-
   }
 
   private placeTreeBlock(wx: number, wy: number, blockId: number): void {

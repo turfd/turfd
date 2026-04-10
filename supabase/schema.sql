@@ -682,7 +682,7 @@ create table if not exists public.stratum_mods (
   mod_id text not null,
   version text not null,
   mod_type text not null
-    check (mod_type in ('behavior_pack', 'resource_pack')),
+    check (mod_type in ('behavior_pack', 'resource_pack', 'world')),
   file_path text not null,
   cover_path text not null default '',
   file_size integer not null,
@@ -1170,7 +1170,7 @@ update public.stratum_mods
 alter table public.stratum_mods drop constraint if exists stratum_mods_mod_type_check;
 alter table public.stratum_mods
   add constraint stratum_mods_mod_type_check
-  check (mod_type in ('behavior_pack', 'resource_pack'));
+  check (mod_type in ('behavior_pack', 'resource_pack', 'world'));
 
 -- ---------------------------------------------------------------------------
 -- Storage: workshop bucket `mods` (required or uploads fail with "Bucket not found")
@@ -1186,6 +1186,7 @@ values (
     'application/zip',
     'application/x-zip-compressed',
     'application/octet-stream',
+    'application/json',
     'image/png',
     'image/jpeg'
   ]::text[]

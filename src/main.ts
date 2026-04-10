@@ -254,6 +254,32 @@ function wireWorkshopHandlers(
     }
   });
 
+  menuBus.on("workshop:publish-world-requested", async (e) => {
+    const uid = auth.getSession()?.userId;
+    if (uid === undefined) {
+      menuBus.emit({
+        type: "workshop:publish-error",
+        message: "Sign in to publish.",
+      } satisfies GameEvent);
+      return;
+    }
+    try {
+      const rec = await modRepo.publishWorld(
+        e.worldJsonBytes,
+        e.coverBytes,
+        e.displayName,
+        e.description,
+        uid,
+      );
+      menuBus.emit({ type: "workshop:publish-result", record: rec } satisfies GameEvent);
+    } catch (err) {
+      menuBus.emit({
+        type: "workshop:publish-error",
+        message: loadingErrorMessage(err),
+      } satisfies GameEvent);
+    }
+  });
+
   menuBus.on("workshop:request-owned", async () => {
     try {
       const records = await modRepo.listOwned();
@@ -285,6 +311,22 @@ function wireWorkshopHandlers(
     } catch (err) {
       menuBus.emit({
         type: "workshop:error",
+        message: loadingErrorMessage(err),
+      } satisfies GameEvent);
+    }
+  });
+
+  menuBus.on("workshop:dev-folder-picked", async (e) => {
+    try {
+      await store.openDB();
+      await modRepo.setDevFolder(e.handle);
+      menuBus.emit({
+        type: "workshop:dev-sync-ok",
+        packCount: modRepo.getInstalled().length,
+      } satisfies GameEvent);
+    } catch (err) {
+      menuBus.emit({
+        type: "workshop:dev-sync-error",
         message: loadingErrorMessage(err),
       } satisfies GameEvent);
     }
@@ -522,9 +564,7 @@ async function main(): Promise<void> {
       if (game !== null) {
         await game.destroy();
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1400);
-      });
+      await loadingUi.waitForBackToMenu();
       loadingUi.destroy();
       mount.classList.remove("stratum-game-loading");
     }

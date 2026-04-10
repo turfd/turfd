@@ -8,6 +8,7 @@ export class HUD {
   private unsubs: (() => void)[] = [];
   private saveHideTimer: ReturnType<typeof setTimeout> | null = null;
   private bgModeLabel: HTMLDivElement | null = null;
+  private lastCoordsText = "X: 0  Y: 0";
 
   init(mount: HTMLElement, bus: EventBus): void {
     const wrap = document.createElement("div");
@@ -24,7 +25,7 @@ export class HUD {
       "font:0.85rem system-ui,sans-serif",
       "text-shadow:0 1px 2px #000",
     ].join(";");
-    coords.textContent = "X: 0  Y: 0";
+    coords.textContent = this.lastCoordsText;
 
     const bgMode = document.createElement("div");
     bgMode.style.cssText = [
@@ -72,7 +73,11 @@ export class HUD {
 
     this.unsubs.push(
       bus.on("player:moved", (e) => {
-        coords.textContent = `X: ${e.blockX}  Y: ${e.blockY}`;
+        const next = `X: ${e.blockX}  Y: ${e.blockY}`;
+        if (next !== this.lastCoordsText) {
+          this.lastCoordsText = next;
+          coords.textContent = next;
+        }
       }),
     );
     this.unsubs.push(
@@ -119,5 +124,6 @@ export class HUD {
     this.container?.remove();
     this.container = null;
     this.bgModeLabel = null;
+    this.lastCoordsText = "X: 0  Y: 0";
   }
 }

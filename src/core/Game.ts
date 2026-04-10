@@ -13,7 +13,10 @@ import {
   CHEST_ACCESS_RADIUS_BLOCKS,
   CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS,
   FURNACE_ACCESS_RADIUS_BLOCKS,
+  DAWN_LENGTH_MS,
   DAY_LENGTH_MS,
+  DAYLIGHT_LENGTH_MS,
+  DUSK_LENGTH_MS,
   FIXED_TIMESTEP_MS,
   FIXED_TIMESTEP_SEC,
   HOTBAR_SIZE,
@@ -40,8 +43,14 @@ import {
   type RecipeIngredientAvailability,
 } from "../entities/CraftingSystem";
 import { EntityManager } from "../entities/EntityManager";
+import { feetPxFromSurfaceBlockY } from "../entities/mobs/mobConstants";
+import { MobManager } from "../entities/mobs/MobManager";
+import { MobType } from "../entities/mobs/mobTypes";
 import type { PlayerState } from "../entities/Player";
-import { getAimUnitVectorFromFeet } from "../input/aimDirection";
+import {
+  getAimUnitVectorFromFeet,
+  getReachCrosshairDisplayPos,
+} from "../input/aimDirection";
 import { InputManager } from "../input/InputManager";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
@@ -97,6 +106,7 @@ import { ChunkRenderer } from "../renderer/chunk/ChunkRenderer";
 import { RenderPipeline } from "../renderer/RenderPipeline";
 import { ChatHostController } from "../network/ChatHostController";
 import { parseGiveCommandRest, resolveGiveItemKey } from "../network/giveCommand";
+import { parseSummonCommandRest } from "../network/summonCommand";
 import {
   migrateModerationMetadata,
   WorldModerationState,
@@ -109,14 +119,13 @@ import { InventoryUI } from "../ui/InventoryUI";
 import { playShiftSlotFlyAnimation } from "../ui/shiftSlotFlyAnimation";
 import { NametagOverlay } from "../ui/NametagOverlay";
 import { UIShell } from "../ui/UIShell";
+import { runSleepTransition } from "../ui/screens/sleepTransition";
+import { bedHeadPlusXFromMeta } from "../world/bed/bedMetadata";
 import { BlockRegistry } from "../world/blocks/BlockRegistry";
 import { RecipeRegistry } from "../world/RecipeRegistry";
 import { WorldTime } from "../world/lighting/WorldTime";
 import { applyRainLightingTint } from "../world/weather/rainLighting";
-import {
-  RAIN_GROWTH_MUL,
-  WeatherController,
-} from "../world/weather/WeatherController";
+import { WeatherController } from "../world/weather/WeatherController";
 import { BlockInteractions } from "../world/BlockInteractions";
 import { World } from "../world/World";
 import { applyCommittedBreakOnWorld } from "../world/terrain/applyCommittedBreak";
@@ -168,6 +177,7 @@ const PEERJS_CLOUD = {
 } as const;
 
 const WORLD_TIME_BROADCAST_INTERVAL_MS = 5_000;
+const RAIN_GROWTH_MUL = 1.35;
 
 const HOST_DISABLED_MULTIPLAYER_REASON =
   "The host closed the room. Return to the main menu to continue.";
@@ -280,6 +290,13 @@ export class Game {
     string,
     { x: number; y: number }
   >();
+  /** Host: merge into world metadata on next save (bed spawn points). */
+  private readonly _multiplayerSpawnPoints = new Map<
+    string,
+    { x: number; y: number }
+  >();
+  /** Local (solo/host/client): respawn spawnpoint (bed). */
+  private _localSpawnFeet: { x: number; y: number } | null = null;
 
   private pipeline: RenderPipeline | null = null;
   private blockAtlasLoader: AtlasLoader | null = null;
@@ -301,6 +318,7 @@ export class Game {
   private inventoryUI: InventoryUI | null = null;
   private _craftingPanel: CraftingPanel | null = null;
   private _itemRegistry: ItemRegistry | null = null;
+  private _mobManager: MobManager | null = null;
   private readonly _smeltingRegistry = new SmeltingRegistry();
   private readonly _furnaceNetSentAt = new Map<string, number>();
   private readonly _chestNetSentAt = new Map<string, number>();
@@ -313,6 +331,15 @@ export class Game {
   private _furnaceSmeltSfxAccumSec = 0;
   /** {@link ITEM_PICKUP_SFX_MIN_INTERVAL_MS}: avoid pickup spam while overlapping collect radius. */
   private _lastItemPickupSfxMs = -Infinity;
+  /** Bleat / footstep cadence per sheep id (local listener; host + clients). */
+  private readonly _sheepAmbientSfxById = new Map<
+    number,
+    { bleatIn: number; stepPx: number }
+  >();
+  private readonly _pigAmbientSfxById = new Map<
+    number,
+    { gruntIn: number; stepPx: number; deathPlayed: boolean }
+  >();
   private cursorStackUI: CursorStackUI | null = null;
   private isInventoryOpen = false;
   private paused = false;
@@ -370,6 +397,15 @@ export class Game {
   /** Smoothed 0–1 for rain bus (open sky + weather); drives {@link AudioEngine.setSfxRainExposure}. */
   private _rainAudioExposure = 0;
   private static readonly RAIN_AUDIO_FADE_SEC = 2.75;
+
+  /** Prevent overlapping bed sleep transitions (local visuals). */
+  private _sleepTransitionPromise: Promise<void> | null = null;
+  /** Client: where to stand after the next host sleep transition. */
+  private _pendingLocalSleepStandFeet: { x: number; y: number } | null = null;
+  /** Multiplayer host: peers currently "in bed" for majority vote (includes "__host" when host sleeps). */
+  private readonly _sleepVotePeerIds = new Set<string>();
+  /** Host: prevent repeated triggers while already transitioning. */
+  private _sleepSkipInProgress = false;
 
   private _roomRelayHeartbeat: ReturnType<typeof setInterval> | null = null;
 
@@ -518,6 +554,14 @@ export class Game {
       if (rs !== undefined) {
         this._weather.restoreFromSave(rs);
       }
+    }
+    if (
+      metaLoaded?.playerSpawnX !== undefined &&
+      metaLoaded?.playerSpawnY !== undefined &&
+      Number.isFinite(metaLoaded.playerSpawnX) &&
+      Number.isFinite(metaLoaded.playerSpawnY)
+    ) {
+      this._localSpawnFeet = { x: metaLoaded.playerSpawnX, y: metaLoaded.playerSpawnY };
     }
 
     this.quitUnsub = this.bus.on("ui:quit", () => {
@@ -681,8 +725,11 @@ export class Game {
       for (const [texName, rel] of Object.entries(c.manifest.item_textures)) {
         const u = c.files[rel];
         if (u !== undefined && u.length > 0) {
+          // Ensure ArrayBuffer-backed bytes for Blob; some sources may use SharedArrayBuffer.
+          const bytes = new Uint8Array(u.length);
+          bytes.set(u);
           workshopItemTextureUrls[texName] = URL.createObjectURL(
-            new Blob([u], { type: "image/png" }),
+            new Blob([bytes], { type: "image/png" }),
           );
         }
       }
@@ -797,6 +844,7 @@ export class Game {
 
     this._blockInteractions = new BlockInteractions(world, registry, this.bus);
     this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
+    this._blockInteractions.hydrateSugarCaneSchedulesInLoadedWorld();
 
     this.chunkRenderer = new ChunkRenderer(pipeline, registry, blockAtlas, world);
 
@@ -842,11 +890,31 @@ export class Game {
     );
     entityManager.initVisual(pipeline);
     this.entityManager = entityManager;
+    this._mobManager = new MobManager(world, lootResolver);
+    entityManager.setMobManager(this._mobManager);
     {
       const st = this.adapter.state;
       entityManager.setMultiplayerTerrainClient(
         st.status === "connected" && st.role === "client",
       );
+    }
+
+    // Host/solo: restore persisted entity positions (mobs + drops) after terrain is loaded.
+    {
+      const st = this.adapter.state;
+      const isClient = st.status === "connected" && st.role === "client";
+      if (!isClient) {
+        const mobs = metaLoaded?.mobs;
+        if (mobs !== undefined && mobs.length > 0) {
+          this._mobManager.restoreFromSave(mobs);
+        }
+        const drops = metaLoaded?.drops;
+        if (drops !== undefined && drops.length > 0) {
+          for (const d of drops) {
+            world.spawnItem(d.itemId as ItemId, d.count, d.x, d.y, d.vx, d.vy, d.damage);
+          }
+        }
+      }
     }
 
     const saveGame = new SaveGame(
@@ -868,12 +936,69 @@ export class Game {
         }
         this._multiplayerLogoutSpawns.clear();
       },
+      (into) => {
+        for (const [k, v] of this._multiplayerSpawnPoints) {
+          into[k] = v;
+        }
+        this._multiplayerSpawnPoints.clear();
+      },
+      () => this._localSpawnFeet,
       () => {
         const st = this.adapter.state;
         if (st.status === "connected" && st.role === "client") {
           return undefined;
         }
         return this._weather.getRainRemainingSec();
+      },
+      () => {
+        const st = this.adapter.state;
+        if (st.status === "connected" && st.role === "client") {
+          return [];
+        }
+        const mm = this._mobManager;
+        if (mm === null) {
+          return [];
+        }
+        return [...mm.getAll()].map((m) => ({
+          id: m.id,
+          type:
+            m.kind === "sheep"
+              ? MobType.Sheep
+              : m.kind === "pig"
+                ? MobType.Pig
+                : MobType.Zombie,
+          x: m.x,
+          y: m.y,
+          ...(m.kind === "sheep" ? { woolColor: m.woolColor } : {}),
+          persistent: m.persistent,
+        }));
+      },
+      () => {
+        const st = this.adapter.state;
+        if (st.status === "connected" && st.role === "client") {
+          return [];
+        }
+        const out: Array<{
+          itemId: number;
+          count: number;
+          damage: number;
+          x: number;
+          y: number;
+          vx: number;
+          vy: number;
+        }> = [];
+        for (const item of world.getDroppedItems().values()) {
+          out.push({
+            itemId: item.itemId as unknown as number,
+            count: item.count,
+            damage: item.damage,
+            x: item.x,
+            y: item.y,
+            vx: item.vx,
+            vy: item.vy,
+          });
+        }
+        return out;
       },
     );
     progressCallback?.({
@@ -1121,6 +1246,12 @@ export class Game {
     this.networkUnsubs.push(
       this.bus.on("furnace:open-request", (e) => {
         this._handleFurnaceOpenRequest(e.wx, e.wy);
+      }),
+    );
+
+    this.networkUnsubs.push(
+      this.bus.on("bed:sleep-request", (e) => {
+        void this._handleBedSleepRequest(e.wx, e.wy);
       }),
     );
 
@@ -1466,6 +1597,10 @@ export class Game {
     this.blockBreakParticles = null;
     this.leafFallParticles?.destroy();
     this.leafFallParticles = null;
+    this._mobManager?.clear();
+    this._mobManager = null;
+    this._sheepAmbientSfxById.clear();
+    this._pigAmbientSfxById.clear();
     this.entityManager?.destroy();
     this.entityManager = null;
     this.input?.destroy();
@@ -1593,6 +1728,13 @@ export class Game {
           return;
         }
 
+        if (msg.type === MsgType.PLAYER_DAMAGE_APPLIED) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this.entityManager?.getPlayer().takeDamage(msg.damage);
+          }
+          return;
+        }
+
         if (msg.type === MsgType.CHAT) {
           if (stNet.status === "connected" && stNet.role === "host") {
             this._ensureChatHost();
@@ -1678,6 +1820,67 @@ export class Game {
         }
         if (msg.type === MsgType.DROP_DESPAWN && this.world !== null) {
           this.world.removeAuthoritativeDropByNetId(msg.netId);
+          return;
+        }
+        if (msg.type === MsgType.ENTITY_SPAWN && this._mobManager !== null) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this._mobManager.applyNetworkSpawn(
+              msg.entityId,
+              msg.entityType,
+              msg.x,
+              msg.y,
+              msg.woolColor ?? 0,
+            );
+          }
+          return;
+        }
+        if (msg.type === MsgType.ENTITY_STATE && this._mobManager !== null) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this._mobManager.applyEntityStateFromWire({
+              entityId: msg.entityId,
+              entityType: msg.entityType,
+              x: msg.x,
+              y: msg.y,
+              vx: msg.vx,
+              vy: msg.vy,
+              hp: msg.hp,
+              flags: msg.flags,
+              woolColor: msg.woolColor ?? 0,
+              deathAnim10Ms: msg.deathAnim10Ms,
+            });
+          }
+          return;
+        }
+        if (msg.type === MsgType.ENTITY_DESPAWN && this._mobManager !== null) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this._mobManager.applyNetworkDespawn(msg.entityId);
+          }
+          return;
+        }
+        if (
+          msg.type === MsgType.ENTITY_HIT_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host" &&
+          this.world !== null &&
+          this._mobManager !== null
+        ) {
+          const rng = this.world.forkMobRng();
+          const localId = this.adapter.getLocalPeerId();
+          let attackerFeetX = this.entityManager?.getPlayer().state.position.x ?? 0;
+          if (localId !== null && e.peerId !== localId) {
+            const rp = this.world.getRemotePlayers().get(e.peerId);
+            if (rp !== undefined) {
+              attackerFeetX = rp.getAuthorityFeet().x;
+            }
+          }
+          const heldItemId =
+            msg.heldItemId !== undefined ? msg.heldItemId : 0;
+          const dmg = this._meleeDamageFromHeldItemId(heldItemId);
+          const kb = this._meleeKnockbackFromHeldItemId(heldItemId);
+          const sprintKb = ((msg.attackFlags ?? 0) & 1) !== 0;
+          this._mobManager.damageMobFromHost(msg.entityId, rng, attackerFeetX, dmg, kb, {
+            sprintKnockback: sprintKb,
+          });
           return;
         }
         if (
@@ -1911,6 +2114,47 @@ export class Game {
         }
         if (msg.type === MsgType.WEATHER_LIGHTNING) {
           this._playLightningStrikeLocal();
+          return;
+        }
+        if (msg.type === MsgType.SLEEP_TRANSITION) {
+          const stand = this._pendingLocalSleepStandFeet;
+          this._pendingLocalSleepStandFeet = null;
+          void this._playLocalSleepTransition(msg.durationMs, stand);
+          return;
+        }
+        if (
+          msg.type === MsgType.SLEEP_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host"
+        ) {
+          const w = this.world;
+          if (w === null) {
+            return;
+          }
+          if (!this._bedWithinReachForPeer(msg.wx, msg.wy, e.peerId)) {
+            return;
+          }
+          const bedCells = this._resolveFullBedCells(msg.wx, msg.wy);
+          if (bedCells === null) {
+            return;
+          }
+          // Set peer spawnpoint to this bed's centered feet.
+          const stand = this._bedStandFeetFromCells(bedCells);
+          const roster = this._sessionRoster.get(e.peerId);
+          if (roster !== undefined) {
+            const key = multiplayerPersistKey(roster.accountId, roster.displayName);
+            this._multiplayerSpawnPoints.set(key, { x: stand.x, y: stand.y });
+            void this.saveGame?.save();
+          }
+          // Also send assignment immediately so the client updates its spawnpoint.
+          this.adapter.send(e.peerId as PeerId, {
+            type: MsgType.ASSIGNED_SPAWN,
+            x: stand.x,
+            y: stand.y,
+          });
+          // Register this peer as sleeping; trigger only when majority is reached.
+          this._sleepVotePeerIds.add(e.peerId);
+          this._maybeTriggerSleepSkipFromVotes();
           return;
         }
         if (msg.type === MsgType.ASSIGNED_SPAWN) {
@@ -2172,7 +2416,9 @@ export class Game {
                 rosterJoin.accountId,
                 rosterJoin.displayName,
               );
-              const sp = meta.multiplayerLastPositions[key];
+              const sp =
+                meta.multiplayerSpawnPoints?.[key] ??
+                meta.multiplayerLastPositions?.[key];
               if (sp !== undefined) {
                 this.adapter.send(newPeer, {
                   type: MsgType.ASSIGNED_SPAWN,
@@ -2318,6 +2564,7 @@ export class Game {
     pl.prevPosition.y = y;
     pl.velocity.x = 0;
     pl.velocity.y = 0;
+    this._localSpawnFeet = { x, y };
   }
 
   private _wirePauseNetworkHandlers(): void {
@@ -2463,6 +2710,9 @@ export class Game {
       executeWeather: (issuerPeerId, rest) => {
         this._executeWeatherCommand(issuerPeerId, rest);
       },
+      executeSummon: (issuerPeerId, rest) => {
+        this._executeSummonCommand(issuerPeerId, rest);
+      },
     });
   }
 
@@ -2534,6 +2784,87 @@ export class Game {
       issuerPeerId,
       "Usage: /weather set <rain|clear>",
     );
+  }
+
+  /**
+   * Feet position (world px) for the command issuer: local player or remote authority on host.
+   */
+  private _getIssuerFeetWorld(
+    issuerPeerId: string | null,
+    em: EntityManager,
+    world: World,
+  ): { x: number; y: number } | null {
+    if (issuerPeerId === null) {
+      const p = em.getPlayer().state.position;
+      return { x: p.x, y: p.y };
+    }
+    const localId = this.adapter.getLocalPeerId();
+    if (localId === null) {
+      return null;
+    }
+    if (issuerPeerId === localId) {
+      const p = em.getPlayer().state.position;
+      return { x: p.x, y: p.y };
+    }
+    const rp = world.getRemotePlayers().get(issuerPeerId);
+    if (rp === undefined) {
+      return null;
+    }
+    return rp.getAuthorityFeet();
+  }
+
+  /**
+   * Host (`issuerPeerId` set) or solo (`null`). `rest` is the command tail after `/summon`.
+   */
+  private _executeSummonCommand(issuerPeerId: string | null, rest: string): void {
+    const mm = this._mobManager;
+    const w = this.world;
+    const em = this.entityManager;
+    if (mm === null || w === null || em === null) {
+      this._giveFeedbackToIssuer(issuerPeerId, "World not ready.");
+      return;
+    }
+    const parsed = parseSummonCommandRest(rest);
+    if (!parsed.ok) {
+      this._giveFeedbackToIssuer(issuerPeerId, parsed.error);
+      return;
+    }
+    const rng = w.forkMobRng();
+    let x: number;
+    let y: number;
+    if (parsed.wx === undefined) {
+      const feet = this._getIssuerFeetWorld(issuerPeerId, em, w);
+      if (feet === null) {
+        this._giveFeedbackToIssuer(
+          issuerPeerId,
+          "Could not determine your position.",
+        );
+        return;
+      }
+      x = feet.x;
+      y = feet.y;
+    } else {
+      const wx = parsed.wx;
+      const surfaceY = w.getSurfaceHeight(wx);
+      x = (wx + 0.5) * BLOCK_SIZE;
+      y = feetPxFromSurfaceBlockY(surfaceY);
+    }
+    const id =
+      parsed.entityKey === "pig"
+        ? mm.spawnSummonedPigAt(x, y, rng)
+        : parsed.entityKey === "zombie"
+          ? mm.spawnSummonedZombieAt(x, y, rng)
+          : parsed.woolColor !== undefined
+            ? mm.spawnSummonedSheepWithColorAt(x, y, parsed.woolColor, rng)
+            : mm.spawnSummonedSheepAt(x, y, rng);
+    if (id === null) {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        `Could not summon ${parsed.entityKey} (mob cap or too many in this column).`,
+      );
+      return;
+    }
+    this._giveFeedbackToIssuer(issuerPeerId, `Summoned ${parsed.entityKey} (#${id}).`);
   }
 
   /**
@@ -2760,6 +3091,20 @@ export class Game {
       this._executeWeatherCommand(null, rest);
       return;
     }
+    const summonMatch = /^\/summon(\s+.*)?$/i.exec(trimmed);
+    if (summonMatch !== null && st.status !== "connected") {
+      const restSummon = (summonMatch[1] ?? "").trim();
+      if (restSummon === "") {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Usage: /summon <sheep|stratum:sheep|pig|stratum:pig|zombie|stratum:zombie> [blockX] [woolColor]",
+        } satisfies GameEvent);
+        return;
+      }
+      this._executeSummonCommand(null, restSummon);
+      return;
+    }
     if (st.status !== "connected") {
       this.bus.emit({
         type: "ui:chat-line",
@@ -2829,7 +3174,12 @@ export class Game {
       return;
     }
     const player = em.getPlayer();
-    player.spawnAt(0, this._computeWorldSpawnFeetY(world));
+    const sp = this._localSpawnFeet;
+    if (sp !== null) {
+      player.spawnAt(sp.x, sp.y);
+    } else {
+      player.spawnAt(0, this._computeWorldSpawnFeetY(world));
+    }
     this._localDeathNotified = false;
     this._deathModalOpen = false;
     this.uiShell?.setDeathOverlayOpen(false);
@@ -2841,6 +3191,123 @@ export class Game {
       -player.state.position.y - CAMERA_PLAYER_VERTICAL_OFFSET_PX,
     );
     this._syncWorldInputBlocked();
+  }
+
+  private _maybeMeleeMob(): void {
+    const mm = this._mobManager;
+    const input = this.input;
+    const em = this.entityManager;
+    const w = this.world;
+    if (mm === null || input === null || em === null || w === null) {
+      return;
+    }
+    if (!input.isJustPressed("break") || input.isWorldInputBlocked()) {
+      return;
+    }
+    const pl = em.getPlayer();
+    if (pl.state.dead) {
+      return;
+    }
+    const px = pl.state.position.x;
+    const py = pl.state.position.y;
+    const { x: aimX, y: aimY } = getReachCrosshairDisplayPos(
+      px,
+      py,
+      input.mouseWorldPos.x,
+      input.mouseWorldPos.y,
+      pl.state.facingRight,
+      REACH_BLOCKS,
+    );
+    const aimPhysY = -aimY;
+    const pcx = Math.floor(px / BLOCK_SIZE);
+    const pcy = Math.floor(py / BLOCK_SIZE);
+    const mwx = Math.floor(aimX / BLOCK_SIZE);
+    const mwy = Math.floor(aimPhysY / BLOCK_SIZE);
+    if (Math.max(Math.abs(pcx - mwx), Math.abs(pcy - mwy)) > REACH_BLOCKS) {
+      return;
+    }
+
+    // Swing on melee clicks when attacking mobs or "hitting air" (no mineable block under the crosshair).
+    const cell = w.getBlock(mwx, mwy);
+    const mineableCell =
+      cell.identifier !== "stratum:air" && cell.hardness !== 999;
+
+    const tid = mm.findMeleeTarget(px, py, aimX, aimY, REACH_BLOCKS);
+    if (tid === null) {
+      if (!mineableCell) {
+        pl.swingHand();
+      }
+      return;
+    }
+    pl.swingHand();
+    // Ensure the click that hits a mob doesn't also start mining until mouse-up.
+    input.suppressBreakUntilMouseUp();
+    const heldSlot = pl.state.hotbarSlot % HOTBAR_SIZE;
+    const heldItemId = pl.inventory.getStack(heldSlot)?.itemId ?? 0;
+    const net = this.adapter.state;
+    if (net.status === "connected" && net.role === "client") {
+      const hid = net.lanHostPeerId;
+      if (hid !== null) {
+        const sprintHeld = input.isDown("sprint");
+        this.adapter.send(hid as PeerId, {
+          type: MsgType.ENTITY_HIT_REQUEST,
+          entityId: tid,
+          heldItemId,
+          attackFlags: sprintHeld ? 1 : 0,
+        });
+      }
+      return;
+    }
+    const rng = w.forkMobRng();
+    const dmg = this._meleeDamageFromHeldItemId(heldItemId);
+    const kb = this._meleeKnockbackFromHeldItemId(heldItemId);
+    mm.damageMobFromHost(tid, rng, px, dmg, kb, {
+      sprintKnockback: input.isDown("sprint"),
+    });
+  }
+
+  private _meleeDamageFromHeldItemId(heldItemId: number): number {
+    if (heldItemId === 0) {
+      return 1;
+    }
+    const ir = this._itemRegistry;
+    if (ir === null) {
+      return 1;
+    }
+    const def = ir.getById(heldItemId as ItemId);
+    const key = def?.key ?? "";
+    // Sword scaling: mods may add sword items; base damage scales with tier when present.
+    if (key.includes("sword")) {
+      const tier = def?.toolTier;
+      if (tier === 0) return 4; // wood
+      if (tier === 1) return 5; // stone
+      if (tier === 2) return 6; // iron
+      if (tier === 3) return 7; // diamond
+      return 5;
+    }
+    // Non-sword: keep light damage for tools.
+    return 1;
+  }
+
+  private _meleeKnockbackFromHeldItemId(heldItemId: number): number {
+    if (heldItemId === 0) {
+      return 52;
+    }
+    const ir = this._itemRegistry;
+    if (ir === null) {
+      return 52;
+    }
+    const def = ir.getById(heldItemId as ItemId);
+    const key = def?.key ?? "";
+    if (key.includes("sword")) {
+      const tier = def?.toolTier;
+      if (tier === 0) return 58;
+      if (tier === 1) return 64;
+      if (tier === 2) return 70;
+      if (tier === 3) return 76;
+      return 64;
+    }
+    return 48;
   }
 
   private _tickLocalPlayerDeath(dtSec: number): void {
@@ -2996,6 +3463,156 @@ export class Game {
         },
       });
     });
+  }
+
+  /** Idle bleats and walk steps for nearby sheep (spatial audio at mob feet). */
+  private _tickSheepAmbientSfx(dtSec: number): void {
+    const mm = this._mobManager;
+    const em = this.entityManager;
+    const snd = this.audio;
+    if (mm === null || em === null || snd === null) {
+      return;
+    }
+    const pl = em.getPlayer();
+    if (pl.state.dead) {
+      return;
+    }
+    const lx = pl.state.position.x;
+    const ly = pl.state.position.y;
+    const views = mm.getPublicViews().filter((v) => v.type === MobType.Sheep);
+    const alive = new Set<number>();
+    for (const v of views) {
+      alive.add(v.id);
+      let st = this._sheepAmbientSfxById.get(v.id);
+      if (st === undefined) {
+        st = { bleatIn: 2 + Math.random() * 4, stepPx: 0 };
+        this._sheepAmbientSfxById.set(v.id, st);
+      }
+      st.bleatIn -= dtSec;
+      if (st.bleatIn <= 0) {
+        st.bleatIn = 4 + Math.random() * 6;
+        if (Math.random() < 0.5) {
+          snd.playSfx("entity_sheep_idle", {
+            volume: 0.42,
+            pitchVariance: 85,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+      }
+      if (v.walking) {
+        st.stepPx += Math.abs(v.vx) * dtSec;
+        const span = 28;
+        if (st.stepPx >= span) {
+          const q = Math.floor(st.stepPx / span);
+          st.stepPx -= q * span;
+          snd.playSfx("entity_sheep_step", {
+            volume: 0.34,
+            pitchVariance: 55,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+      } else {
+        st.stepPx = 0;
+      }
+    }
+    for (const id of [...this._sheepAmbientSfxById.keys()]) {
+      if (!alive.has(id)) {
+        this._sheepAmbientSfxById.delete(id);
+      }
+    }
+  }
+
+  private _tickPigAmbientSfx(dtSec: number): void {
+    const mm = this._mobManager;
+    const em = this.entityManager;
+    const snd = this.audio;
+    if (mm === null || em === null || snd === null) {
+      return;
+    }
+    const pl = em.getPlayer();
+    if (pl.state.dead) {
+      return;
+    }
+    const lx = pl.state.position.x;
+    const ly = pl.state.position.y;
+    const views = mm.getPublicViews().filter((v) => v.type === MobType.Pig);
+    const alive = new Set<number>();
+    for (const v of views) {
+      alive.add(v.id);
+      let st = this._pigAmbientSfxById.get(v.id);
+      if (st === undefined) {
+        st = { gruntIn: 2 + Math.random() * 4, stepPx: 0, deathPlayed: false };
+        this._pigAmbientSfxById.set(v.id, st);
+      }
+      if (v.deathAnimRemainSec > 0) {
+        if (!st.deathPlayed) {
+          st.deathPlayed = true;
+          snd.playSfx("entity_pig_death", {
+            volume: 0.44,
+            pitchVariance: 45,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+        st.stepPx = 0;
+        continue;
+      }
+      st.gruntIn -= dtSec;
+      if (st.gruntIn <= 0) {
+        st.gruntIn = 4 + Math.random() * 6;
+        if (Math.random() < 0.5) {
+          snd.playSfx("entity_pig_idle", {
+            volume: 0.42,
+            pitchVariance: 85,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+      }
+      if (v.walking) {
+        st.stepPx += Math.abs(v.vx) * dtSec;
+        const span = 28;
+        if (st.stepPx >= span) {
+          const q = Math.floor(st.stepPx / span);
+          st.stepPx -= q * span;
+          snd.playSfx("entity_pig_step", {
+            volume: 0.34,
+            pitchVariance: 55,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+      } else {
+        st.stepPx = 0;
+      }
+    }
+    for (const id of [...this._pigAmbientSfxById.keys()]) {
+      if (!alive.has(id)) {
+        this._pigAmbientSfxById.delete(id);
+      }
+    }
   }
 
   private _maybeBroadcastFurnaceSnapshotThrottled(wx: number, wy: number, nowMs: number): void {
@@ -3811,6 +4428,238 @@ export class Game {
     }
   }
 
+  private _bedWithinReachForPeer(wx: number, wy: number, peerId: string): boolean {
+    const w = this.world;
+    if (w === null) {
+      return false;
+    }
+    const rp = w.getRemotePlayers().get(peerId);
+    if (rp === undefined) {
+      return false;
+    }
+    const feet = rp.getAuthorityFeet();
+    const pcx = Math.floor(feet.x / BLOCK_SIZE);
+    const pcy = Math.floor(feet.y / BLOCK_SIZE);
+    return Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= REACH_BLOCKS;
+  }
+
+  private _resolveFullBedCells(
+    wx: number,
+    wy: number,
+  ): { footWx: number; headWx: number; wy: number } | null {
+    const w = this.world;
+    if (w === null) {
+      return null;
+    }
+    const cell = w.getBlock(wx, wy);
+    if (cell.bedHalf !== "foot" && cell.bedHalf !== "head") {
+      return null;
+    }
+    const meta = w.getMetadata(wx, wy);
+    const headPlusX = bedHeadPlusXFromMeta(meta);
+    const footWx =
+      cell.bedHalf === "foot" ? wx : headPlusX ? wx - 1 : wx + 1;
+    const headWx =
+      cell.bedHalf === "head" ? wx : headPlusX ? wx + 1 : wx - 1;
+    const foot = w.getBlock(footWx, wy);
+    const head = w.getBlock(headWx, wy);
+    if (foot.bedHalf !== "foot" || head.bedHalf !== "head") {
+      return null;
+    }
+    return { footWx, headWx, wy };
+  }
+
+  private _bedStandFeetFromCells(c: { footWx: number; headWx: number; wy: number }): {
+    x: number;
+    y: number;
+  } {
+    // Center between foot + head block centers.
+    const footCx = (c.footWx + 0.5) * BLOCK_SIZE;
+    const headCx = (c.headWx + 0.5) * BLOCK_SIZE;
+    const x = (footCx + headCx) * 0.5;
+    const y = (c.wy + 1) * BLOCK_SIZE;
+    return { x, y };
+  }
+
+  private _sleepMajorityRequiredCount(totalPlayers: number): number {
+    const t = Math.max(1, Math.floor(totalPlayers));
+    return Math.floor(t / 2) + 1;
+  }
+
+  private _sleepTotalOnlinePlayers(): number {
+    const w = this.world;
+    if (w === null) {
+      return 1;
+    }
+    // Host is always included as 1; remotePlayers are other online peers.
+    return 1 + w.getRemotePlayers().size;
+  }
+
+  private _sleepVoteCount(): number {
+    // Host is represented as "__host" in the vote set when sleeping.
+    return this._sleepVotePeerIds.size;
+  }
+
+  private _clearSleepVotes(): void {
+    this._sleepVotePeerIds.clear();
+  }
+
+  private _maybeTriggerSleepSkipFromVotes(): void {
+    if (this._sleepSkipInProgress) {
+      return;
+    }
+    const total = this._sleepTotalOnlinePlayers();
+    const need = this._sleepMajorityRequiredCount(total);
+    if (this._sleepVoteCount() < need) {
+      return;
+    }
+    this._sleepSkipInProgress = true;
+    const kind: 0 | 1 =
+      this._weather.isRaining() || this._isNightForSleep() ? 1 : 0;
+    const durationMs = 4000;
+    this._applySleepSkip(kind);
+    const st = this.adapter.state;
+    if (st.status === "connected" && st.role === "host") {
+      this._broadcastSleepTransition(kind, durationMs);
+    }
+    // Local transition: only animate if we were sleeping (pending stand feet set by local request).
+    void this._playLocalSleepTransition(durationMs, this._pendingLocalSleepStandFeet);
+    this._pendingLocalSleepStandFeet = null;
+    this._clearSleepVotes();
+    // Clear the "in progress" gate when fade finishes.
+    void this._sleepTransitionPromise?.finally(() => {
+      this._sleepSkipInProgress = false;
+    });
+  }
+
+  private _isNightForSleep(): boolean {
+    const nightStartMs = DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS + DUSK_LENGTH_MS;
+    const phase = (this._worldTime.ms % DAY_LENGTH_MS) / DAY_LENGTH_MS;
+    const nightStartPhase = nightStartMs / DAY_LENGTH_MS;
+    return phase >= nightStartPhase;
+  }
+
+  private _applySleepSkip(kind: 0 | 1): void {
+    // kind: 0 = to night, 1 = to morning
+    if (kind === 0) {
+      const nightStartMs = DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS + DUSK_LENGTH_MS;
+      this._worldTime.setMs(nightStartMs);
+      return;
+    }
+    this._worldTime.setMs(0);
+    this._weather.clear();
+  }
+
+  private _broadcastSleepTransition(kind: 0 | 1, durationMs: number): void {
+    const st = this.adapter.state;
+    if (st.status === "connected" && st.role === "host") {
+      this.adapter.broadcast({
+        type: MsgType.SLEEP_TRANSITION,
+        kind,
+        durationMs,
+      });
+      // Push time/weather immediately so clients snap during the fade.
+      this.adapter.broadcast({
+        type: MsgType.WORLD_TIME,
+        worldTimeMs: this._worldTime.ms,
+      });
+      this._broadcastWeatherSyncToClients();
+    }
+  }
+
+  private async _playLocalSleepTransition(
+    durationMs: number,
+    standFeet?: { x: number; y: number } | null,
+  ): Promise<void> {
+    if (this._sleepTransitionPromise !== null) {
+      return this._sleepTransitionPromise;
+    }
+    const mount = this.mount;
+    const em = this.entityManager;
+    const w = this.world;
+    if (em === null || w === null) {
+      return;
+    }
+    // Snap onto the bed immediately so the sleep pose is always centered.
+    if (standFeet !== null && standFeet !== undefined) {
+      em.getPlayer().spawnAt(standFeet.x, standFeet.y);
+    }
+    const totalSec = Math.max(0, durationMs / 1000);
+    em.getPlayer().beginSleep(totalSec);
+    const inMs = Math.max(0, Math.round(durationMs * 0.38));
+    const holdMs = Math.max(0, Math.round(durationMs * 0.14));
+    const outMs = Math.max(0, durationMs - inMs - holdMs);
+    this._sleepTransitionPromise = (async () => {
+      try {
+        await runSleepTransition(
+          mount,
+          () => {
+            // Nothing: host already applied time/weather; clients already synced time.
+          },
+          { inMs, holdMs, outMs, dimOpacity: 0.6 },
+        );
+        // Stand up + place on bed top center (local-only nicety).
+        if (standFeet !== null && standFeet !== undefined) {
+          em.getPlayer().spawnAt(standFeet.x, standFeet.y);
+        }
+      } finally {
+        em.getPlayer().beginSleep(0);
+        this._sleepTransitionPromise = null;
+      }
+    })();
+    return this._sleepTransitionPromise;
+  }
+
+  private async _handleBedSleepRequest(wx: number, wy: number): Promise<void> {
+    const w = this.world;
+    const em = this.entityManager;
+    if (w === null || em === null) {
+      return;
+    }
+    const net = this.adapter.state;
+    const bedCells = this._resolveFullBedCells(wx, wy);
+    if (bedCells === null) {
+      return;
+    }
+    const standFeet = this._bedStandFeetFromCells(bedCells);
+    // Sleeping in a bed sets your spawnpoint.
+    this._localSpawnFeet = standFeet;
+    void this.saveGame?.save();
+    const durationMs = 4000;
+
+    if (net.status === "connected" && net.role === "client") {
+      const hid = net.lanHostPeerId;
+      if (hid !== null) {
+        this.adapter.send(hid as PeerId, {
+          type: MsgType.SLEEP_REQUEST,
+          wx,
+          wy,
+        });
+      }
+      this._pendingLocalSleepStandFeet = standFeet;
+      // Immediately snap into the bed pose while waiting for majority.
+      em.getPlayer().spawnAt(standFeet.x, standFeet.y);
+      em.getPlayer().beginSleep(60);
+      return;
+    }
+
+    // Offline or host: register this player as sleeping and trigger skip once a majority is reached.
+    this._pendingLocalSleepStandFeet = standFeet;
+    this._sleepVotePeerIds.add("__host");
+    // Snap into the bed pose while waiting for majority.
+    em.getPlayer().spawnAt(standFeet.x, standFeet.y);
+    em.getPlayer().beginSleep(60);
+    if (net.status === "connected" && net.role === "host") {
+      this._maybeTriggerSleepSkipFromVotes();
+      return;
+    }
+    // Offline: apply skip immediately (majority is always satisfied).
+    const kind: 0 | 1 =
+      this._weather.isRaining() || this._isNightForSleep() ? 1 : 0;
+    this._applySleepSkip(kind);
+    await this._playLocalSleepTransition(durationMs, standFeet);
+  }
+
   private _chestWithinReachForPeer(
     anchor: { ax: number; ay: number },
     peerId: string,
@@ -4575,17 +5424,15 @@ export class Game {
         (rainAudibleTarget - this._rainAudioExposure) * fadeK;
       this.audio?.setSfxRainExposure(this._rainAudioExposure);
 
-      if (wantRain && outdoorRain && !this._rainAmbientActive) {
-        this.audio?.startSfxRainDualAmbient("weather_rain_ambient", 0.24);
+      // Keep dual loops running for the whole storm; volume is only {@link _rainAudioExposure}
+      // (open sky). Avoid stop/restart when stepping under cover — that was easy to miss audibly.
+      if (wantRain && !this._rainAmbientActive) {
+        this.audio?.startSfxRainDualAmbient("weather_rain_ambient", 0.28);
         this._rainAmbientActive = true;
         this._rainAmbientRefreshAccum = 0;
       }
 
-      if (
-        this._rainAmbientActive &&
-        this._rainAudioExposure < 0.02 &&
-        (!wantRain || !outdoorRain)
-      ) {
+      if (this._rainAmbientActive && !wantRain) {
         this.audio?.stopSfxRainDualAmbient();
         this._rainAmbientActive = false;
         this._rainAmbientRefreshAccum = 0;
@@ -4599,10 +5446,13 @@ export class Game {
         this._rainAmbientRefreshAccum += FIXED_TIMESTEP_SEC;
         if (this._rainAmbientRefreshAccum >= Game.RAIN_AMBIENT_REFRESH_SEC) {
           this._rainAmbientRefreshAccum = 0;
-          this.audio?.refreshSfxRainDualAmbient("weather_rain_ambient", 0.24);
+          this.audio?.refreshSfxRainDualAmbient("weather_rain_ambient", 0.28);
         }
       }
 
+      // Prefer melee hits over mining when clicking an entity (so mobs aren't "hard to hit"
+      // due to a breakable block behind them).
+      this._maybeMeleeMob();
       entityManager.update(dtSec);
 
       this._tickLocalPlayerDeath(dtSec);
@@ -4661,6 +5511,8 @@ export class Game {
             w.getAirBlockId(),
           );
           this._tickFurnaceSmeltAmbient(dtSec);
+          this._tickSheepAmbientSfx(dtSec);
+          this._tickPigAmbientSfx(dtSec);
         }
       }
       const dropNet = this.adapter.state;
@@ -4703,6 +5555,115 @@ export class Game {
             }
           : undefined,
       );
+
+      if (role !== "client" && this.world !== null && this._mobManager !== null) {
+        const rng = this.world.forkMobRng();
+        const world = this.world;
+        const zombiePlayerTargets: {
+          peerId: string | null;
+          x: number;
+          y: number;
+        }[] = [];
+        const netForMobs = this.adapter.state;
+        if (netForMobs.status !== "connected") {
+          zombiePlayerTargets.push({ peerId: null, x: pl.x, y: pl.y });
+        } else {
+          const localPeer = this.adapter.getLocalPeerId();
+          if (localPeer !== null) {
+            zombiePlayerTargets.push({
+              peerId: localPeer,
+              x: pl.x,
+              y: pl.y,
+            });
+          }
+          for (const [pid, rp] of world.getRemotePlayers()) {
+            const f = rp.getAuthorityFeet();
+            zombiePlayerTargets.push({ peerId: pid, x: f.x, y: f.y });
+          }
+          if (zombiePlayerTargets.length === 0) {
+            zombiePlayerTargets.push({ peerId: null, x: pl.x, y: pl.y });
+          }
+        }
+        this._mobManager.tickHost(
+          FIXED_TIMESTEP_SEC,
+          rng,
+          this._worldTime.ms,
+          { x: pl.x, y: pl.y },
+          zombiePlayerTargets,
+          (peerId, dmg) => {
+            const em = this.entityManager;
+            if (em === null) {
+              return;
+            }
+            const localPeer = this.adapter.getLocalPeerId();
+            const st = this.adapter.state;
+            if (peerId === null || (localPeer !== null && peerId === localPeer)) {
+              em.getPlayer().takeDamage(dmg);
+              return;
+            }
+            if (st.status === "connected" && st.role === "host") {
+              this.adapter.send(peerId as PeerId, {
+                type: MsgType.PLAYER_DAMAGE_APPLIED,
+                damage: dmg,
+              });
+            }
+          },
+        );
+        const flush = this._mobManager.flushHostReplication();
+        const netSt = this.adapter.state;
+        if (netSt.status === "connected" && netSt.role === "host") {
+          for (const id of flush.despawns) {
+            this.adapter.broadcast({ type: MsgType.ENTITY_DESPAWN, entityId: id });
+          }
+          for (const sp of flush.spawns) {
+            this.adapter.broadcast({
+              type: MsgType.ENTITY_SPAWN,
+              entityId: sp.id,
+              entityType: sp.type,
+              x: sp.x,
+              y: sp.y,
+              woolColor: sp.woolColor,
+            });
+          }
+          for (const v of flush.states) {
+            let flags = 0;
+            if (v.facingRight) {
+              flags |= 1;
+            }
+            if (v.panic) {
+              flags |= 2;
+            }
+            if (v.walking) {
+              flags |= 4;
+            }
+            if (v.hurt) {
+              flags |= 8;
+            }
+            if (v.attacking) {
+              flags |= 16;
+            }
+            if (v.burning) {
+              flags |= 32;
+            }
+            this.adapter.broadcast({
+              type: MsgType.ENTITY_STATE,
+              entityId: v.id,
+              entityType: v.type,
+              x: v.x,
+              y: v.y,
+              vx: v.vx,
+              vy: v.vy,
+              hp: v.hp,
+              flags,
+              woolColor: v.woolColor,
+              deathAnim10Ms: Math.min(
+                255,
+                Math.max(0, Math.round(v.deathAnimRemainSec / 0.01)),
+              ),
+            });
+          }
+        }
+      }
 
       if (this._blockInteractions !== null && role !== "client") {
         const pbx = Math.floor(pl.x / BLOCK_SIZE);
@@ -4856,6 +5817,7 @@ export class Game {
 
   private render(alpha: number): void {
     const now = performance.now();
+    const winterAmount = 0;
     const dtSec =
       this.lastRenderWallMs > 0
         ? Math.min((now - this.lastRenderWallMs) / 1000, 0.1)
@@ -4946,7 +5908,7 @@ export class Game {
     if (this.pipeline !== null) {
       const baseLighting = this._worldTime.getLightingParams();
       const rainingGlobal = this._isRainingForVisual();
-      let rainVisual = rainingGlobal;
+      let rainVisual = rainingGlobal && winterAmount < 0.2;
       if (
         rainingGlobal &&
         this.world !== null &&
@@ -4970,6 +5932,7 @@ export class Game {
         lightningAlpha,
       });
       this.pipeline.updateWeatherOverlay(rainVisual, dtSec);
+      this.pipeline.updateSnowfallEffect(winterAmount, dtSec);
       if (this.world !== null && this.entityManager !== null) {
         const cam = this.pipeline.getCamera();
         const pos = cam.getPosition();

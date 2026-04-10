@@ -42,6 +42,7 @@ const stratumBlockComponentsSchema = z
     "stratum:replaceable": z.boolean().optional(),
     "stratum:tall_grass": z.enum(["none", "bottom", "top"]).optional(),
     "stratum:door_half": z.enum(["bottom", "top"]).optional(),
+    "stratum:bed_half": z.enum(["foot", "head"]).optional(),
     "stratum:plant_foot_offset_px": z.number().int().min(0).max(15).optional(),
     /** Whole-pixel vertical shift for plant quads after foot crop (see {@link BlockDefinitionBase.plantRenderOffsetYPx}). */
     "stratum:plant_render_offset_y_px": z.number().int().min(-8).max(8).optional(),
@@ -98,6 +99,7 @@ export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
     replaceable: c["stratum:replaceable"] ?? false,
     tallGrass: c["stratum:tall_grass"] ?? "none",
     doorHalf: c["stratum:door_half"] ?? "none",
+    bedHalf: c["stratum:bed_half"] ?? "none",
     plantFootOffsetPx: c["stratum:plant_foot_offset_px"],
     plantRenderOffsetYPx: c["stratum:plant_render_offset_y_px"],
     windSwayMaxPx: c["stratum:wind_sway_max_px"],

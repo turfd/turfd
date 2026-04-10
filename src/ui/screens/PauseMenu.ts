@@ -286,7 +286,12 @@ export class PauseMenu {
   private readonly unsubs: (() => void)[] = [];
   private pauseSettingsAbort: AbortController | null = null;
 
+  private isOpen = false;
   private adjustingWorldTime = false;
+  private lastObservedWorldTimeMs = 0;
+  private lastTimeHintText = "";
+  private lastTimeInputValue = "";
+  private syncTimeUi: ((worldTimeMs: number) => void) | null = null;
   private networkRole: "offline" | "host" | "client" = "offline";
   private roomCode: string | null = null;
   private mpBtn: HTMLButtonElement | null = null;
@@ -430,17 +435,30 @@ export class PauseMenu {
     timeHint.textContent = "—";
 
     const syncTimeUi = (worldTimeMs: number): void => {
+      this.lastObservedWorldTimeMs = worldTimeMs;
+      if (!this.isOpen) {
+        return;
+      }
       const phase = worldTimeMs / DAY_LENGTH_MS;
-      timeHint.textContent = `${skyPeriodLabel(phase)} · ${Math.round(phase * 100)}% of cycle`;
+      const hintText = `${skyPeriodLabel(phase)} · ${Math.round(phase * 100)}% of cycle`;
+      if (hintText !== this.lastTimeHintText) {
+        this.lastTimeHintText = hintText;
+        timeHint.textContent = hintText;
+      }
       if (!this.adjustingWorldTime) {
-        timeInput.value = String(
+        const inputValue = String(
           Math.min(
             TIME_SLIDER_STEPS,
             Math.max(0, Math.round(phase * TIME_SLIDER_STEPS)),
           ),
         );
+        if (inputValue !== this.lastTimeInputValue) {
+          this.lastTimeInputValue = inputValue;
+          timeInput.value = inputValue;
+        }
       }
     };
+    this.syncTimeUi = syncTimeUi;
 
     const applyTimeDisabled = (): void => {
       const client = this.networkRole === "client";
@@ -547,8 +565,12 @@ export class PauseMenu {
     if (el === null) {
       return;
     }
+    this.isOpen = open;
     el.classList.toggle("pm-overlay--open", open);
     el.setAttribute("aria-hidden", open ? "false" : "true");
+    if (open) {
+      this.syncTimeUi?.(this.lastObservedWorldTimeMs);
+    }
   }
 
   private _syncMultiplayerPanel(): void {
@@ -584,6 +606,7 @@ export class PauseMenu {
   destroy(): void {
     this.pauseSettingsAbort?.abort();
     this.pauseSettingsAbort = null;
+    this.syncTimeUi = null;
     for (const u of this.unsubs) {
       u();
     }

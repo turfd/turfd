@@ -53,6 +53,11 @@ export class InputManager {
   private readonly justPressed = new Set<InputAction>();
   private readonly mouseDown = new Set<number>();
   private readonly mouseJustDown = new Set<number>();
+  /**
+   * When true, suppress world "break" while LMB remains held.
+   * Used so clicking an entity to melee doesn't also start mining the block behind it.
+   */
+  private suppressBreakWhileHeld = false;
 
   /** Effective keyboard codes per action (mouse still handles place/break). */
   private keyBindings: Record<KeybindableAction, readonly string[]> =
@@ -60,6 +65,12 @@ export class InputManager {
 
   private mouseClientX = 0;
   private mouseClientY = 0;
+  private canvasRectLeft = 0;
+  private canvasRectTop = 0;
+  private canvasCssW = 1;
+  private canvasCssH = 1;
+  private canvasMetricsDirty = true;
+  private canvasResizeObserver: ResizeObserver | null = null;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (e.code === "Space" || e.code === "Tab") {
@@ -81,6 +92,10 @@ export class InputManager {
     this.mouseClientY = e.clientY;
   };
 
+  private readonly onCanvasMetricsInvalidated = (): void => {
+    this.canvasMetricsDirty = true;
+  };
+
   private readonly onMouseDown = (e: MouseEvent): void => {
     if (!this.mouseDown.has(e.button)) {
       this.mouseJustDown.add(e.button);
@@ -90,6 +105,9 @@ export class InputManager {
 
   private readonly onMouseUp = (e: MouseEvent): void => {
     this.mouseDown.delete(e.button);
+    if (e.button === MOUSE_BREAK) {
+      this.suppressBreakWhileHeld = false;
+    }
   };
 
   private readonly onBlur = (): void => {
@@ -106,6 +124,20 @@ export class InputManager {
     this.wheelDelta += e.deltaY;
   };
 
+  private readonly updateCanvasMetrics = (): void => {
+    const rect = this.canvas.getBoundingClientRect();
+    this.canvasRectLeft = rect.left;
+    this.canvasRectTop = rect.top;
+    /**
+     * Prefer `getBoundingClientRect()` over `clientWidth/Height` because rect includes
+     * CSS transforms/zoom; using client metrics can skew pointer ↔ canvas mapping
+     * (commonly on HiDPI laptops / browser zoom / transformed mounts).
+     */
+    this.canvasCssW = Math.max(1, rect.width || this.canvas.clientWidth || 1);
+    this.canvasCssH = Math.max(1, rect.height || this.canvas.clientHeight || 1);
+    this.canvasMetricsDirty = false;
+  };
+
   constructor(
     canvas: HTMLCanvasElement,
     storedOverrides?: Partial<Record<KeybindableAction, readonly string[]>>,
@@ -120,8 +152,15 @@ export class InputManager {
     window.addEventListener("mousedown", this.onMouseDown);
     window.addEventListener("mouseup", this.onMouseUp);
     window.addEventListener("blur", this.onBlur);
+    window.addEventListener("resize", this.onCanvasMetricsInvalidated);
+    window.addEventListener("scroll", this.onCanvasMetricsInvalidated, true);
     canvas.addEventListener("contextmenu", this.onContextMenu);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    if (typeof ResizeObserver !== "undefined") {
+      this.canvasResizeObserver = new ResizeObserver(this.onCanvasMetricsInvalidated);
+      this.canvasResizeObserver.observe(canvas);
+    }
+    this.updateCanvasMetrics();
   }
 
   setWorldInputBlocked(blocked: boolean): void {
@@ -174,8 +213,12 @@ export class InputManager {
     window.removeEventListener("mousedown", this.onMouseDown);
     window.removeEventListener("mouseup", this.onMouseUp);
     window.removeEventListener("blur", this.onBlur);
+    window.removeEventListener("resize", this.onCanvasMetricsInvalidated);
+    window.removeEventListener("scroll", this.onCanvasMetricsInvalidated, true);
     this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.canvas.removeEventListener("wheel", this.onWheel);
+    this.canvasResizeObserver?.disconnect();
+    this.canvasResizeObserver = null;
   }
 
   isDown(action: InputAction): boolean {
@@ -201,6 +244,9 @@ export class InputManager {
       return this.mouseDown.has(MOUSE_PLACE);
     }
     if (action === "break") {
+      if (this.suppressBreakWhileHeld && this.mouseDown.has(MOUSE_BREAK)) {
+        return false;
+      }
       return this.mouseDown.has(MOUSE_BREAK);
     }
     const keys = this.keyBindings[action as KeybindableAction];
@@ -238,6 +284,9 @@ export class InputManager {
       return this.mouseJustDown.has(MOUSE_PLACE);
     }
     if (action === "break") {
+      if (this.suppressBreakWhileHeld) {
+        return false;
+      }
       return this.mouseJustDown.has(MOUSE_BREAK);
     }
     return this.justPressed.has(action);
@@ -252,18 +301,30 @@ export class InputManager {
     this.justPressed.clear();
     this.mouseJustDown.clear();
     this.wheelDelta = 0;
+    // If LMB is no longer held, clear suppression (covers missed mouseup events).
+    if (!this.mouseDown.has(MOUSE_BREAK)) {
+      this.suppressBreakWhileHeld = false;
+    }
+  }
+
+  /**
+   * Suppress world mining ("break") until LMB is released.
+   * Safe to call even if the mouse isn't down.
+   */
+  suppressBreakUntilMouseUp(): void {
+    this.suppressBreakWhileHeld = true;
+    // Prevent this frame from also registering as "just pressed break".
+    this.mouseJustDown.delete(MOUSE_BREAK);
   }
 
   updateMouseWorldPos(camera: Camera): void {
-    const rect = this.canvas.getBoundingClientRect();
-    // Prefer clientWidth/clientHeight for CSS pixels; they stay stable across some fractional
-    // rect reporting (zoom / DPR) and match the containing block the canvas is sized to.
-    const cssW = Math.max(1, this.canvas.clientWidth || rect.width || 1);
-    const cssH = Math.max(1, this.canvas.clientHeight || rect.height || 1);
-    const scaleX = this.canvas.width / cssW;
-    const scaleY = this.canvas.height / cssH;
-    const cssX = this.mouseClientX - rect.left;
-    const cssY = this.mouseClientY - rect.top;
+    if (this.canvasMetricsDirty) {
+      this.updateCanvasMetrics();
+    }
+    const scaleX = this.canvas.width / this.canvasCssW;
+    const scaleY = this.canvas.height / this.canvasCssH;
+    const cssX = this.mouseClientX - this.canvasRectLeft;
+    const cssY = this.mouseClientY - this.canvasRectTop;
     const sx = cssX * scaleX;
     const sy = cssY * scaleY;
     const w = camera.screenToWorld(sx, sy);

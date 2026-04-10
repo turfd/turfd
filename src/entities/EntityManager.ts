@@ -10,6 +10,29 @@ import {
   Sprite,
   Texture,
 } from "pixi.js";
+import { MobManager } from "./mobs/MobManager";
+import { MobType } from "./mobs/mobTypes";
+import {
+  PIG_BODY_TRIM_TARGET_PX,
+  PIG_DEATH_ANIM_SEC,
+  PIG_FEET_SPRITE_NUDGE_Y_PX,
+  PIG_IDLE_FRAMES,
+  PIG_RENDER_SCALE_MULT,
+  PIG_SPRITE_REL,
+  PIG_WALK_FRAMES,
+  SHEEP_BODY_TRIM_TARGET_PX,
+  SHEEP_DEATH_ANIM_SEC,
+  SHEEP_FEET_SPRITE_NUDGE_Y_PX,
+  ZOMBIE_DEATH_ANIM_SEC,
+  ZOMBIE_FEET_SPRITE_NUDGE_Y_PX,
+  ZOMBIE_SPRITE_REL,
+  SHEEP_RENDER_SCALE_MULT,
+  SHEEP_IDLE_FRAMES,
+  SHEEP_MASK_SPRITE_REL,
+  SHEEP_SPRITE_REL,
+  SHEEP_WALK_FRAMES,
+} from "./mobs/mobConstants";
+import { getSheepWoolTintHex } from "./mobs/sheepWool";
 import type { AudioEngine } from "../audio/AudioEngine";
 import {
   BLOCK_SIZE,
@@ -59,7 +82,7 @@ import {
 } from "../core/constants";
 import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 import type { EventBus } from "../core/EventBus";
-import { getAimUnitVectorFromFeet } from "../input/aimDirection";
+import { getReachLineGeometry } from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
 import type { ItemId } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
@@ -136,6 +159,92 @@ function sliceAtlasFrames(
     );
   }
   return out;
+}
+
+type SheepCropRect = Readonly<{ x: number; y: number; w: number; h: number }>;
+
+/**
+ * Turn `sheep_mask.png` slices into white RGBA silhouettes (alpha = wool coverage).
+ * Avoids Pixi sprite masks / multiply at draw time — fixes GPU stencil quirks at screen edges.
+ */
+async function buildSheepWoolSilhouetteTextures(
+  maskImageUrl: string,
+  rects: readonly SheepCropRect[],
+): Promise<Texture[] | null> {
+  let bmp: ImageBitmap | null = null;
+  try {
+    const res = await fetch(maskImageUrl);
+    if (!res.ok) {
+      return null;
+    }
+    bmp = await createImageBitmap(await res.blob());
+  } catch {
+    return null;
+  }
+  try {
+    if (bmp === null) {
+      return null;
+    }
+    const maskBmp = bmp;
+    const out: Texture[] = [];
+    for (const r of rects) {
+      const canvas = document.createElement("canvas");
+      canvas.width = r.w;
+      canvas.height = r.h;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (ctx === null) {
+        return null;
+      }
+      ctx.drawImage(maskBmp, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      const img = ctx.getImageData(0, 0, r.w, r.h);
+      const d = img.data;
+      for (let p = 0; p < d.length; p += 4) {
+        const pr = d[p]!;
+        const pg = d[p + 1]!;
+        const pb = d[p + 2]!;
+        const pa = d[p + 3]!;
+        if (pa < 3) {
+          d[p + 3] = 0;
+          continue;
+        }
+        const lum = (pr + pg + pb) / 3;
+        // Plate / empty margin: very light and opaque — drop.
+        if (lum > 250 && pa > 220) {
+          d[p + 3] = 0;
+          continue;
+        }
+        // Artist mask: dark “ink” = wool; transparent elsewhere.
+        const ink = Math.max(0, (255 - lum) / 255);
+        if (ink < 0.03 && pa < 96) {
+          d[p + 3] = 0;
+          continue;
+        }
+        const outA = Math.min(255, Math.round(pa * Math.max(ink, 0.12)));
+        d[p] = 255;
+        d[p + 1] = 255;
+        d[p + 2] = 255;
+        d[p + 3] = outA;
+      }
+      ctx.putImageData(img, 0, 0);
+      const tex = Texture.from(canvas);
+      if (tex.source !== undefined) {
+        tex.source.scaleMode = "nearest";
+      }
+      out.push(tex);
+    }
+    return out.length === rects.length ? out : null;
+  } finally {
+    bmp?.close();
+  }
+}
+
+function destroyTextureList(textures: Texture[] | null): void {
+  if (textures === null) {
+    return;
+  }
+  for (const t of textures) {
+    t.destroy(true);
+  }
 }
 
 const playerBodyAtlasJsonZ = z.object({
@@ -362,6 +471,24 @@ function syncPlayerBodyAnimation(
   );
 }
 
+/** Local player sheep: base sprite + optional wool overlay (white silhouette × tint, no mask). */
+type SheepRig = {
+  root: Container;
+  base: AnimatedSprite;
+  wool: AnimatedSprite | null;
+};
+
+type PigRig = {
+  root: Container;
+  base: AnimatedSprite;
+};
+
+type ZombieRig = {
+  root: Container;
+  base: AnimatedSprite;
+  fire: AnimatedSprite;
+};
+
 export class EntityManager {
   private readonly world: World;
   private readonly input: InputManager;
@@ -399,6 +526,25 @@ export class EntityManager {
   private readonly remoteGraphics = new Map<string, Container>();
   private readonly droppedSprites = new Map<string, Sprite>();
   private droppedBobPhase = 0;
+  private mobManager: MobManager | null = null;
+  private sheepWalkTextures: Texture[] | null = null;
+  private sheepIdleTextures: Texture[] | null = null;
+  /** Pre-baked from `sheep_mask.png`: white RGB, alpha = wool — tint in `syncSheepSprites`. */
+  private sheepWoolOverlayWalkTextures: Texture[] | null = null;
+  private sheepWoolOverlayIdleTextures: Texture[] | null = null;
+  private readonly sheepSprites = new Map<number, SheepRig>();
+  private pigWalkTextures: Texture[] | null = null;
+  private pigIdleTextures: Texture[] | null = null;
+  private readonly pigSprites = new Map<number, PigRig>();
+  /** Reuses sliced player body textures (see {@link hydrateZombieTexturesFromPlayerBody}). */
+  private zombieWalkTextures: Texture[] | null = null;
+  private zombieIdleTextures: Texture[] | null = null;
+  private zombieJumpTextures: Texture[] | null = null;
+  private zombieAttackTextures: Texture[] | null = null;
+  private zombieFireTextures: Texture[] | null = null;
+  private zombieFirePhase = 0;
+  private zombieSpriteBaseScale = 1;
+  private readonly zombieSprites = new Map<number, ZombieRig>();
 
   constructor(
     world: World,
@@ -440,8 +586,42 @@ export class EntityManager {
     this.aimLineSprite = null;
     void this.loadAimLineSprite(pipeline);
     void this.loadPlayerSprites();
+    void this.loadSheepSprites();
+    void this.loadPigSprites();
+    void this.loadZombieSprites();
+    void this.loadZombieFireOverlay();
 
     // Remote players are added lazily in syncPlayerGraphic when their state appears in World.
+  }
+
+  private async loadZombieFireOverlay(): Promise<void> {
+    try {
+      const url = stratumCoreTextureAssetUrl("environment/fire.png");
+      const tex =
+        (await Assets.load<Texture>(url)) ?? Assets.get<Texture>(url);
+      if (tex === undefined || tex === Texture.EMPTY || tex.source === undefined) {
+        return;
+      }
+      tex.source.scaleMode = "nearest";
+      tex.source.autoGenerateMipmaps = false;
+      // `fire.png` is an animated strip: 8 vertical frames, 16×16 each (16×128 total).
+      const fw = 16;
+      const fh = 16;
+      const frames = 8;
+      const rects: { x: number; y: number; w: number; h: number }[] = [];
+      for (let i = 0; i < frames; i++) {
+        rects.push({ x: 0, y: i * fh, w: fw, h: fh });
+      }
+      const sliced = sliceAtlasFrames(tex, rects);
+      this.zombieFireTextures = sliced.length === frames ? sliced : null;
+    } catch {
+      this.zombieFireTextures = null;
+    }
+  }
+
+  /** Mobs render in the same layer as the local player root (see {@link syncSheepSprites}). */
+  setMobManager(manager: MobManager | null): void {
+    this.mobManager = manager;
   }
 
   getPlayer(): Player {
@@ -498,6 +678,12 @@ export class EntityManager {
         const sign = s.facingRight ? 1 : -1;
         root.rotation = sign * t * (Math.PI * 0.5);
         root.alpha = 1 - t;
+      } else if (s.sleeping) {
+        // Bed sleep pose: rotate the whole body root (local-only).
+        root.pivot.set(PLAYER_WIDTH * 0.5, PLAYER_HEIGHT * 0.55);
+        root.position.set(x, -y);
+        root.rotation = -Math.PI * 0.5;
+        root.alpha = 1;
       } else {
         root.pivot.set(0, 0);
         root.rotation = 0;
@@ -533,7 +719,23 @@ export class EntityManager {
         const jumpDown = this.playerJumpDownAnimTextures;
         const breaking = this.playerBreakingAnimTextures;
         const skid = this.playerSkidAnimTextures;
-        if (idle !== null && cycle !== null && cycle.length > 0) {
+        // While sleeping, force an idle pose (no mining/place animation loop).
+        if (s.sleeping) {
+          if (idle !== null && idle.length > 0) {
+            if (anim.textures !== idle) {
+              anim.textures = idle;
+            }
+            anim.gotoAndStop(0);
+            anim.stop();
+            anim.scale.x = s.facingRight ? -this.playerSpriteBaseScale : this.playerSpriteBaseScale;
+            anim.scale.y = this.playerSpriteBaseScale;
+          }
+          const held = this.localHeldItemSprite;
+          if (held !== null) {
+            held.visible = false;
+            held.rotation = 0;
+          }
+        } else if (idle !== null && cycle !== null && cycle.length > 0) {
           syncPlayerBodyAnimation(
             anim,
             s.onGround,
@@ -557,19 +759,25 @@ export class EntityManager {
           );
         }
         const breakingLoopActive =
+          !s.sleeping &&
           miningVisual &&
           breaking !== null &&
           breaking.length >= 2 &&
           anim.textures === breaking;
-        applyPlayerSpriteFeetPosition(
-          anim,
-          this.playerSpriteBaseScale,
-          breakingLoopActive,
-          s.facingRight,
-        );
+        if (!s.sleeping) {
+          applyPlayerSpriteFeetPosition(
+            anim,
+            this.playerSpriteBaseScale,
+            breakingLoopActive,
+            s.facingRight,
+          );
+        }
 
         const held = this.localHeldItemSprite;
         if (held !== null) {
+          if (s.sleeping) {
+            held.visible = false;
+          } else {
           const slot =
             ((s.hotbarSlot % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
           const stack = this.player.inventory.getStack(slot);
@@ -583,6 +791,7 @@ export class EntityManager {
             s.onGround,
             heldItemId,
           );
+          }
         }
 
         const hurtK =
@@ -708,6 +917,9 @@ export class EntityManager {
 
     this.syncAimGraphic(alpha);
     this.syncDroppedItems(dtSec);
+    this.syncSheepSprites(dtSec);
+    this.syncPigSprites(dtSec);
+    this.syncZombieSprites(dtSec);
   }
 
   /** Sync dropped item sprites to world state (call from render with frame dt for animation). */
@@ -787,27 +999,24 @@ export class EntityManager {
     const iy =
       playerState.prevPosition.y +
       (playerState.position.y - playerState.prevPosition.y) * alpha;
-    const centerX = ix;
-    const centerY = -iy - PLAYER_HEIGHT * 0.5;
     const mouseX = this.input.mouseWorldPos.x;
     const mouseY = this.input.mouseWorldPos.y;
-    const { dirX, dirY } = getAimUnitVectorFromFeet(
+    const {
+      dirX,
+      dirY,
+      lineStartX,
+      lineStartY,
+      lineLenPx,
+      aimX,
+      aimY,
+    } = getReachLineGeometry(
       ix,
       iy,
       mouseX,
       mouseY,
       playerState.facingRight,
+      REACH_BLOCKS,
     );
-    const dist = Math.hypot(mouseX - centerX, mouseY - centerY);
-
-    const startOffsetPx = BLOCK_SIZE;
-    const maxLenPx = REACH_BLOCKS * BLOCK_SIZE;
-    const lineLenPx = Math.min(Math.max(dist - startOffsetPx, 0), maxLenPx);
-
-    const lineStartX = centerX + dirX * startOffsetPx;
-    const lineStartY = centerY + dirY * startOffsetPx;
-    const aimX = lineStartX + dirX * lineLenPx;
-    const aimY = lineStartY + dirY * lineLenPx;
 
     const lineSprite = this.aimLineSprite;
     if (lineSprite !== null) {
@@ -1171,6 +1380,151 @@ export class EntityManager {
     }
   }
 
+  private async loadZombieSprites(): Promise<void> {
+    try {
+      const url = stratumCoreTextureAssetUrl(ZOMBIE_SPRITE_REL);
+      const sheet =
+        (await Assets.load<Texture>(url)) ?? Assets.get<Texture>(url);
+      if (
+        sheet === undefined ||
+        sheet === Texture.EMPTY ||
+        sheet.source === undefined
+      ) {
+        return;
+      }
+      sheet.source.scaleMode = "nearest";
+      sheet.source.autoGenerateMipmaps = false;
+      /**
+       * Zombie sprite sheets are allowed to differ from the player atlas.
+       * Current `zombie.png` is a single-row strip; slice uniformly, allowing 1px gutters.
+       */
+      const w = sheet.width;
+      const h = sheet.height;
+      if (w <= 0 || h <= 0) {
+        return;
+      }
+      // New zombie art uses an explicit spritesheet layout (see `sprite_sheet.json` used to pack it).
+      // Prefer exact coordinates (no heuristic slicing).
+      if (w === 119 && h === 31) {
+        const fh = 31;
+        const fw = 17;
+        const rect = (x: number): { x: number; y: number; w: number; h: number } => ({
+          x,
+          y: 0,
+          w: fw,
+          h: fh,
+        });
+        // Order below is semantic (idle, walk×4, jump, hit), not the original packer list.
+        const frames = sliceAtlasFrames(sheet, [
+          rect(0), // layer_1 idle
+          rect(17), // layer_2 walk
+          rect(34), // layer_3 walk
+          rect(51), // layer_4 walk
+          rect(68), // layer_5 walk
+          rect(102), // layer_7 jump
+          rect(85), // layer_8 hit
+        ]);
+        if (frames.length !== 7) {
+          return;
+        }
+        this.zombieIdleTextures = [frames[0]!];
+        this.zombieWalkTextures = frames.slice(1, 5);
+        this.zombieJumpTextures = [frames[5]!];
+        this.zombieAttackTextures = [frames[6]!];
+      } else {
+        const fh = h;
+
+        // Prefer a layout with 1px gutters: many strips are `(frameW * n) + (n-1)` wide.
+        const pickStripLayout = (): {
+          cols: number;
+          fw: number;
+          gutter: number;
+          startX: number;
+        } => {
+          const candidates: Array<{ cols: number; fw: number; gutter: number }> =
+            [];
+          for (const gutter of [1, 0]) {
+            for (let cols = 4; cols <= 12; cols++) {
+              const num = w - gutter * (cols - 1);
+              if (num <= 0) continue;
+              if (num % cols !== 0) continue;
+              const fw = num / cols;
+              if (fw < 10 || fw > 64) continue;
+              candidates.push({ cols, fw, gutter });
+            }
+          }
+
+          // Prefer exact 7-frame strips when plausible (idle, walk×4, jump, hit).
+          // Many strips have 1px total padding, e.g. 141px wide for 7×20px frames.
+          const approxFw7 = Math.floor(w / 7);
+          if (approxFw7 >= 10 && approxFw7 <= 64) {
+            const fw = approxFw7;
+            const contentW = fw * 7;
+            const startX = Math.floor((w - contentW) / 2);
+            return { cols: 7, fw, gutter: 0, startX };
+          }
+
+          // Otherwise pick any valid candidate; center it if there's leftover padding.
+          const picked = candidates[0];
+          if (picked !== undefined) {
+            const contentW =
+              picked.fw * picked.cols + picked.gutter * (picked.cols - 1);
+            const startX = Math.floor((w - contentW) / 2);
+            return { ...picked, startX };
+          }
+
+          // Last resort: coarse uniform slice.
+          const cols = 7;
+          const fw = Math.max(1, Math.floor(w / cols));
+          const contentW = fw * cols;
+          const startX = Math.floor((w - contentW) / 2);
+          return { cols, fw, gutter: 0, startX };
+        };
+
+        const { cols, fw, gutter, startX } = pickStripLayout();
+        const rects: { x: number; y: number; w: number; h: number }[] = [];
+        for (let i = 0; i < cols; i++) {
+          rects.push({ x: startX + i * (fw + gutter), y: 0, w: fw, h: fh });
+        }
+        const frames = sliceAtlasFrames(sheet, rects);
+        if (frames.length <= 1) {
+          return;
+        }
+        // Expected zombie strip layout:
+        // 1 = idle, 2–5 = walk, 6 = jump, 7 = hit (attack).
+        this.zombieIdleTextures = [frames[0]!];
+        this.zombieWalkTextures =
+          frames.length >= 5 ? frames.slice(1, 5) : frames.slice(1);
+        this.zombieJumpTextures = frames.length >= 6 ? [frames[5]!] : null;
+        this.zombieAttackTextures = frames.length >= 7 ? [frames[6]!] : null;
+      }
+
+      let maxW = 0;
+      let maxH = 0;
+      const all = [
+        ...(this.zombieIdleTextures ?? []),
+        ...(this.zombieWalkTextures ?? []),
+        ...(this.zombieJumpTextures ?? []),
+        ...(this.zombieAttackTextures ?? []),
+      ];
+      for (const f of all) {
+        maxW = Math.max(maxW, f.width);
+        maxH = Math.max(maxH, f.height);
+      }
+      if (maxW <= 0 || maxH <= 0) {
+        return;
+      }
+      this.zombieSpriteBaseScale =
+        Math.min(PLAYER_WIDTH / maxW, PLAYER_HEIGHT / maxH) *
+        PLAYER_SPRITE_SCALE_MULTIPLIER;
+    } catch {
+      this.zombieWalkTextures = null;
+      this.zombieIdleTextures = null;
+      this.zombieJumpTextures = null;
+      this.zombieAttackTextures = null;
+    }
+  }
+
   private async loadAimLineSprite(pipeline: RenderPipeline): Promise<void> {
     const pointerLineUrl = stratumCoreTextureAssetUrl("GUI/pointer_line.png");
     try {
@@ -1192,6 +1546,465 @@ export class EntityManager {
     } catch {
       // Optional cosmetic asset: keep graphics fallback when missing.
       this.aimLineSprite = null;
+    }
+  }
+
+  private async loadSheepSprites(): Promise<void> {
+    try {
+      const url = stratumCoreTextureAssetUrl(SHEEP_SPRITE_REL);
+      const sheet =
+        (await Assets.load<Texture>(url)) ?? Assets.get<Texture>(url);
+      if (sheet === undefined || sheet.source === undefined) {
+        return;
+      }
+      sheet.source.scaleMode = "nearest";
+      const fw = Math.floor(sheet.width / SHEEP_WALK_FRAMES);
+      const fh = Math.floor(sheet.height / 2);
+      if (fw <= 0 || fh <= 0) {
+        return;
+      }
+      const walkRects: { x: number; y: number; w: number; h: number }[] = [];
+      for (let i = 0; i < SHEEP_WALK_FRAMES; i++) {
+        walkRects.push({ x: i * fw, y: 0, w: fw, h: fh });
+      }
+      const idleRects: { x: number; y: number; w: number; h: number }[] = [];
+      for (let i = 0; i < SHEEP_IDLE_FRAMES; i++) {
+        idleRects.push({ x: i * fw, y: fh, w: fw, h: fh });
+      }
+      this.sheepWalkTextures = sliceAtlasFrames(sheet, walkRects);
+      this.sheepIdleTextures = sliceAtlasFrames(sheet, idleRects);
+
+      const maskUrl = stratumCoreTextureAssetUrl(SHEEP_MASK_SPRITE_REL);
+      const maskSheet =
+        (await Assets.load<Texture>(maskUrl)) ?? Assets.get<Texture>(maskUrl);
+      if (
+        maskSheet !== undefined &&
+        maskSheet.source !== undefined &&
+        maskSheet.width === sheet.width &&
+        maskSheet.height === sheet.height
+      ) {
+        const [ovWalk, ovIdle] = await Promise.all([
+          buildSheepWoolSilhouetteTextures(maskUrl, walkRects),
+          buildSheepWoolSilhouetteTextures(maskUrl, idleRects),
+        ]);
+        if (ovWalk === null || ovIdle === null) {
+          destroyTextureList(ovWalk);
+          destroyTextureList(ovIdle);
+          this.sheepWoolOverlayWalkTextures = null;
+          this.sheepWoolOverlayIdleTextures = null;
+        } else {
+          this.sheepWoolOverlayWalkTextures = ovWalk;
+          this.sheepWoolOverlayIdleTextures = ovIdle;
+        }
+      } else {
+        this.sheepWoolOverlayWalkTextures = null;
+        this.sheepWoolOverlayIdleTextures = null;
+      }
+    } catch {
+      this.sheepWalkTextures = null;
+      this.sheepIdleTextures = null;
+      this.sheepWoolOverlayWalkTextures = null;
+      this.sheepWoolOverlayIdleTextures = null;
+    }
+  }
+
+  private async loadPigSprites(): Promise<void> {
+    try {
+      const url = stratumCoreTextureAssetUrl(PIG_SPRITE_REL);
+      const sheet =
+        (await Assets.load<Texture>(url)) ?? Assets.get<Texture>(url);
+      if (sheet === undefined || sheet.source === undefined) {
+        return;
+      }
+      sheet.source.scaleMode = "nearest";
+      const fw = Math.floor(sheet.width / PIG_WALK_FRAMES);
+      const fh = Math.floor(sheet.height / 2);
+      if (fw <= 0 || fh <= 0) {
+        return;
+      }
+      const walkRects: { x: number; y: number; w: number; h: number }[] = [];
+      for (let i = 0; i < PIG_WALK_FRAMES; i++) {
+        walkRects.push({ x: i * fw, y: 0, w: fw, h: fh });
+      }
+      const idleRects: { x: number; y: number; w: number; h: number }[] = [];
+      for (let i = 0; i < PIG_IDLE_FRAMES; i++) {
+        idleRects.push({ x: i * fw, y: fh, w: fw, h: fh });
+      }
+      this.pigWalkTextures = sliceAtlasFrames(sheet, walkRects);
+      this.pigIdleTextures = sliceAtlasFrames(sheet, idleRects);
+    } catch {
+      this.pigWalkTextures = null;
+      this.pigIdleTextures = null;
+    }
+  }
+
+  private syncSheepSprites(_dtSec: number): void {
+    const mm = this.mobManager;
+    const walk = this.sheepWalkTextures;
+    const idle = this.sheepIdleTextures;
+    const woolWalk = this.sheepWoolOverlayWalkTextures;
+    const woolIdle = this.sheepWoolOverlayIdleTextures;
+    if (
+      mm === null ||
+      walk === null ||
+      idle === null ||
+      walk.length === 0 ||
+      idle.length === 0
+    ) {
+      return;
+    }
+    const parent = this.playerGraphic?.parent;
+    if (parent === null || parent === undefined) {
+      return;
+    }
+    const hasWoolOverlay =
+      woolWalk !== null &&
+      woolIdle !== null &&
+      woolWalk.length > 0 &&
+      woolIdle.length > 0;
+    const views = mm.getPublicViews().filter((v) => v.type === MobType.Sheep);
+    const alive = new Set<number>();
+    let baseScale = 1.25;
+    const extraNudgeDownPx = 3;
+    for (const v of views) {
+      alive.add(v.id);
+      let rig = this.sheepSprites.get(v.id);
+      if (rig === undefined) {
+        const root = new Container();
+        root.sortableChildren = true;
+        root.zIndex = -2;
+        root.cullable = false;
+        root.cullableChildren = false;
+        const base = new AnimatedSprite({
+          textures: walk,
+          animationSpeed: 0.16,
+          loop: true,
+          autoPlay: true,
+        });
+        base.anchor.set(0.5, 1);
+        base.roundPixels = false;
+        base.zIndex = 0;
+        root.addChild(base);
+        let wool: AnimatedSprite | null = null;
+        if (hasWoolOverlay) {
+          const initialWoolFrames =
+            v.walking && !v.panic ? woolWalk! : woolIdle!;
+          wool = new AnimatedSprite({
+            textures: initialWoolFrames,
+            animationSpeed: 0.16,
+            loop: true,
+            autoPlay: true,
+          });
+          wool.anchor.set(0.5, 1);
+          wool.roundPixels = false;
+          // Multiply keeps base shading while applying dye tint (no mask/stencil involved).
+          wool.blendMode = "multiply";
+          wool.cullable = false;
+          wool.zIndex = 1;
+          root.addChild(wool);
+        }
+        parent.addChild(root);
+        rig = { root, base, wool };
+        this.sheepSprites.set(v.id, rig);
+      }
+      const useWalk = v.walking && !v.panic;
+      const frames = useWalk ? walk : idle;
+      const woolFrames =
+        hasWoolOverlay && woolWalk !== null && woolIdle !== null
+          ? useWalk
+            ? woolWalk
+            : woolIdle
+          : null;
+      const { root, base, wool } = rig;
+      if (base.textures !== frames) {
+        base.textures = frames;
+        if (v.deathAnimRemainSec > 0) {
+          base.gotoAndStop(0);
+        } else {
+          base.gotoAndPlay(0);
+        }
+      }
+      if (wool !== null && woolFrames !== null) {
+        if (wool.textures !== woolFrames) {
+          wool.textures = woolFrames;
+          if (v.deathAnimRemainSec > 0) {
+            wool.gotoAndStop(0);
+          } else {
+            wool.gotoAndPlay(0);
+          }
+        }
+      }
+      base.animationSpeed = useWalk ? 0.2 : 0.12;
+      if (wool !== null) {
+        wool.animationSpeed = useWalk ? 0.2 : 0.12;
+        wool.tint = getSheepWoolTintHex(v.woolColor);
+        base.tint = 0xffffff;
+      } else {
+        base.tint = getSheepWoolTintHex(v.woolColor);
+      }
+      const frameH = base.textures[0]?.height ?? 0;
+      const effectiveH = Math.max(1, frameH - SHEEP_FEET_SPRITE_NUDGE_Y_PX);
+      baseScale =
+        (SHEEP_BODY_TRIM_TARGET_PX / effectiveH) * SHEEP_RENDER_SCALE_MULT;
+      // Keep root X scale positive; flip facing on sprites (avoids odd transforms with layered sprites).
+      const flipX = v.facingRight ? -1 : 1;
+      root.scale.set(baseScale, baseScale);
+      base.scale.set(flipX, 1);
+      if (wool !== null) {
+        wool.scale.set(flipX, 1);
+      }
+      root.tint = v.hurt ? 0xff4a4a : 0xffffff;
+      root.position.set(v.x, -v.y + SHEEP_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx);
+      if (v.deathAnimRemainSec > 0) {
+        base.stop();
+        if (wool !== null) {
+          wool.stop();
+        }
+        const t = Math.min(
+          1,
+          Math.max(0, 1 - v.deathAnimRemainSec / SHEEP_DEATH_ANIM_SEC),
+        );
+        const sign = v.facingRight ? 1 : -1;
+        root.rotation = sign * t * (Math.PI * 0.5);
+        root.alpha = 1 - t;
+      } else {
+        root.rotation = 0;
+        root.alpha = 1;
+      }
+    }
+    for (const id of [...this.sheepSprites.keys()]) {
+      if (!alive.has(id)) {
+        const rig = this.sheepSprites.get(id);
+        if (rig !== undefined) {
+          rig.root.parent?.removeChild(rig.root);
+          rig.root.destroy({ children: true });
+        }
+        this.sheepSprites.delete(id);
+      }
+    }
+  }
+
+  private syncPigSprites(_dtSec: number): void {
+    const mm = this.mobManager;
+    const walk = this.pigWalkTextures;
+    const idle = this.pigIdleTextures;
+    if (
+      mm === null ||
+      walk === null ||
+      idle === null ||
+      walk.length === 0 ||
+      idle.length === 0
+    ) {
+      return;
+    }
+    const parent = this.playerGraphic?.parent;
+    if (parent === null || parent === undefined) {
+      return;
+    }
+    const views = mm.getPublicViews().filter((v) => v.type === MobType.Pig);
+    const alive = new Set<number>();
+    let baseScale = 1.25;
+    const extraNudgeDownPx = 6;
+    for (const v of views) {
+      alive.add(v.id);
+      let rig = this.pigSprites.get(v.id);
+      if (rig === undefined) {
+        const root = new Container();
+        root.sortableChildren = true;
+        root.zIndex = -2;
+        root.cullable = false;
+        root.cullableChildren = false;
+        const base = new AnimatedSprite({
+          textures: walk,
+          animationSpeed: 0.16,
+          loop: true,
+          autoPlay: true,
+        });
+        base.anchor.set(0.5, 1);
+        base.roundPixels = false;
+        base.zIndex = 0;
+        root.addChild(base);
+        parent.addChild(root);
+        rig = { root, base };
+        this.pigSprites.set(v.id, rig);
+      }
+      const useWalk = v.walking && !v.panic;
+      const frames = useWalk ? walk : idle;
+      const { root, base } = rig;
+      if (base.textures !== frames) {
+        base.textures = frames;
+        if (v.deathAnimRemainSec > 0) {
+          base.gotoAndStop(0);
+        } else {
+          base.gotoAndPlay(0);
+        }
+      }
+      base.animationSpeed = useWalk ? 0.2 : 0.12;
+      base.tint = 0xffffff;
+      const frameH = base.textures[0]?.height ?? 0;
+      const effectiveH = Math.max(1, frameH - PIG_FEET_SPRITE_NUDGE_Y_PX);
+      baseScale =
+        (PIG_BODY_TRIM_TARGET_PX / effectiveH) * PIG_RENDER_SCALE_MULT;
+      const flipX = v.facingRight ? -1 : 1;
+      root.scale.set(baseScale, baseScale);
+      base.scale.set(flipX, 1);
+      root.tint = v.hurt ? 0xff4a4a : 0xffffff;
+      root.position.set(v.x, -v.y + PIG_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx);
+      if (v.deathAnimRemainSec > 0) {
+        base.stop();
+        const t = Math.min(1, Math.max(0, 1 - v.deathAnimRemainSec / PIG_DEATH_ANIM_SEC));
+        const sign = v.facingRight ? 1 : -1;
+        root.rotation = sign * t * (Math.PI * 0.5);
+        root.alpha = 1 - t;
+      } else {
+        root.rotation = 0;
+        root.alpha = 1;
+      }
+    }
+    for (const id of [...this.pigSprites.keys()]) {
+      if (!alive.has(id)) {
+        const rig = this.pigSprites.get(id);
+        if (rig !== undefined) {
+          rig.root.parent?.removeChild(rig.root);
+          rig.root.destroy({ children: true });
+        }
+        this.pigSprites.delete(id);
+      }
+    }
+  }
+
+  private syncZombieSprites(_dtSec: number): void {
+    this.zombieFirePhase += _dtSec * 9;
+    const mm = this.mobManager;
+    const walk = this.zombieWalkTextures;
+    const idle = this.zombieIdleTextures;
+    const jump = this.zombieJumpTextures;
+    const attack = this.zombieAttackTextures;
+    if (
+      mm === null ||
+      walk === null ||
+      idle === null ||
+      walk.length === 0 ||
+      idle.length === 0
+    ) {
+      return;
+    }
+    const parent = this.playerGraphic?.parent;
+    if (parent === null || parent === undefined) {
+      return;
+    }
+    const views = mm.getPublicViews().filter((v) => v.type === MobType.Zombie);
+    const alive = new Set<number>();
+    const baseScale = this.zombieSpriteBaseScale;
+    const extraNudgeDownPx = 1;
+    for (const v of views) {
+      alive.add(v.id);
+      let rig = this.zombieSprites.get(v.id);
+      if (rig === undefined) {
+        const root = new Container();
+        root.sortableChildren = true;
+        root.zIndex = -2;
+        root.cullable = false;
+        root.cullableChildren = false;
+        const base = new AnimatedSprite({
+          textures: walk,
+          animationSpeed: PLAYER_WALK_ANIM_SPEED,
+          loop: true,
+          autoPlay: true,
+        });
+        base.anchor.set(0.5, 1);
+        base.roundPixels = false;
+        base.zIndex = 0;
+        base.tint = 0xffffff;
+        root.addChild(base);
+        const fire = new AnimatedSprite({
+          textures: this.zombieFireTextures ?? [Texture.EMPTY],
+          animationSpeed: 0.22,
+          loop: true,
+          autoPlay: true,
+        });
+        fire.anchor.set(0.5, 1);
+        fire.roundPixels = false;
+        fire.zIndex = 1;
+        fire.visible = false;
+        fire.gotoAndPlay(0);
+        root.addChild(fire);
+        parent.addChild(root);
+        rig = { root, base, fire };
+        this.zombieSprites.set(v.id, rig);
+      }
+      const useWalk = v.walking && !v.panic;
+      const useAttack = v.attacking && attack !== null && attack.length > 0;
+      const useJump = !useAttack && jump !== null && jump.length > 0 && v.vy < -30;
+      const frames = useAttack ? attack : useJump ? jump : useWalk ? walk : idle;
+      const { root, base, fire } = rig;
+      if (base.textures !== frames) {
+        base.textures = frames;
+        if (v.deathAnimRemainSec > 0) {
+          base.gotoAndStop(0);
+        } else if (useAttack) {
+          base.gotoAndStop(0);
+        } else if (useJump) {
+          base.gotoAndStop(0);
+        } else {
+          base.gotoAndPlay(0);
+        }
+      }
+      base.animationSpeed = useWalk
+        ? PLAYER_WALK_ANIM_SPEED * 1.15
+        : PLAYER_WALK_ANIM_SPEED * 0.85;
+      base.tint = 0xffffff;
+      const flipX = v.facingRight ? -1 : 1;
+      root.scale.set(baseScale, baseScale);
+      base.scale.set(flipX, 1);
+      // The hit frame in some strips leans forward a few pixels; counter-nudge so the feet stay planted.
+      const hitBackPx = 3;
+      base.position.x = useAttack ? (v.facingRight ? -hitBackPx : hitBackPx) : 0;
+      root.tint = v.hurt ? 0xff4a4a : 0xffffff;
+      root.position.set(
+        v.x,
+        -v.y + ZOMBIE_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx,
+      );
+
+      const burning = v.burning && this.zombieFireTextures !== null;
+      fire.visible = burning && v.deathAnimRemainSec <= 0;
+      if (fire.visible) {
+        fire.position.set(-2, -3);
+        fire.scale.set(1, 1);
+        if (!fire.playing) {
+          fire.gotoAndPlay(0);
+        }
+        const flicker =
+          0.78 +
+          0.18 * Math.sin(this.zombieFirePhase + v.id * 0.7) +
+          0.06 * Math.sin(this.zombieFirePhase * 2.1 + v.id * 1.3);
+        fire.alpha = Math.max(0.25, Math.min(0.98, flicker));
+      } else {
+        fire.stop();
+      }
+      if (v.deathAnimRemainSec > 0) {
+        base.stop();
+        const t = Math.min(
+          1,
+          Math.max(0, 1 - v.deathAnimRemainSec / ZOMBIE_DEATH_ANIM_SEC),
+        );
+        const sign = v.facingRight ? 1 : -1;
+        root.rotation = sign * t * (Math.PI * 0.5);
+        root.alpha = 1 - t;
+      } else {
+        root.rotation = 0;
+        root.alpha = 1;
+      }
+    }
+    for (const id of [...this.zombieSprites.keys()]) {
+      if (!alive.has(id)) {
+        const rig = this.zombieSprites.get(id);
+        if (rig !== undefined) {
+          rig.root.parent?.removeChild(rig.root);
+          rig.root.destroy({ children: true });
+        }
+        this.zombieSprites.delete(id);
+      }
     }
   }
 
@@ -1235,5 +2048,35 @@ export class EntityManager {
       sprite.destroy();
     }
     this.droppedSprites.clear();
+    for (const rig of this.sheepSprites.values()) {
+      rig.root.parent?.removeChild(rig.root);
+      rig.root.destroy({ children: true });
+    }
+    this.sheepSprites.clear();
+    for (const rig of this.pigSprites.values()) {
+      rig.root.parent?.removeChild(rig.root);
+      rig.root.destroy({ children: true });
+    }
+    this.pigSprites.clear();
+    for (const rig of this.zombieSprites.values()) {
+      rig.root.parent?.removeChild(rig.root);
+      rig.root.destroy({ children: true });
+    }
+    this.zombieSprites.clear();
+    this.zombieWalkTextures = null;
+    this.zombieIdleTextures = null;
+    this.zombieJumpTextures = null;
+    this.zombieAttackTextures = null;
+    this.zombieFireTextures = null;
+    this.zombieSpriteBaseScale = 1;
+    destroyTextureList(this.sheepWoolOverlayWalkTextures);
+    destroyTextureList(this.sheepWoolOverlayIdleTextures);
+    this.sheepWalkTextures = null;
+    this.sheepIdleTextures = null;
+    this.sheepWoolOverlayWalkTextures = null;
+    this.sheepWoolOverlayIdleTextures = null;
+    this.pigWalkTextures = null;
+    this.pigIdleTextures = null;
+    this.mobManager = null;
   }
 }

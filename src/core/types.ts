@@ -147,6 +147,7 @@ export type GameEvent =
   | { type: "chest:open-request"; wx: number; wy: number }
   | { type: "crafting-table:open-request"; wx: number; wy: number }
   | { type: "furnace:open-request"; wx: number; wy: number }
+  | { type: "bed:sleep-request"; wx: number; wy: number }
   /** Door opened/closed by proximity (not redstone latch); latch stays closed both frames. */
   | {
       type: "door:proximity-swing";
@@ -189,9 +190,19 @@ export type GameEvent =
       coverBytes: Uint8Array;
       displayName: string;
     }
+  | {
+      type: "workshop:publish-world-requested";
+      worldJsonBytes: Uint8Array;
+      coverBytes: Uint8Array;
+      displayName: string;
+      description: string;
+    }
   | { type: "workshop:open-detail"; recordId: string }
   | { type: "workshop:post-comment"; recordId: string; body: string }
   | { type: "workshop:post-rating"; recordId: string; stars: number }
+  | { type: "workshop:dev-folder-picked"; handle: FileSystemDirectoryHandle | null }
+  | { type: "workshop:dev-sync-ok"; packCount: number }
+  | { type: "workshop:dev-sync-error"; message: string }
   | {
       type: "workshop:list-result";
       records: readonly ModListEntry[];

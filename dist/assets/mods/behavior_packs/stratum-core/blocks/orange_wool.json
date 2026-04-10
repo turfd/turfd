@@ -1,0 +1,25 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": {
+      "identifier": "stratum:orange_wool"
+    },
+    "components": {
+      "stratum:display_name": "Orange Wool",
+      "stratum:texture": {
+        "all": "orange_wool"
+      },
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 0.8,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:loot_table": "stratum:orange_wool",
+      "stratum:tags": [
+        "stratum:wool"
+      ],
+      "stratum:numeric_id": 63
+    }
+  }
+}

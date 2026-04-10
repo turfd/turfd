@@ -75,6 +75,17 @@ export enum MessageType {
   DROP_PICKUP_REQUEST = 0x20,
   /** Client → host: cursor stack thrown into the world (host spawns replicated drop). */
   THROW_CURSOR_STACK = 0x21,
+  /** Host → clients: authoritative mob pose + vitals (see flags). */
+  ENTITY_STATE = 0x22,
+  /** Client → host: melee hit request on replicated mob. */
+  ENTITY_HIT_REQUEST = 0x23,
+  /** Host → one client: apply environmental / mob damage to that peer’s local player. */
+  PLAYER_DAMAGE_APPLIED = 0x24,
+  /** Client → host: request sleep/time skip at a bed cell. */
+  SLEEP_REQUEST = 0x25,
+  /** Host → clients: play sleep transition (fade + pose). */
+  SLEEP_TRANSITION = 0x26,
+  /** Host → clients: authoritative season transition state. */
 }
 
 /** Back-compat alias used across the codebase. */
@@ -345,11 +356,49 @@ export type EntitySpawnMsg = {
   entityType: number;
   x: number;
   y: number;
+  /** Dye ordinal 0–15; absent on legacy packets (treated as white). */
+  woolColor?: number;
 };
 
 export type EntityDespawnMsg = {
   type: MessageType.ENTITY_DESPAWN;
   entityId: number;
+};
+
+/** Wire: flags bit0 = facingRight, bit1 = panic, bit2 = walking, bit3 = hurtTint, bit4 = attackSwing, bit5 = burning. */
+export type EntityStateMsg = {
+  type: MessageType.ENTITY_STATE;
+  entityId: number;
+  entityType: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  flags: number;
+  /** Sheep wool dye ordinal; absent on legacy packets. */
+  woolColor?: number;
+  /** Death pose time remaining in 10ms units (`0` = not dying). Absent if wire buffer has no byte at index 42. */
+  deathAnim10Ms?: number;
+};
+
+export type EntityHitRequestMsg = {
+  type: MessageType.ENTITY_HIT_REQUEST;
+  entityId: number;
+  /**
+   * Optional: held item id at attack time (0 when empty). Added later; older clients may omit.
+   */
+  heldItemId?: number;
+  /**
+   * Optional: bit 0 = sprint knockback (Java sprint-attack). Absent on 7-byte legacy payloads.
+   */
+  attackFlags?: number;
+};
+
+/** Host → client: authoritative damage to the receiving player (e.g. zombie melee). */
+export type PlayerDamageAppliedMsg = {
+  type: MessageType.PLAYER_DAMAGE_APPLIED;
+  damage: number;
 };
 
 export type ChatMsg = {
@@ -380,6 +429,20 @@ export type AssignedSpawnMsg = {
   y: number;
 };
 
+export type SleepRequestMsg = {
+  type: MessageType.SLEEP_REQUEST;
+  wx: number;
+  wy: number;
+};
+
+export type SleepTransitionMsg = {
+  type: MessageType.SLEEP_TRANSITION;
+  /** 0 = to night, 1 = to morning. */
+  kind: 0 | 1;
+  /** Total transition duration in milliseconds (clients use for fade timings). */
+  durationMs: number;
+};
+
 /** Wire: type byte + two float64 (17 bytes). */
 export const ASSIGNED_SPAWN_WIRE_BYTE_LENGTH = 17;
 
@@ -391,11 +454,16 @@ export type NetworkMessage =
   | PlayerStateRelayMsg
   | EntitySpawnMsg
   | EntityDespawnMsg
+  | EntityStateMsg
+  | EntityHitRequestMsg
+  | PlayerDamageAppliedMsg
   | ChatMsg
   | SystemMessageMsg
   | PingMsg
   | GiveItemStackMsg
   | AssignedSpawnMsg
+  | SleepRequestMsg
+  | SleepTransitionMsg
   | ChestTakeRequestMsg
   | FurnaceSlotRequestMsg
   | ChestPutRequestMsg
@@ -649,13 +717,15 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
     }
 
     case MessageType.ENTITY_SPAWN: {
-      const buf = new ArrayBuffer(23);
+      const wc = msg.woolColor !== undefined ? msg.woolColor & 0xff : 0;
+      const buf = new ArrayBuffer(24);
       const v = new DataView(buf);
       v.setUint8(0, MessageType.ENTITY_SPAWN);
       v.setUint32(1, msg.entityId, LE);
       v.setUint16(5, msg.entityType, LE);
       v.setFloat64(7, msg.x, LE);
       v.setFloat64(15, msg.y, LE);
+      v.setUint8(23, wc);
       return buf;
     }
 
@@ -722,6 +792,24 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       v.setUint8(0, MessageType.ASSIGNED_SPAWN);
       v.setFloat64(1, msg.x, LE);
       v.setFloat64(9, msg.y, LE);
+      return buf;
+    }
+
+    case MessageType.SLEEP_REQUEST: {
+      const buf = new ArrayBuffer(9);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.SLEEP_REQUEST);
+      v.setInt32(1, msg.wx, LE);
+      v.setInt32(5, msg.wy, LE);
+      return buf;
+    }
+
+    case MessageType.SLEEP_TRANSITION: {
+      const buf = new ArrayBuffer(6);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.SLEEP_TRANSITION);
+      v.setUint8(1, msg.kind & 0xff);
+      v.setUint32(2, msg.durationMs >>> 0, LE);
       return buf;
     }
 
@@ -887,6 +975,44 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       v.setFloat64(21, msg.y, LE);
       v.setFloat64(29, msg.vx, LE);
       v.setFloat64(37, msg.vy, LE);
+      return buf;
+    }
+
+    case MessageType.ENTITY_STATE: {
+      const buf = new ArrayBuffer(43);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.ENTITY_STATE);
+      v.setUint32(1, msg.entityId >>> 0, LE);
+      v.setUint16(5, msg.entityType & 0xffff, LE);
+      v.setFloat64(7, msg.x, LE);
+      v.setFloat64(15, msg.y, LE);
+      v.setFloat64(23, msg.vx, LE);
+      v.setFloat64(31, msg.vy, LE);
+      v.setUint8(39, msg.hp & 0xff);
+      v.setUint8(40, msg.flags & 0xff);
+      v.setUint8(41, (msg.woolColor !== undefined ? msg.woolColor : 0) & 0xff);
+      v.setUint8(42, (msg.deathAnim10Ms !== undefined ? msg.deathAnim10Ms : 0) & 0xff);
+      return buf;
+    }
+
+    case MessageType.ENTITY_HIT_REQUEST: {
+      // v2: heldItemId (uint16). v3: + attackFlags (uint8) for sprint knockback, etc.
+      const held = msg.heldItemId ?? 0;
+      const flags = msg.attackFlags ?? 0;
+      const buf = new ArrayBuffer(8);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.ENTITY_HIT_REQUEST);
+      v.setUint32(1, msg.entityId >>> 0, LE);
+      v.setUint16(5, held & 0xffff, LE);
+      v.setUint8(7, flags & 0xff);
+      return buf;
+    }
+
+    case MessageType.PLAYER_DAMAGE_APPLIED: {
+      const buf = new ArrayBuffer(3);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.PLAYER_DAMAGE_APPLIED);
+      v.setUint16(1, msg.damage & 0xffff, LE);
       return buf;
     }
 
@@ -1126,14 +1252,17 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       };
     }
 
-    case MessageType.ENTITY_SPAWN:
+    case MessageType.ENTITY_SPAWN: {
+      const woolColor = v.byteLength >= 24 ? v.getUint8(23) : 0;
       return {
         type: MessageType.ENTITY_SPAWN,
         entityId: v.getUint32(1, LE),
         entityType: v.getUint16(5, LE),
         x: v.getFloat64(7, LE),
         y: v.getFloat64(15, LE),
+        woolColor,
       };
+    }
 
     case MessageType.ENTITY_DESPAWN:
       return {
@@ -1203,6 +1332,29 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         type: MessageType.ASSIGNED_SPAWN,
         x: v.getFloat64(1, LE),
         y: v.getFloat64(9, LE),
+      };
+    }
+
+    case MessageType.SLEEP_REQUEST: {
+      if (v.byteLength < 9) {
+        throw new Error("SLEEP_REQUEST: buffer too short");
+      }
+      return {
+        type: MessageType.SLEEP_REQUEST,
+        wx: v.getInt32(1, LE),
+        wy: v.getInt32(5, LE),
+      };
+    }
+
+    case MessageType.SLEEP_TRANSITION: {
+      if (v.byteLength < 6) {
+        throw new Error("SLEEP_TRANSITION: buffer too short");
+      }
+      const kindByte = v.getUint8(1);
+      return {
+        type: MessageType.SLEEP_TRANSITION,
+        kind: (kindByte === 1 ? 1 : 0) as 0 | 1,
+        durationMs: v.getUint32(2, LE),
       };
     }
 
@@ -1380,6 +1532,51 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         y: v.getFloat64(21, LE),
         vx: v.getFloat64(29, LE),
         vy: v.getFloat64(37, LE),
+      };
+    }
+
+    case MessageType.ENTITY_STATE: {
+      if (v.byteLength < 41) {
+        throw new Error("ENTITY_STATE: buffer too short");
+      }
+      const woolColor = v.byteLength >= 43 ? v.getUint8(41) : 0;
+      const deathAnim10Ms = v.byteLength >= 43 ? v.getUint8(42) : 0;
+      return {
+        type: MessageType.ENTITY_STATE,
+        entityId: v.getUint32(1, LE),
+        entityType: v.getUint16(5, LE),
+        x: v.getFloat64(7, LE),
+        y: v.getFloat64(15, LE),
+        vx: v.getFloat64(23, LE),
+        vy: v.getFloat64(31, LE),
+        hp: v.getUint8(39),
+        flags: v.getUint8(40),
+        woolColor,
+        ...(deathAnim10Ms !== 0 ? { deathAnim10Ms } : {}),
+      };
+    }
+
+    case MessageType.ENTITY_HIT_REQUEST: {
+      if (v.byteLength < 5) {
+        throw new Error("ENTITY_HIT_REQUEST: buffer too short");
+      }
+      const heldItemId = v.byteLength >= 7 ? v.getUint16(5, LE) : 0;
+      const attackFlags = v.byteLength >= 8 ? v.getUint8(7) : 0;
+      return {
+        type: MessageType.ENTITY_HIT_REQUEST,
+        entityId: v.getUint32(1, LE),
+        ...(heldItemId !== 0 ? { heldItemId } : {}),
+        ...(attackFlags !== 0 ? { attackFlags } : {}),
+      };
+    }
+
+    case MessageType.PLAYER_DAMAGE_APPLIED: {
+      if (v.byteLength < 3) {
+        throw new Error("PLAYER_DAMAGE_APPLIED: buffer too short");
+      }
+      return {
+        type: MessageType.PLAYER_DAMAGE_APPLIED,
+        damage: v.getUint16(1, LE),
       };
     }
 

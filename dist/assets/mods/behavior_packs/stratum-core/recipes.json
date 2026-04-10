@@ -303,6 +303,56 @@
       "output": { "itemId": "stratum:diamond_hoe", "count": 1 }
     },
     {
+      "id": "stratum:wooden_sword_from_planks_and_stick",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "tag": "stratum:planks", "count": 2 },
+        { "itemId": "stratum:stick", "count": 1 }
+      ],
+      "output": { "itemId": "stratum:wooden_sword", "count": 1 }
+    },
+    {
+      "id": "stratum:stone_sword_from_cobble_and_stick",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:cobblestone", "count": 2 },
+        { "itemId": "stratum:stick", "count": 1 }
+      ],
+      "output": { "itemId": "stratum:stone_sword", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_sword_from_ingots_and_stick",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:iron_ingot", "count": 2 },
+        { "itemId": "stratum:stick", "count": 1 }
+      ],
+      "output": { "itemId": "stratum:iron_sword", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_sword_from_ingots_and_stick",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:gold_ingot", "count": 2 },
+        { "itemId": "stratum:stick", "count": 1 }
+      ],
+      "output": { "itemId": "stratum:gold_sword", "count": 1 }
+    },
+    {
+      "id": "stratum:diamond_sword_from_diamonds_and_stick",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:diamond", "count": 2 },
+        { "itemId": "stratum:stick", "count": 1 }
+      ],
+      "output": { "itemId": "stratum:diamond_sword", "count": 1 }
+    },
+    {
       "id": "stratum:oak_plank_stairs_from_planks",
       "category": "Workbench",
       "station": "stratum:crafting_table",
@@ -343,6 +393,30 @@
       "station": "stratum:crafting_table",
       "ingredients": [{ "itemId": "stratum:birch_log", "count": 6 }],
       "output": { "itemId": "stratum:birch_log_stairs", "count": 4 }
+    },
+    {
+      "id": "stratum:sugar_from_sugar_cane",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [{ "itemId": "stratum:sugar_cane", "count": 1 }],
+      "output": { "itemId": "stratum:sugar", "count": 1 }
+    },
+    {
+      "id": "stratum:paper_from_sugar_cane",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [{ "itemId": "stratum:sugar_cane", "count": 3 }],
+      "output": { "itemId": "stratum:paper", "count": 3 }
+    },
+    {
+      "id": "stratum:bed_from_wool_and_planks",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "tag": "stratum:wool", "count": 4 },
+        { "tag": "stratum:planks", "count": 4 }
+      ],
+      "output": { "itemId": "stratum:bed", "count": 1 }
     }
   ]
 }

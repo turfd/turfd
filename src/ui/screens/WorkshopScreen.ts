@@ -1,6 +1,6 @@
 /** Main-menu workshop UI: browse, detail, upload, owned mods (DOM + EventBus only). */
 
-import { unzipSync } from "fflate";
+import { gunzipSync, unzipSync, zipSync } from "fflate";
 import { MOD_PAGE_SIZE } from "../../core/constants";
 import { semverGt } from "../../util/semverGt";
 import type { EventBus } from "../../core/EventBus";
@@ -14,6 +14,14 @@ import type {
   WorkshopModTypeRow,
 } from "../../mods/workshopTypes";
 import { findPackPngBytes } from "../../mods/cachedModPackIcon";
+import {
+  STRATUM_CORE_BEHAVIOR_PACK_PATH,
+  STRATUM_CORE_RESOURCE_PACK_PATH,
+} from "../../mods/internalPackManifest";
+import {
+  BLOCK_TEXTURE_MANIFEST_PATH,
+  ITEM_TEXTURE_MANIFEST_PATH,
+} from "../../core/textureManifest";
 
 export type WorkshopScreenDeps = {
   bus: EventBus;
@@ -32,6 +40,64 @@ function el<K extends keyof HTMLElementTagNameMap>(
     n.className = className;
   }
   return n;
+}
+
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const s = dataUrl.trim();
+  const idx = s.indexOf(",");
+  if (!s.startsWith("data:") || idx < 0) {
+    return new Uint8Array();
+  }
+  const meta = s.slice(0, idx);
+  const body = s.slice(idx + 1);
+  const isB64 = /;base64/i.test(meta);
+  if (!isB64) {
+    return new Uint8Array();
+  }
+  const bin = atob(body);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
+}
+
+function isGzipBytes(bytes: Uint8Array): boolean {
+  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
+function triggerBytesDownload(filename: string, bytes: Uint8Array, mime: string): void {
+  const blob = new Blob([new Uint8Array(bytes)], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(res.statusText || `Failed to fetch (${res.status})`);
+  }
+  return res.json() as Promise<unknown>;
+}
+
+async function fetchBytes(url: string): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(res.statusText || `Failed to fetch (${res.status})`);
+  }
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+function safeZipName(s: string): string {
+  return (s.trim().slice(0, 72) || "pack").replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, "_");
 }
 
 function formatWorkshopDownloadCount(n: number): string {
@@ -113,6 +179,9 @@ function workshopModTypeBadgeLabel(modType: WorkshopModTypeRow): string {
   if (modType === "resource_pack") {
     return "Resource";
   }
+  if (modType === "world") {
+    return "World";
+  }
   return modType;
 }
 
@@ -133,7 +202,15 @@ export class WorkshopScreen {
 
   private tabLibrary: HTMLButtonElement | null = null;
 
-  private subView: "explore" | "detail" | "upload" | "owned" | "library" = "explore";
+  private tabTemplates: HTMLButtonElement | null = null;
+
+  private subView:
+    | "explore"
+    | "detail"
+    | "upload"
+    | "owned"
+    | "library"
+    | "templates" = "explore";
 
   private listOffset = 0;
 
@@ -172,7 +249,7 @@ export class WorkshopScreen {
     this.deps = deps;
   }
 
-  private subnavKey(): "explore" | "owned" | "upload" | "library" {
+  private subnavKey(): "explore" | "owned" | "upload" | "library" | "templates" {
     if (this.subView === "detail") {
       return "explore";
     }
@@ -185,6 +262,7 @@ export class WorkshopScreen {
     this.tabOwned?.classList.toggle("mm-workshop-tab-active", k === "owned");
     this.tabLibrary?.classList.toggle("mm-workshop-tab-active", k === "library");
     this.tabUpload?.classList.toggle("mm-workshop-tab-active", k === "upload");
+    this.tabTemplates?.classList.toggle("mm-workshop-tab-active", k === "templates");
   }
 
   private setModDetailChrome(active: boolean): void {
@@ -219,16 +297,21 @@ export class WorkshopScreen {
     const btnUpload = el("button", "mm-workshop-tab mm-workshop-tab-secondary") as HTMLButtonElement;
     btnUpload.type = "button";
     btnUpload.textContent = "Upload";
+    const btnTemplates = el("button", "mm-workshop-tab mm-workshop-tab-secondary") as HTMLButtonElement;
+    btnTemplates.type = "button";
+    btnTemplates.textContent = "Templates";
     subNav.appendChild(btnExplore);
     subNav.appendChild(btnLibrary);
     subNav.appendChild(btnOwned);
     subNav.appendChild(btnUpload);
+    subNav.appendChild(btnTemplates);
     this.root.appendChild(subNav);
 
     this.tabExplore = btnExplore;
     this.tabOwned = btnOwned;
     this.tabLibrary = btnLibrary;
     this.tabUpload = btnUpload;
+    this.tabTemplates = btnTemplates;
 
     this.exploreWrap = el("div", "mm-workshop-body");
     this.root.appendChild(this.exploreWrap);
@@ -259,6 +342,12 @@ export class WorkshopScreen {
       this.subView = "upload";
       this.detailRecordId = null;
       this.renderUploadForm();
+      this.updateSubnavHighlight();
+    });
+    btnTemplates.addEventListener("click", () => {
+      this.subView = "templates";
+      this.detailRecordId = null;
+      this.renderTemplates();
       this.updateSubnavHighlight();
     });
 
@@ -465,6 +554,24 @@ export class WorkshopScreen {
       }),
     );
     this.unsubs.push(
+      b.on("workshop:dev-sync-ok", (e) => {
+        if (this.subView === "templates") {
+          this.showWorkshopActionFeedback(
+            e.packCount > 0
+              ? `Developer packs loaded (${e.packCount} installed).`
+              : "Developer pack folder set.",
+          );
+        }
+      }),
+    );
+    this.unsubs.push(
+      b.on("workshop:dev-sync-error", (e) => {
+        if (this.subView === "templates") {
+          this.showWorkshopActionFeedback(e.message);
+        }
+      }),
+    );
+    this.unsubs.push(
       b.on("workshop:detail-result", (e) => {
         this.subView = "detail";
         this.renderDetail(e.record, e.comments);
@@ -617,6 +724,7 @@ export class WorkshopScreen {
       { v: "all", l: "All" },
       { v: "behavior_pack", l: "Behavior" },
       { v: "resource_pack", l: "Resource" },
+      { v: "world", l: "Worlds" },
     ];
     for (const { v, l } of typeDefs) {
       const pb = el("button", "mm-workshop-type-pill") as HTMLButtonElement;
@@ -839,6 +947,13 @@ export class WorkshopScreen {
         recordId: m.id,
       } satisfies GameEvent);
     });
+    if (m.modType === "world") {
+      // Override label for worlds; they don't "install" into the mod library.
+      const label = install.querySelector<HTMLElement>(".mm-workshop-btn-label");
+      if (label !== null) {
+        label.textContent = "Import";
+      }
+    }
     aside.appendChild(install);
 
     row.appendChild(iconWrap);
@@ -1002,6 +1117,12 @@ export class WorkshopScreen {
         recordId: m.id,
       } satisfies GameEvent);
     });
+    if (m.modType === "world") {
+      const label = install.querySelector<HTMLElement>(".mm-workshop-btn-label");
+      if (label !== null) {
+        label.textContent = "Import";
+      }
+    }
     const uninstall = el("button", "mm-btn mm-btn-subtle mm-workshop-detail-uninstall") as HTMLButtonElement;
     uninstall.type = "button";
     this.applyUninstallButtonShell(uninstall, m.modId);
@@ -1018,7 +1139,9 @@ export class WorkshopScreen {
       } satisfies GameEvent);
     });
     actions.appendChild(install);
-    actions.appendChild(uninstall);
+    if (m.modType !== "world") {
+      actions.appendChild(uninstall);
+    }
     sideCard.appendChild(actions);
 
     const metaList = el("dl", "mm-workshop-detail-meta-list");
@@ -1389,6 +1512,7 @@ export class WorkshopScreen {
       return;
     }
 
+    let mode: "pack" | "world" = "pack";
     let zipBytes: Uint8Array | null = null;
     let coverBytes: Uint8Array | null = null;
     let manifestName = "";
@@ -1396,13 +1520,31 @@ export class WorkshopScreen {
     let manifestVersion = "";
     let manifestType = "";
 
+    let worldJsonBytes: Uint8Array | null = null;
+    let worldSuggestedName = "";
+    let worldSuggestedDescription = "";
+
     const stack = el("div", "mm-workshop-upload-stack");
     const steps = el("p", "mm-workshop-upload-steps");
-    steps.textContent = "1. Package · 2. Cover · 3. Publish";
+    steps.textContent = "1. File · 2. Cover · 3. Publish";
     stack.appendChild(steps);
     const hint = el("p", "mm-note");
-    hint.textContent = ".zip with manifest.json (max 2 MB). Cover required.";
+    hint.textContent = "Packs: .zip with manifest.json. Worlds: .stratum-world.json. Cover required.";
     stack.appendChild(hint);
+
+    const modeRow = el("div", "mm-workshop-file-row");
+    const modePack = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+    modePack.type = "button";
+    modePack.textContent = "Upload pack";
+    const modeWorld = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+    modeWorld.type = "button";
+    modeWorld.textContent = "Upload world";
+    const modeNote = el("span", "mm-workshop-filename");
+    modeNote.textContent = "Choose what you're publishing";
+    modeRow.appendChild(modePack);
+    modeRow.appendChild(modeWorld);
+    modeRow.appendChild(modeNote);
+    stack.appendChild(this.makeField("Type", modeRow));
 
     const zipLabel = el("span", "mm-workshop-filename");
     zipLabel.textContent = "No file chosen";
@@ -1420,12 +1562,36 @@ export class WorkshopScreen {
     zipRow.appendChild(zipInput);
     zipRow.appendChild(zipPick);
     zipRow.appendChild(zipLabel);
-    stack.appendChild(this.makeField("Workshop package", zipRow));
+    const zipField = this.makeField("Workshop package", zipRow);
+    stack.appendChild(zipField);
+
+    const worldLabel = el("span", "mm-workshop-filename");
+    worldLabel.textContent = "No file chosen";
+    const worldInput = el("input", "mm-workshop-file-native") as HTMLInputElement;
+    worldInput.type = "file";
+    worldInput.accept = ".json,.gz,application/json,application/gzip,application/octet-stream";
+    const worldPick = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+    worldPick.type = "button";
+    worldPick.textContent = "Choose .stratum-world.json";
+    worldPick.addEventListener("click", () => {
+      worldInput.click();
+    });
+    const worldRow = el("div", "mm-workshop-file-row");
+    worldRow.appendChild(worldInput);
+    worldRow.appendChild(worldPick);
+    worldRow.appendChild(worldLabel);
+    const worldField = this.makeField("World export", worldRow);
+    stack.appendChild(worldField);
 
     const nameInp = el("input") as HTMLInputElement;
     nameInp.type = "text";
     nameInp.maxLength = 64;
     stack.appendChild(this.makeField("Display name", nameInp));
+
+    const descInp = el("textarea") as HTMLTextAreaElement;
+    descInp.rows = 4;
+    descInp.maxLength = 500;
+    stack.appendChild(this.makeField("Description", descInp));
 
     const idDisp = el("span", "mm-workshop-readonly-val");
     const verDisp = el("span", "mm-workshop-readonly-val");
@@ -1468,9 +1634,34 @@ export class WorkshopScreen {
     pub.type = "button";
     pub.textContent = "Publish";
     const updatePublishEnabled = (): void => {
-      pub.disabled = zipBytes === null || coverBytes === null;
+      pub.disabled =
+        coverBytes === null ||
+        (mode === "pack" ? zipBytes === null : worldJsonBytes === null);
     };
     pub.disabled = true;
+
+    const setMode = (next: "pack" | "world"): void => {
+      mode = next;
+      modePack.classList.toggle("mm-workshop-tab-active", mode === "pack");
+      modeWorld.classList.toggle("mm-workshop-tab-active", mode === "world");
+      zipField.style.display = mode === "pack" ? "block" : "none";
+      worldField.style.display = mode === "world" ? "block" : "none";
+      idDisp.textContent = mode === "pack" ? manifestId : "";
+      verDisp.textContent = mode === "pack" ? manifestVersion : "1.0.0";
+      typeDisp.textContent = mode === "pack" ? manifestType : "world";
+      if (mode === "world") {
+        if (nameInp.value.trim().length === 0 && worldSuggestedName.length > 0) {
+          nameInp.value = worldSuggestedName.slice(0, 64);
+        }
+        if (descInp.value.trim().length === 0 && worldSuggestedDescription.length > 0) {
+          descInp.value = worldSuggestedDescription.slice(0, 500);
+        }
+      }
+      updatePublishEnabled();
+    };
+
+    modePack.addEventListener("click", () => setMode("pack"));
+    modeWorld.addEventListener("click", () => setMode("world"));
 
     zipInput.addEventListener("change", () => {
       const f = zipInput.files?.[0];
@@ -1523,6 +1714,50 @@ export class WorkshopScreen {
         });
     });
 
+    worldInput.addEventListener("change", () => {
+      const f = worldInput.files?.[0];
+      if (f === undefined) {
+        return;
+      }
+      worldLabel.textContent = f.name;
+      err.textContent = "";
+      void f
+        .arrayBuffer()
+        .then((buf) => {
+          const pickedBytes = new Uint8Array(buf);
+          const jsonBytes = isGzipBytes(pickedBytes) ? gunzipSync(pickedBytes) : pickedBytes;
+          worldJsonBytes = pickedBytes;
+          const text = new TextDecoder().decode(jsonBytes);
+          let parsed: any;
+          try {
+            parsed = JSON.parse(text) as any;
+          } catch {
+            throw new Error("World JSON is invalid.");
+          }
+          const meta = parsed?.metadata;
+          worldSuggestedName = String(meta?.name ?? "").trim();
+          worldSuggestedDescription = String(meta?.description ?? "").trim();
+          if (nameInp.value.trim().length === 0 && worldSuggestedName.length > 0) {
+            nameInp.value = worldSuggestedName.slice(0, 64);
+          }
+          if (descInp.value.trim().length === 0 && worldSuggestedDescription.length > 0) {
+            descInp.value = worldSuggestedDescription.slice(0, 500);
+          }
+          const shot = String(meta?.previewImageDataUrl ?? "");
+          const bytes = shot.length > 0 ? dataUrlToBytes(shot) : new Uint8Array();
+          if (bytes.length > 0) {
+            coverBytes = bytes;
+            covLabel.textContent = "Using world photo from export";
+            preview.src = shot;
+          }
+          updatePublishEnabled();
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          err.textContent = msg;
+        });
+    });
+
     coverInput.addEventListener("change", () => {
       const f = coverInput.files?.[0];
       if (f === undefined) {
@@ -1544,20 +1779,298 @@ export class WorkshopScreen {
     });
 
     pub.addEventListener("click", () => {
-      if (zipBytes === null || coverBytes === null) {
+      err.textContent = "";
+      if (coverBytes === null) {
         return;
       }
-      err.textContent = "";
-      this.deps.bus.emit({
-        type: "workshop:publish-requested",
-        zipBytes,
-        coverBytes,
-        displayName: nameInp.value.trim() || manifestName,
-      } satisfies GameEvent);
+      if (mode === "pack") {
+        if (zipBytes === null) {
+          return;
+        }
+        this.deps.bus.emit({
+          type: "workshop:publish-requested",
+          zipBytes,
+          coverBytes,
+          displayName: nameInp.value.trim() || manifestName,
+        } satisfies GameEvent);
+      } else {
+        if (worldJsonBytes === null) {
+          return;
+        }
+        this.deps.bus.emit({
+          type: "workshop:publish-world-requested",
+          worldJsonBytes,
+          coverBytes,
+          displayName: nameInp.value.trim() || worldSuggestedName || "World",
+          description: descInp.value.trim() || worldSuggestedDescription,
+        } satisfies GameEvent);
+      }
     });
 
     stack.appendChild(err);
     stack.appendChild(pub);
+    wrap.appendChild(stack);
+    this.updateSubnavHighlight();
+
+    // Default to pack upload; hide world inputs.
+    setMode("pack");
+  }
+
+  private renderTemplates(): void {
+    const wrap = this.exploreWrap;
+    if (wrap === null) {
+      return;
+    }
+    this.detailModId = null;
+    this.clearWorkshopActionFeedback();
+    this.setModDetailChrome(false);
+    wrap.replaceChildren();
+
+    const stack = el("div", "mm-workshop-upload-stack");
+    const lead = el("p", "mm-note");
+    lead.textContent =
+      "Templates are built-in packs you can download, edit, and reload (for dev mode / packaging).";
+    stack.appendChild(lead);
+
+    const err = el("p", "mm-workshop-publish-err");
+    err.textContent = "";
+
+    const mkRow = (
+      title: string,
+      desc: string,
+      actionLabel: string,
+      onClick: (btn: HTMLButtonElement) => void,
+    ): HTMLElement => {
+      const row = el("div", "mm-workshop-owned-row");
+      const label = el("span", "mm-workshop-owned-label");
+      const strong = el("strong");
+      strong.textContent = title;
+      label.appendChild(strong);
+      const d = el("div");
+      d.style.fontFamily = "'M5x7', monospace";
+      d.style.fontSize = "18px";
+      d.style.color = "#8e8e93";
+      d.style.marginTop = "6px";
+      d.textContent = desc;
+      label.appendChild(d);
+      row.appendChild(label);
+      const btn = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+      btn.type = "button";
+      btn.textContent = actionLabel;
+      btn.addEventListener("click", () => onClick(btn));
+      const aside = el("div", "mm-workshop-owned-aside");
+      aside.appendChild(btn);
+      row.appendChild(aside);
+      return row;
+    };
+
+    const base = import.meta.env.BASE_URL;
+
+    stack.appendChild(
+      mkRow(
+        "Stratum core behavior pack",
+        "Blocks, items, recipes, loot, smelting (internal pack format).",
+        "Download .zip",
+        (btn) => {
+          void (async () => {
+            try {
+              btn.disabled = true;
+              err.textContent = "";
+              const packBase = `${base}${STRATUM_CORE_BEHAVIOR_PACK_PATH}`;
+              const manifest = (await fetchJson(`${packBase}manifest.json`)) as any;
+              const files: Record<string, Uint8Array> = {};
+              files["manifest.json"] = new TextEncoder().encode(
+                JSON.stringify(manifest, null, 2),
+              );
+              const blocks: string[] = Array.isArray(manifest.blocks) ? manifest.blocks : [];
+              const items: string[] = Array.isArray(manifest.items) ? manifest.items : [];
+              const recipes: string[] = Array.isArray(manifest.recipes) ? manifest.recipes : [];
+              const loot: string[] = Array.isArray(manifest.loot) ? manifest.loot : [];
+              const smelting: string[] = Array.isArray(manifest.smelting) ? manifest.smelting : [];
+              const fuel: string[] = Array.isArray(manifest.furnace_fuel)
+                ? manifest.furnace_fuel
+                : [];
+
+              const jobs: Array<{ rel: string; zipPath: string }> = [];
+              for (const f of blocks) jobs.push({ rel: `blocks/${f}`, zipPath: `blocks/${f}` });
+              for (const f of items) jobs.push({ rel: `items/${f}`, zipPath: `items/${f}` });
+              for (const rel of recipes) jobs.push({ rel, zipPath: rel });
+              for (const rel of loot) jobs.push({ rel, zipPath: rel });
+              for (const rel of smelting) jobs.push({ rel, zipPath: rel });
+              for (const rel of fuel) jobs.push({ rel, zipPath: rel });
+
+              const fetched = await Promise.all(
+                jobs.map(async (j) => ({ zipPath: j.zipPath, bytes: await fetchBytes(`${packBase}${j.rel}`) })),
+              );
+              for (const f of fetched) {
+                files[f.zipPath] = f.bytes;
+              }
+
+              const zip = zipSync(files, { level: 9 });
+              const name = safeZipName(String(manifest.name ?? "stratum-core-behavior"));
+              triggerBytesDownload(`${name}.zip`, zip, "application/zip");
+            } catch (e) {
+              err.textContent = e instanceof Error ? e.message : String(e);
+            } finally {
+              btn.disabled = false;
+            }
+          })();
+        },
+      ),
+    );
+
+    stack.appendChild(
+      mkRow(
+        "Stratum core resource pack",
+        "Block + item texture manifests, referenced PNGs, and sounds (internal pack format).",
+        "Download .zip",
+        (btn) => {
+          void (async () => {
+            try {
+              btn.disabled = true;
+              err.textContent = "";
+              const packBase = `${base}${STRATUM_CORE_RESOURCE_PACK_PATH}`;
+              const manifest = (await fetchJson(`${packBase}manifest.json`)) as any;
+
+              const files: Record<string, Uint8Array> = {};
+              files["manifest.json"] = new TextEncoder().encode(
+                JSON.stringify(manifest, null, 2),
+              );
+
+              // Include and rewrite texture manifests to use relative paths inside the pack.
+              const blockManifestUrl = `${base}${BLOCK_TEXTURE_MANIFEST_PATH}`;
+              const itemManifestUrl = `${base}${ITEM_TEXTURE_MANIFEST_PATH}`;
+              const blockDoc = (await fetchJson(blockManifestUrl)) as any;
+              const itemDoc = (await fetchJson(itemManifestUrl)) as any;
+
+              const rewrite = (doc: any): any => {
+                const out = { ...doc, textures: { ...(doc?.textures ?? {}) } };
+                for (const [k, v] of Object.entries(out.textures)) {
+                  if (typeof v !== "string") continue;
+                  const marker = "assets/mods/resource_packs/stratum-core/";
+                  const i = v.indexOf(marker);
+                  out.textures[k] = i >= 0 ? v.slice(i + marker.length) : v.replace(/^\/+/, "");
+                }
+                return out;
+              };
+
+              const blockRewritten = rewrite(blockDoc);
+              const itemRewritten = rewrite(itemDoc);
+              files["textures/block_texture_manifest.json"] = new TextEncoder().encode(
+                JSON.stringify(blockRewritten, null, 2),
+              );
+              files["textures/item_texture_manifest.json"] = new TextEncoder().encode(
+                JSON.stringify(itemRewritten, null, 2),
+              );
+
+              const texPaths = new Set<string>();
+              for (const v of Object.values(blockRewritten.textures ?? {})) {
+                if (typeof v === "string" && v.length > 0) texPaths.add(v);
+              }
+              for (const v of Object.values(itemRewritten.textures ?? {})) {
+                if (typeof v === "string" && v.length > 0) texPaths.add(v);
+              }
+
+              // Sounds.
+              const soundManifestRel = "sounds/sound_manifest.json";
+              const soundDoc = (await fetchJson(`${packBase}${soundManifestRel}`)) as any;
+              files[soundManifestRel] = new TextEncoder().encode(JSON.stringify(soundDoc, null, 2));
+              const soundPaths = new Set<string>();
+              const walk = (x: any): void => {
+                if (typeof x === "string") {
+                  if (x.endsWith(".ogg")) soundPaths.add(x.replace(/^\/+/, ""));
+                  return;
+                }
+                if (Array.isArray(x)) {
+                  for (const v of x) walk(v);
+                  return;
+                }
+                if (x !== null && typeof x === "object") {
+                  for (const v of Object.values(x)) walk(v);
+                }
+              };
+              walk(soundDoc);
+
+              const jobs: Array<{ url: string; zipPath: string }> = [];
+              for (const rel of texPaths) {
+                jobs.push({ url: `${packBase}${rel}`, zipPath: rel });
+              }
+              for (const rel of soundPaths) {
+                jobs.push({ url: `${packBase}${rel}`, zipPath: rel });
+              }
+
+              const fetched = await Promise.all(
+                jobs.map(async (j) => ({ zipPath: j.zipPath, bytes: await fetchBytes(j.url) })),
+              );
+              for (const f of fetched) {
+                files[f.zipPath] = f.bytes;
+              }
+
+              const zip = zipSync(files, { level: 9 });
+              const name = safeZipName(String(manifest.name ?? "stratum-core-resource"));
+              triggerBytesDownload(`${name}.zip`, zip, "application/zip");
+            } catch (e) {
+              err.textContent = e instanceof Error ? e.message : String(e);
+            } finally {
+              btn.disabled = false;
+            }
+          })();
+        },
+      ),
+    );
+
+    const devBlock = el("div", "mm-workshop-owned-row");
+    const devLabel = el("span", "mm-workshop-owned-label");
+    const devStrong = el("strong");
+    devStrong.textContent = "Developer mode (local folder)";
+    devLabel.appendChild(devStrong);
+    const devDesc = el("div");
+    devDesc.style.fontFamily = "'M5x7', monospace";
+    devDesc.style.fontSize = "18px";
+    devDesc.style.color = "#8e8e93";
+    devDesc.style.marginTop = "6px";
+    devDesc.textContent =
+      "Pick a folder of workshop-style .zip packs. Refreshing the page reloads them into your Library.";
+    devLabel.appendChild(devDesc);
+    devBlock.appendChild(devLabel);
+    const devAside = el("div", "mm-workshop-owned-aside");
+    const pick = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+    pick.type = "button";
+    pick.textContent = "Choose folder";
+    pick.disabled = typeof (window as any).showDirectoryPicker !== "function";
+    pick.addEventListener("click", () => {
+      void (async () => {
+        try {
+          err.textContent = "";
+          // @ts-expect-error showDirectoryPicker is not in all DOM lib targets
+          const h = (await window.showDirectoryPicker()) as FileSystemDirectoryHandle;
+          this.deps.bus.emit({
+            type: "workshop:dev-folder-picked",
+            handle: h,
+          } satisfies GameEvent);
+          this.showWorkshopActionFeedback("Folder selected. Reloading dev packs…");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          err.textContent = msg;
+        }
+      })();
+    });
+    const clear = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
+    clear.type = "button";
+    clear.textContent = "Clear";
+    clear.addEventListener("click", () => {
+      this.deps.bus.emit({
+        type: "workshop:dev-folder-picked",
+        handle: null,
+      } satisfies GameEvent);
+      this.showWorkshopActionFeedback("Developer folder cleared.");
+    });
+    devAside.appendChild(pick);
+    devAside.appendChild(clear);
+    devBlock.appendChild(devAside);
+    stack.appendChild(devBlock);
+
+    stack.appendChild(err);
     wrap.appendChild(stack);
     this.updateSubnavHighlight();
   }

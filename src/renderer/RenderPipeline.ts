@@ -22,6 +22,7 @@ import { BackgroundLayerRenderer } from "./BackgroundLayerRenderer";
 import { Camera } from "./Camera";
 import { LightingComposer } from "./lighting/LightingComposer";
 import { WeatherRainParticles } from "./WeatherRainParticles";
+import { WeatherSnowParticles } from "./WeatherSnowParticles";
 
 /**
  * Named world layers (instances are created by {@link RenderPipeline}).
@@ -59,6 +60,7 @@ function lerpColor(a: number, b: number, t: number): number {
 }
 
 const SKY_WHITE = 0xffffff;
+const SKY_PAINT_CLOCK_BUCKET_MS = 100;
 
 function clamp01(t: number): number {
   return Math.min(1, Math.max(0, t));
@@ -102,6 +104,7 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _rainRoot: Container | null = null;
   private _rainTiling: TilingSprite | null = null;
   private _rainParticles: WeatherRainParticles | null = null;
+  private _snowParticles: WeatherSnowParticles | null = null;
 
   /** Loaded `textures/environment/*.png` for 2D sky canvas (sun / moon). */
   private _skySunImage: HTMLImageElement | null = null;
@@ -332,46 +335,86 @@ export class RenderPipeline implements RenderPipelineLayers {
     this._rainParticles?.update(dtSec, showRain, viewW, viewH, z);
   }
 
+  updateSnowfallEffect(intensity: number, dtSec: number): void {
+    if (this.app === null || this._snowParticles === null) {
+      return;
+    }
+    const cam = this.camera;
+    const z = cam.getZoom();
+    const w = Math.max(1, Math.round(this.app.renderer.width));
+    const h = Math.max(1, Math.round(this.app.renderer.height));
+    const viewW = w / z;
+    const viewH = h / z;
+    const topLeft = cam.screenToWorld(0, 0);
+    this._snowParticles.update(
+      dtSec,
+      intensity,
+      viewW,
+      viewH,
+      topLeft.x,
+      topLeft.y,
+      z,
+    );
+  }
+
   /** Load `textures/weather/rain.png` and attach tiling + streaks as the first world layer (under tiles). */
   async initWeatherOverlay(): Promise<void> {
     if (this.app === null) {
       return;
     }
-    const url = stratumCoreTextureAssetUrl("weather/rain.png");
-    let tex: Texture;
-    try {
-      tex = (await Assets.load<Texture>(url)) ?? Assets.get<Texture>(url);
-      if (tex === undefined || tex.source === undefined) {
-        return;
+    const loadNearestTexture = async (relativePath: string): Promise<Texture | null> => {
+      const url = stratumCoreTextureAssetUrl(relativePath);
+      try {
+        const tex = (await Assets.load<Texture>(url)) ?? Assets.get<Texture>(url);
+        if (tex === undefined || tex.source === undefined) {
+          return null;
+        }
+        tex.source.scaleMode = "nearest";
+        return tex;
+      } catch {
+        return null;
       }
-      tex.source.scaleMode = "nearest";
-    } catch {
-      console.warn("[RenderPipeline] Rain texture failed to load:", url);
-      return;
+    };
+
+    const rainTexture = await loadNearestTexture("weather/rain.png");
+    if (rainTexture !== null) {
+      const z = this.camera.getZoom();
+      const w = Math.max(1, Math.round(this.app.renderer.width));
+      const h = Math.max(1, Math.round(this.app.renderer.height));
+      const tiling = new TilingSprite({
+        texture: rainTexture,
+        width: w / z,
+        height: h / z,
+        tileScale: { x: 1, y: 1 },
+        roundPixels: true,
+      });
+      tiling.alpha = 0.38;
+      tiling.visible = false;
+      const root = new Container();
+      root.label = "weatherRainOverlay";
+      root.eventMode = "none";
+      root.cullable = false;
+      root.cullableChildren = false;
+      root.addChild(tiling);
+      // Behind all tile/entity layers; still in front of the parallax background (separate stage child).
+      this.camera.worldRoot.addChildAt(root, 0);
+      this._rainRoot = root;
+      this._rainTiling = tiling;
+      this._rainParticles = new WeatherRainParticles(root);
+    } else {
+      console.warn("[RenderPipeline] Rain texture failed to load.");
     }
-    const z = this.camera.getZoom();
-    const w = Math.max(1, Math.round(this.app.renderer.width));
-    const h = Math.max(1, Math.round(this.app.renderer.height));
-    const tiling = new TilingSprite({
-      texture: tex,
-      width: w / z,
-      height: h / z,
-      tileScale: { x: 1, y: 1 },
-      roundPixels: true,
-    });
-    tiling.alpha = 0.38;
-    tiling.visible = false;
-    const root = new Container();
-    root.label = "weatherRainOverlay";
-    root.eventMode = "none";
-    root.cullable = false;
-    root.cullableChildren = false;
-    root.addChild(tiling);
-    // Behind all tile/entity layers; still in front of the parallax background (separate stage child).
-    this.camera.worldRoot.addChildAt(root, 0);
-    this._rainRoot = root;
-    this._rainTiling = tiling;
-    this._rainParticles = new WeatherRainParticles(root);
+
+    const snowParticleTexture =
+      (await loadNearestTexture("weather/snow.png")) ?? null;
+    if (snowParticleTexture !== null) {
+      this._snowParticles = new WeatherSnowParticles(
+        this.layerParticles,
+        snowParticleTexture,
+      );
+    } else {
+      console.warn("[RenderPipeline] Snow particle texture failed to load.");
+    }
   }
 
   /** Loads sun/moon PNGs from the built-in pack for {@link paintSkyCss}. */
@@ -407,15 +450,8 @@ export class RenderPipeline implements RenderPipelineLayers {
     if (ctx === null || cvs === null) {
       return;
     }
-    const dpr = effectiveDevicePixelRatio();
-    const cw = Math.max(1, Math.round(this.mount.clientWidth * dpr));
-    const ch = Math.max(1, Math.round(this.mount.clientHeight * dpr));
-    if (cw !== this._skyCssW || ch !== this._skyCssH) {
-      cvs.width = cw;
-      cvs.height = ch;
-      this._skyCssW = cw;
-      this._skyCssH = ch;
-    }
+    const cw = Math.max(1, this._skyCssW);
+    const ch = Math.max(1, this._skyCssH);
 
     const { top, horizon, bottom } = lighting.sky;
 
@@ -462,7 +498,7 @@ export class RenderPipeline implements RenderPipelineLayers {
 
     const sunImg = this._skySunImage;
     const sunTexW = sunImg !== null && sunImg.naturalWidth > 0 ? sunImg.naturalWidth : 16;
-    const celestialDim = Math.max(20 * dpr, sunTexW * dpr * 1.25) * 4;
+    const celestialDim = Math.max(20, sunTexW * 1.25) * 4;
 
     const sx = cw * 0.5 + sunDir[0] * spread;
     const sy = baseY - sunDir[1] * ch * 0.2;
@@ -527,12 +563,12 @@ export class RenderPipeline implements RenderPipelineLayers {
     if (lighting === null) {
       return;
     }
-    const dpr = effectiveDevicePixelRatio();
-    const cw = Math.max(1, Math.round(this.mount.clientWidth * dpr));
-    const ch = Math.max(1, Math.round(this.mount.clientHeight * dpr));
+    const cw = Math.max(1, this._skyCssW);
+    const ch = Math.max(1, this._skyCssH);
     const li = this._skyLightningAlpha;
+    const clockBucket = Math.floor(this._skyClockMs / SKY_PAINT_CLOCK_BUCKET_MS);
     if (
-      this._skyClockMs === this._lastSkyCanvasPaintMs &&
+      clockBucket === this._lastSkyCanvasPaintMs &&
       cw === this._lastSkyCanvasPaintCw &&
       ch === this._lastSkyCanvasPaintCh &&
       li === this._lastSkyCanvasPaintLightning
@@ -540,7 +576,7 @@ export class RenderPipeline implements RenderPipelineLayers {
       return;
     }
     this.paintSkyCss(lighting);
-    this._lastSkyCanvasPaintMs = this._skyClockMs;
+    this._lastSkyCanvasPaintMs = clockBucket;
     this._lastSkyCanvasPaintCw = cw;
     this._lastSkyCanvasPaintCh = ch;
     this._lastSkyCanvasPaintLightning = li;
@@ -651,6 +687,8 @@ export class RenderPipeline implements RenderPipelineLayers {
   destroy(): void {
     window.removeEventListener("resize", this.onWindowResize);
     if (this.app) {
+      this._snowParticles?.destroy();
+      this._snowParticles = null;
       this._rainParticles?.destroy();
       this._rainParticles = null;
       this._rainTiling?.destroy();
@@ -689,6 +727,12 @@ export class RenderPipeline implements RenderPipelineLayers {
     if (w !== this.lastScreenW || h !== this.lastScreenH) {
       this.lastScreenW = w;
       this.lastScreenH = h;
+      if (this._skyCssCanvas !== null && (w !== this._skyCssW || h !== this._skyCssH)) {
+        this._skyCssCanvas.width = w;
+        this._skyCssCanvas.height = h;
+        this._skyCssW = w;
+        this._skyCssH = h;
+      }
       this.camera.setScreenSize(w, h);
       this._albedoRT?.resize(w, h);
       this._lightingComposer?.resize(w, h);

@@ -24,6 +24,8 @@ export type SfxOptions = {
 
 /** Default max distance for spatial SFX (beyond this, sound is silent). */
 export const DEFAULT_SFX_WORLD_MAX_DIST_PX = 960;
+/** Subtle one-shot detune in cents so repeated SFX do not sound perfectly identical. */
+export const DEFAULT_SFX_PITCH_VARIANCE_CENTS = 14;
 
 /** Horizontal offset in world px that maps to full stereo pan. */
 const SFX_PAN_REF_PX = 420;
@@ -170,7 +172,8 @@ export class AudioEngine {
 
   private applySfxRainBusGain(): void {
     if (this.sfxRainBus !== null) {
-      this.sfxRainBus.gain.value = this.sfxRainExposure * this.sfxVol;
+      // Outdoor fade only — global SFX level is applied once by {@link sfxGain}.
+      this.sfxRainBus.gain.value = this.sfxRainExposure;
     }
   }
 
@@ -312,7 +315,7 @@ export class AudioEngine {
 
     if (this.sfxRainBus === null) {
       const bus = ctx.createGain();
-      bus.gain.value = this.sfxRainExposure * this.sfxVol;
+      bus.gain.value = this.sfxRainExposure;
       bus.connect(out);
       this.sfxRainBus = bus;
     }
@@ -378,7 +381,8 @@ export class AudioEngine {
     }
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    const variance = options?.pitchVariance ?? 0;
+    const variance =
+      options?.pitchVariance ?? DEFAULT_SFX_PITCH_VARIANCE_CENTS;
     src.detune.value = (unixRandom01() * 2 - 1) * variance;
     const playGain = ctx.createGain();
     let gain = options?.volume ?? 1;

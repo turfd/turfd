@@ -1,6 +1,23 @@
 /** Pixel size of one block edge on screen (atlas texel scale). */
 export const BLOCK_SIZE = 16;
 
+/**
+ * Local player ground sprint horizontal speed (blocks/s). Walk/jump variants stay in {@link Player};
+ * this value is shared so passive mob panic can match player run speed.
+ */
+export const PLAYER_SPRINT_SPEED_BLOCKS_PER_SEC = 5.612;
+
+/** Ground sprint cap in world px/s (`PLAYER_SPRINT_SPEED_BLOCKS_PER_SEC * {@link BLOCK_SIZE}`). */
+export const PLAYER_SPRINT_SPEED_PX =
+  PLAYER_SPRINT_SPEED_BLOCKS_PER_SEC * BLOCK_SIZE;
+
+/** Ground walk speed (blocks/s); shared for mobs that match walking pace (e.g. zombies). */
+export const PLAYER_WALK_SPEED_BLOCKS_PER_SEC = 4.317;
+
+/** Ground walk cap in world px/s. */
+export const PLAYER_WALK_SPEED_PX =
+  PLAYER_WALK_SPEED_BLOCKS_PER_SEC * BLOCK_SIZE;
+
 /** Local player hitbox (world pixels). */
 export const PLAYER_WIDTH = 14;
 export const PLAYER_HEIGHT = 28;
@@ -448,21 +465,31 @@ export const WATER_DEPTH_TINT_REFERENCE_WY = -15;
 export const WATER_SEA_LEVEL_WY = -2;
 
 /**
- * Lake biome: horizontal scale in blocks (simplex input `wx / this`). Larger ⇒ broader water bodies.
+ * Added to {@link TerrainNoise} base height before lake blending. Fewer shallow seas when land sits higher vs {@link WATER_SEA_LEVEL_WY}.
  */
-export const LAKE_BIOME_SCALE_BLOCKS = 400;
+export const TERRAIN_BASE_SURFACE_BIAS_BLOCKS = 2;
+
+/**
+ * Lake biome: horizontal scale in blocks (simplex input `wx / this`). Larger ⇒ rarer lake regions / wider basins.
+ */
+export const LAKE_BIOME_SCALE_BLOCKS = 520;
 
 /**
  * Lake mask (macro noise 0..1): smoothstep edges. Higher band ⇒ fewer, more separated lakes.
  */
-export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.78;
-export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.94;
+export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.86;
+export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.96;
 
 /**
  * Second noise channel (0..1): multiplied with macro mask for irregular shorelines and extra rarity.
  */
-export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.52;
-export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.76;
+export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.62;
+export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.84;
+
+/**
+ * Applied to (macro × micro) so mid-strength shores shrink — fewer large lake footprints.
+ */
+export const LAKE_BIOME_INFLUENCE_POW = 1.18;
 
 /** Approximate lake bed depth below {@link WATER_SEA_LEVEL_WY} at full lake influence (before jitter). */
 export const LAKE_BIOME_DEPTH_BLOCKS = 7;

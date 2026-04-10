@@ -10,12 +10,18 @@ import type { ChestPersistedChunk } from "../world/chest/chestPersisted";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 import type { CachedMod } from "../mods/workshopTypes";
 import type { KeybindableAction } from "../input/bindings";
+import {
+  buildStratumWorldExportV1,
+  parseStratumWorldImportV1,
+  type StratumWorldExportV1,
+} from "./worldExport";
 
 export const DB_NAME = "stratum";
 /** Bumped when a new object store is required so existing browsers run `upgrade` again. */
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 
 const PLAYER_SETTINGS_KEY = "v1";
+const DEV_PACKS_KEY = "v1";
 
 export type WorkshopModRef = {
   readonly recordId: string;
@@ -82,6 +88,38 @@ export type WorldMetadata = {
   itemIdLayoutRevision?: number;
   /** Host-only: last feet position when each multiplayer guest left (`id:…` / `name:…` keys). */
   multiplayerLastPositions?: Record<string, { x: number; y: number }>;
+
+  /** Solo/host: player respawn feet position (bed spawn). */
+  playerSpawnX?: number;
+  playerSpawnY?: number;
+  /** Host-only: respawn feet position for each multiplayer guest (`id:…` / `name:…` keys). */
+  multiplayerSpawnPoints?: Record<string, { x: number; y: number }>;
+
+  /**
+   * Host/solo-only: persisted world entities (best-effort). Absent in older saves.
+   * Stored in world-space pixels, using the same feet-at-(x,y) convention as mob/player physics.
+   */
+  mobs?: Array<{
+    id: number;
+    type: number;
+    x: number;
+    y: number;
+    woolColor?: number;
+    persistent?: boolean;
+  }>;
+  /**
+   * Host/solo-only: dropped item stacks present at save time.
+   * Note: not replicated to late-joining clients yet; primarily for solo persistence.
+   */
+  drops?: Array<{
+    itemId: number;
+    count: number;
+    damage: number;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+  }>;
 };
 
 export type ChunkRecord = {
@@ -152,6 +190,9 @@ function upgradeStratumDb(db: IDBPDatabase): void {
   }
   if (!db.objectStoreNames.contains("player_settings")) {
     db.createObjectStore("player_settings");
+  }
+  if (!db.objectStoreNames.contains("dev_packs")) {
+    db.createObjectStore("dev_packs");
   }
 }
 
@@ -228,6 +269,43 @@ export class IndexedDBStore {
     }
     await tx.done;
     await db.delete("worlds", uuid);
+  }
+
+  /** All chunk rows for a world (for backup / export). */
+  async listAllChunksForWorld(worldUuid: string): Promise<ChunkRecord[]> {
+    const db = this.requireDb();
+    return db.getAllFromIndex("chunks", "worldUuid", worldUuid) as Promise<
+      ChunkRecord[]
+    >;
+  }
+
+  /**
+   * Build a portable JSON snapshot of the world (metadata + every chunk).
+   * Large worlds produce large objects; stringify only when writing a file.
+   */
+  async exportWorldBundle(worldUuid: string): Promise<StratumWorldExportV1> {
+    const meta = await this.loadWorld(worldUuid);
+    if (meta === undefined) {
+      throw new Error(`World not found: ${worldUuid}`);
+    }
+    const chunks = await this.listAllChunksForWorld(worldUuid);
+    return buildStratumWorldExportV1(meta, chunks);
+  }
+
+  /**
+   * Import a snapshot from {@link exportWorldBundle}; assigns a new world UUID
+   * and writes metadata + chunks. Returns the new UUID.
+   */
+  async importWorldBundle(parsed: unknown): Promise<string> {
+    const db = this.requireDb();
+    const newUuid = crypto.randomUUID();
+    const { metadata, chunks } = parseStratumWorldImportV1(parsed, newUuid);
+    const tx = db.transaction(["worlds", "chunks"], "readwrite");
+    const worldPut = tx.objectStore("worlds").put(metadata);
+    const chunkStore = tx.objectStore("chunks");
+    const chunkPuts = chunks.map((c) => chunkStore.put(c));
+    await Promise.all([worldPut, ...chunkPuts, tx.done]);
+    return newUuid;
   }
 
   async saveChunk(worldUuid: string, chunk: Chunk): Promise<void> {
@@ -352,6 +430,30 @@ export class IndexedDBStore {
         ? { keyBindings: cloneStoredKeyBindings(kb) }
         : {}),
     };
+  }
+
+  async loadDevPackDirectoryHandle(): Promise<FileSystemDirectoryHandle | null> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains("dev_packs")) {
+      return null;
+    }
+    const handle = (await db.get(
+      "dev_packs",
+      DEV_PACKS_KEY,
+    )) as FileSystemDirectoryHandle | null | undefined;
+    return handle ?? null;
+  }
+
+  async saveDevPackDirectoryHandle(handle: FileSystemDirectoryHandle | null): Promise<void> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains("dev_packs")) {
+      throw new Error('IndexedDB object store "dev_packs" is missing; reload the page.');
+    }
+    if (handle === null) {
+      await db.delete("dev_packs", DEV_PACKS_KEY);
+      return;
+    }
+    await db.put("dev_packs", handle, DEV_PACKS_KEY);
   }
 
   async savePlayerSettings(settings: PlayerSettingsV1): Promise<void> {

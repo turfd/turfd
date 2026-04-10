@@ -61,6 +61,8 @@ export interface BlockDefinitionBase {
   tallGrass: "none" | "bottom" | "top";
   /** Two-tall door halves; paired like tall grass (`stratum:door_half`). */
   doorHalf: "none" | "bottom" | "top";
+  /** Two-wide bed halves; foot is the placed-from-item cell (`stratum:bed_half`). */
+  bedHalf: "none" | "foot" | "head";
   /**
    * Pixels cropped from the top of the cell when drawing (0–15). Bottom of the quad stays
    * on the block’s lower edge so short plants don’t visually float above the ground.

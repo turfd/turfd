@@ -51,6 +51,16 @@ const uiEntrySchema = z
     water_splash: pathOrPaths.optional(),
     /** Swimming strokes while moving in water: `playSfx("water_swim")`. */
     water_swim: pathOrPaths.optional(),
+    /** Sheep idle bleats (`playSfx("entity_sheep_idle")`). */
+    entity_sheep_idle: pathOrPaths.optional(),
+    /** Sheep footstep variants (`playSfx("entity_sheep_step")`). */
+    entity_sheep_step: pathOrPaths.optional(),
+    /** Pig idle grunts (`playSfx("entity_pig_idle")`). */
+    entity_pig_idle: pathOrPaths.optional(),
+    /** Pig footstep variants (`playSfx("entity_pig_step")`). */
+    entity_pig_step: pathOrPaths.optional(),
+    /** Pig death one-shot (`playSfx("entity_pig_death")`). */
+    entity_pig_death: pathOrPaths.optional(),
   })
   .strict();
 
@@ -162,6 +172,31 @@ async function loadSoundManifestJson(
   if (ui?.water_swim !== undefined) {
     jobs.push(
       loadPathOrPaths(audio, packBaseUrl, "water_swim", ui.water_swim),
+    );
+  }
+  if (ui?.entity_sheep_idle !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_sheep_idle", ui.entity_sheep_idle),
+    );
+  }
+  if (ui?.entity_sheep_step !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_sheep_step", ui.entity_sheep_step),
+    );
+  }
+  if (ui?.entity_pig_idle !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_pig_idle", ui.entity_pig_idle),
+    );
+  }
+  if (ui?.entity_pig_step !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_pig_step", ui.entity_pig_step),
+    );
+  }
+  if (ui?.entity_pig_death !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_pig_death", ui.entity_pig_death),
     );
   }
   await Promise.all(jobs);

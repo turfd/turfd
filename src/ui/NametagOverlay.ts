@@ -29,9 +29,24 @@ export type NametagRosterEntry = { displayName: string };
 /** Gap from nametag bottom to head anchor (px). */
 const NAMETAG_GAP_ABOVE_HEAD_PX = 14;
 
+type NametagView = {
+  el: HTMLDivElement;
+  lastText: string;
+  lastTransform: string;
+};
+
 export class NametagOverlay {
   private layer: HTMLDivElement | null = null;
-  private readonly tags = new Map<string, HTMLDivElement>();
+  private readonly tags = new Map<string, NametagView>();
+  private observedCanvas: HTMLCanvasElement | null = null;
+  private canvasResizeObserver: ResizeObserver | null = null;
+  private canvasCssW = 1;
+  private canvasCssH = 1;
+  private canvasMetricsDirty = true;
+
+  private readonly onCanvasMetricsInvalidated = (): void => {
+    this.canvasMetricsDirty = true;
+  };
 
   init(mount: HTMLElement): void {
     ensureFonts();
@@ -42,34 +57,46 @@ export class NametagOverlay {
       "pointer-events:none",
       "z-index:8",
       "overflow:visible",
+      "left:0",
+      "top:0",
+      "width:100%",
+      "height:100%",
+      "box-sizing:border-box",
     ].join(";");
     mount.appendChild(layer);
     this.layer = layer;
+    window.addEventListener("resize", this.onCanvasMetricsInvalidated);
   }
 
-  /**
-   * Size the overlay to the mount, not the canvas rect delta. The game canvas is `width/height: 100%`
-   * on the mount; using `getBoundingClientRect()` math (`cr - mr`) drifts on some DPR / fractional
-   * layouts while `100%` stays aligned with the same containing block as the canvas.
-   */
-  syncLayout(_mount: HTMLElement, _canvas: HTMLCanvasElement): void {
-    const layer = this.layer;
-    if (layer === null) {
+  private observeCanvas(canvas: HTMLCanvasElement): void {
+    if (this.observedCanvas === canvas) {
       return;
     }
-    layer.style.left = "0";
-    layer.style.top = "0";
-    layer.style.width = "100%";
-    layer.style.height = "100%";
-    layer.style.boxSizing = "border-box";
+    this.canvasResizeObserver?.disconnect();
+    this.observedCanvas = canvas;
+    this.canvasMetricsDirty = true;
+    if (typeof ResizeObserver !== "undefined") {
+      this.canvasResizeObserver = new ResizeObserver(
+        this.onCanvasMetricsInvalidated,
+      );
+      this.canvasResizeObserver.observe(canvas);
+    }
+  }
+
+  private updateCanvasMetrics(canvas: HTMLCanvasElement): void {
+    const rect = canvas.getBoundingClientRect();
+    // Prefer rect dimensions (includes CSS transforms/zoom) over clientWidth/Height.
+    this.canvasCssW = Math.max(1, rect.width || canvas.clientWidth || 1);
+    this.canvasCssH = Math.max(1, rect.height || canvas.clientHeight || 1);
+    this.canvasMetricsDirty = false;
   }
 
   /**
    * @param alpha Interpolation factor for local player.
-   * @param nowMs Wall time for remote {@link RemotePlayer.getDisplayPose}.
+   * @param nowMs Wall time for remote `RemotePlayer.getDisplayPose`.
    */
   update(
-    mount: HTMLElement,
+    _mount: HTMLElement,
     canvas: HTMLCanvasElement,
     camera: Camera,
     alpha: number,
@@ -89,24 +116,29 @@ export class NametagOverlay {
     if (layer === null) {
       return;
     }
-    this.syncLayout(mount, canvas);
+    this.observeCanvas(canvas);
+    if (this.canvasMetricsDirty) {
+      this.updateCanvasMetrics(canvas);
+    }
 
     const cw = Math.max(1, canvas.width);
     const ch = Math.max(1, canvas.height);
-    // Map camera (buffer px) → overlay (CSS px) using the canvas CSS size.
-    // `clientWidth/Height` tend to be more stable than rect widths under zoom/fractional DPR.
-    const cssW = Math.max(1, canvas.clientWidth);
-    const cssH = Math.max(1, canvas.clientHeight);
-    const cssPerBufX = cssW / cw;
-    const cssPerBufY = cssH / ch;
+    const cssPerBufX = this.canvasCssW / cw;
+    const cssPerBufY = this.canvasCssH / ch;
 
-    const placeTag = (id: string, text: string, worldX: number, worldY: number): void => {
-      let el = this.tags.get(id);
-      if (el === undefined) {
-        el = document.createElement("div");
+    const placeTag = (
+      id: string,
+      text: string,
+      worldX: number,
+      worldY: number,
+    ): void => {
+      let view = this.tags.get(id);
+      if (view === undefined) {
+        const el = document.createElement("div");
         el.style.cssText = [
           "position:absolute",
-          `transform:translate(-50%,calc(-100% - ${NAMETAG_GAP_ABOVE_HEAD_PX}px))`,
+          "left:0",
+          "top:0",
           "font-family:'M5x7',monospace",
           "font-size:20px",
           "color:#f2f2f7",
@@ -114,23 +146,29 @@ export class NametagOverlay {
           "white-space:nowrap",
           "max-width:280px",
           "box-sizing:border-box",
-          /* Inset keeps M5x7 glyph edges + shadow from clipping under overflow:hidden */
           "padding:0 5px",
           "overflow:hidden",
           "text-overflow:ellipsis",
           "pointer-events:none",
+          "will-change:transform",
         ].join(";");
         layer.appendChild(el);
-        this.tags.set(id, el);
+        view = { el, lastText: "", lastTransform: "" };
+        this.tags.set(id, view);
       }
-      el.textContent = text;
-      const headX = worldX;
+      if (view.lastText !== text) {
+        view.lastText = text;
+        view.el.textContent = text;
+      }
       const headY = -worldY - PLAYER_HEIGHT;
-      const { x: sx, y: sy } = camera.worldToScreen(headX, headY);
-      const px = sx * cssPerBufX;
-      const py = sy * cssPerBufY;
-      el.style.left = `${px}px`;
-      el.style.top = `${py}px`;
+      const { x: sx, y: sy } = camera.worldToScreen(worldX, headY);
+      const px = Math.round(sx * cssPerBufX);
+      const py = Math.round(sy * cssPerBufY);
+      const transform = `translate3d(${px}px,${py}px,0) translate(-50%,calc(-100% - ${NAMETAG_GAP_ABOVE_HEAD_PX}px))`;
+      if (view.lastTransform !== transform) {
+        view.lastTransform = transform;
+        view.el.style.transform = transform;
+      }
     };
 
     const lx = local.prevX + (local.x - local.prevX) * alpha;
@@ -150,21 +188,25 @@ export class NametagOverlay {
     }
 
     for (const id of stale) {
-      const el = this.tags.get(id);
-      el?.remove();
+      const view = this.tags.get(id);
+      view?.el.remove();
       this.tags.delete(id);
     }
   }
 
   clear(): void {
-    for (const el of this.tags.values()) {
-      el.remove();
+    for (const view of this.tags.values()) {
+      view.el.remove();
     }
     this.tags.clear();
   }
 
   destroy(): void {
     this.clear();
+    window.removeEventListener("resize", this.onCanvasMetricsInvalidated);
+    this.canvasResizeObserver?.disconnect();
+    this.canvasResizeObserver = null;
+    this.observedCanvas = null;
     this.layer?.remove();
     this.layer = null;
   }

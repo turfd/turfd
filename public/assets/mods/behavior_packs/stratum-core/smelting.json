@@ -30,6 +30,12 @@
       "input": { "itemId": "stratum:cobblestone" },
       "output": { "itemId": "stratum:stone", "count": 1 },
       "cook_time_sec": 10
+    },
+    {
+      "id": "stratum:porkchop_to_cooked_porkchop",
+      "input": { "itemId": "stratum:porkchop" },
+      "output": { "itemId": "stratum:cooked_porkchop", "count": 1 },
+      "cook_time_sec": 10
     }
   ]
 }

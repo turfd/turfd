@@ -10,7 +10,7 @@ export function asModRecordId(id: string): ModRecordId {
 }
 
 /** Stored in Supabase `stratum_mods.mod_type` and workshop directory rows. */
-export type WorkshopModTypeRow = "behavior_pack" | "resource_pack";
+export type WorkshopModTypeRow = "behavior_pack" | "resource_pack" | "world";
 
 /**
  * Values that may appear inside a downloaded ZIP `manifest.json`
@@ -461,7 +461,7 @@ export function assertPublishableWorkshopManifest(m: WorkshopManifest): void {
 
 /** Normalizes API/DB rows (including pre-migration values) to directory row types. */
 export function normalizeWorkshopRowModType(raw: string): WorkshopModTypeRow {
-  if (raw === "behavior_pack" || raw === "resource_pack") {
+  if (raw === "behavior_pack" || raw === "resource_pack" || raw === "world") {
     return raw;
   }
   if (raw === "block_pack" || raw === "mixed") {

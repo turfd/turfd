@@ -134,6 +134,7 @@ export class WorldGenerator {
   private readonly sandId: number;
   private readonly sandstoneId: number;
   private readonly cactusId: number;
+  private readonly sugarCaneId: number;
   private readonly deadBushId: number;
   private readonly waterId: number | null;
 
@@ -163,6 +164,7 @@ export class WorldGenerator {
     this.sandId = registry.getByIdentifier("stratum:sand").id;
     this.sandstoneId = registry.getByIdentifier("stratum:sandstone").id;
     this.cactusId = registry.getByIdentifier("stratum:cactus").id;
+    this.sugarCaneId = registry.getByIdentifier("stratum:sugar_cane").id;
     this.deadBushId = registry.getByIdentifier("stratum:dead_bush").id;
     this.waterId = registry.isRegistered("stratum:water")
       ? registry.getByIdentifier("stratum:water").id
@@ -204,8 +206,65 @@ export class WorldGenerator {
   decorateChunkSurface(chunk: Chunk, originWx: number, originWy: number): void {
     this.placeBackgroundTrees(chunk, originWx, originWy);
     this.decorateSurfaceVegetation(chunk, originWx, originWy);
+    this.decorateWaterEdgeSugarCane(chunk, originWx, originWy);
     this.decorateDesertSurface(chunk, originWx, originWy);
     chunk.dirty = true;
+  }
+
+  /** Sugar cane: 1–3 tall, only on sand/grass/dirt, only when adjacent to water. */
+  private decorateWaterEdgeSugarCane(chunk: Chunk, originWx: number, originWy: number): void {
+    if (this.waterId === null) {
+      return;
+    }
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      const wx = originWx + lx;
+      const surfaceY = this.terrain.getSurfaceHeight(wx);
+      const ly = surfaceY - originWy;
+      if (ly < 0 || ly >= CHUNK_SIZE) {
+        continue;
+      }
+      const baseIdx = localIndex(lx, ly);
+      const baseId = chunk.blocks[baseIdx]!;
+      const baseOk =
+        baseId === this.sandId || baseId === this.grassId || baseId === this.dirtId;
+      if (!baseOk) {
+        continue;
+      }
+      if (ly + 1 >= CHUNK_SIZE) {
+        continue;
+      }
+      const plantIdx = localIndex(lx, ly + 1);
+      if (chunk.blocks[plantIdx] !== this.airId) {
+        continue;
+      }
+      if (!this.soilTouchesWaterForSugarCane(chunk, lx, ly)) {
+        continue;
+      }
+
+      const wy = surfaceY;
+      const h = this.hash2(wx * 599 + 11, wy * 283 + 7);
+      if (h % 1000 >= 220) {
+        continue;
+      }
+      const height = 1 + ((h >>> 10) % 3);
+      let ok = true;
+      for (let k = 1; k <= height; k++) {
+        if (ly + k >= CHUNK_SIZE) {
+          ok = false;
+          break;
+        }
+        if (chunk.blocks[localIndex(lx, ly + k)] !== this.airId) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) {
+        continue;
+      }
+      for (let k = 1; k <= height; k++) {
+        chunk.blocks[localIndex(lx, ly + k)] = this.sugarCaneId;
+      }
+    }
   }
 
   /**
@@ -685,6 +744,31 @@ export class WorldGenerator {
       const nx = lx + dx;
       const ny = ly + dy;
       if (nx < 0 || nx >= CHUNK_SIZE || ny < 0 || ny >= CHUNK_SIZE) {
+        continue;
+      }
+      if (chunk.blocks[localIndex(nx, ny)] === wid) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Sugar cane soil: same as cardinal-from-soil, plus water in east/west cells one block lower
+   * (common after sea fill when the neighbor column’s surface sits a step down).
+   */
+  private soilTouchesWaterForSugarCane(chunk: Chunk, lx: number, ly: number): boolean {
+    if (this.foregroundTouchesWaterCardinal(chunk, lx, ly)) {
+      return true;
+    }
+    if (this.waterId === null || ly <= 0) {
+      return false;
+    }
+    const wid = this.waterId;
+    const ny = ly - 1;
+    for (const dlx of HORIZONTAL_NEIGHBOR_DX) {
+      const nx = lx + dlx;
+      if (nx < 0 || nx >= CHUNK_SIZE) {
         continue;
       }
       if (chunk.blocks[localIndex(nx, ny)] === wid) {

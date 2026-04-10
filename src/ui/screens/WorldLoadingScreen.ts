@@ -99,6 +99,32 @@ function injectLoadingStyles(base: string): void {
         );
     }
 
+    .stratum-loading-actions {
+      margin-top: 1.15rem;
+      display: flex;
+      flex-direction: row;
+      justify-content: flex-end;
+    }
+
+    .stratum-loading-btn {
+      pointer-events: auto;
+      font-family: 'BoldPixels', monospace;
+      font-size: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 10px 14px;
+      border-radius: var(--mm-radius-sm, 10px);
+      corner-shape: squircle;
+      cursor: pointer;
+      border: 1px solid var(--mm-border-strong, rgba(255, 255, 255, 0.16));
+      background: rgba(36, 36, 38, 0.95);
+      color: var(--mm-ink, #f2f2f7);
+      transition: opacity 0.12s ease, border-color 0.12s ease;
+    }
+
+    .stratum-loading-btn:hover { opacity: 0.92; }
+    .stratum-loading-btn:active { opacity: 0.85; }
+
     .stratum-loading-overlay.stratum-loading-overlay--entered {
       opacity: 1;
     }
@@ -373,6 +399,8 @@ export class WorldLoadingScreen {
   private readonly barFillEl: HTMLDivElement;
   private readonly percentEl: HTMLDivElement;
   private readonly tipEl: HTMLParagraphElement;
+  private readonly backBtn: HTMLButtonElement;
+  private backResolve: (() => void) | null = null;
 
   private readonly startedAt = performance.now();
   private reportedPct = 0;
@@ -456,11 +484,25 @@ export class WorldLoadingScreen {
     tipPanel.appendChild(tipLabel);
     tipPanel.appendChild(this.tipEl);
 
+    const actions = document.createElement("div");
+    actions.className = "stratum-loading-actions";
+    this.backBtn = document.createElement("button");
+    this.backBtn.type = "button";
+    this.backBtn.className = "stratum-loading-btn";
+    this.backBtn.textContent = "Back to menu";
+    this.backBtn.hidden = true;
+    this.backBtn.addEventListener("click", () => {
+      this.backResolve?.();
+      this.backResolve = null;
+    });
+    actions.appendChild(this.backBtn);
+
     this.card.appendChild(brand);
     this.card.appendChild(this.stageEl);
     this.card.appendChild(this.detailEl);
     this.card.appendChild(progressWrap);
     this.card.appendChild(tipPanel);
+    this.card.appendChild(actions);
     shell.appendChild(this.card);
     main.appendChild(shell);
     inner.appendChild(main);
@@ -577,6 +619,21 @@ export class WorldLoadingScreen {
     if (tipLabel instanceof HTMLElement) {
       tipLabel.style.display = "none";
     }
+    // Allow the user to interact with the error card.
+    this.root.style.pointerEvents = "auto";
+    this.backBtn.hidden = false;
+  }
+
+  waitForBackToMenu(): Promise<void> {
+    if (!this.backBtn.hidden) {
+      // already in error mode
+    } else {
+      this.backBtn.hidden = false;
+    }
+    this.root.style.pointerEvents = "auto";
+    return new Promise<void>((resolve) => {
+      this.backResolve = resolve;
+    });
   }
 
   destroy(): void {

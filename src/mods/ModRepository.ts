@@ -1,6 +1,6 @@
 /** Supabase workshop directory + IndexedDB mod cache; emits install progress on the event bus. */
 
-import { unzipSync } from "fflate";
+import { gunzipSync, unzipSync } from "fflate";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { MOD_MAX_COVER_SIZE, MOD_MAX_ZIP_SIZE, MOD_PAGE_SIZE } from "../core/constants";
 import type { EventBus } from "../core/EventBus";
@@ -113,6 +113,7 @@ export class ModRepository implements IModRepository {
   readonly bus: EventBus;
 
   private readonly cacheByKey = new Map<string, CachedMod>();
+  private devDir: FileSystemDirectoryHandle | null = null;
 
   constructor(client: SupabaseClient | null, store: IndexedDBStore, bus: EventBus) {
     this.client = client;
@@ -127,6 +128,88 @@ export class ModRepository implements IModRepository {
       if (row !== undefined) {
         this.cacheByKey.set(key, row);
       }
+    }
+    this.devDir = await this.store.loadDevPackDirectoryHandle();
+    await this.syncDevFolderPacks();
+  }
+
+  async setDevFolder(handle: FileSystemDirectoryHandle | null): Promise<void> {
+    this.devDir = handle;
+    await this.store.saveDevPackDirectoryHandle(handle);
+    await this.syncDevFolderPacks();
+  }
+
+  async syncDevFolderPacks(): Promise<void> {
+    const dir = this.devDir;
+    if (dir == null) {
+      return;
+    }
+    // Best-effort permission check (Chromium). If denied, just keep existing cache.
+    try {
+      // @ts-expect-error queryPermission is not in lib.dom for all TS targets
+      const q = await dir.queryPermission?.({ mode: "read" });
+      if (q === "denied") {
+        return;
+      }
+      // @ts-expect-error requestPermission is not in lib.dom for all TS targets
+      const r = await dir.requestPermission?.({ mode: "read" });
+      if (r === "denied") {
+        return;
+      }
+    } catch {
+      // ignore
+    }
+
+    const found: Array<{
+      filename: string;
+      cached: CachedMod;
+      cacheKey: string;
+    }> = [];
+    const byModId = new Map<string, string>(); // modId -> filename
+
+    // @ts-expect-error File System Access API iteration is not in all TS lib.dom versions
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind !== "file") {
+        continue;
+      }
+      const lower = name.toLowerCase();
+      if (!lower.endsWith(".zip")) {
+        continue;
+      }
+      const file = await (handle as FileSystemFileHandle).getFile();
+      const buf = await file.arrayBuffer();
+      const zipBytes = new Uint8Array(buf);
+      let rawFiles: Record<string, Uint8Array>;
+      try {
+        rawFiles = unzipSync(zipBytes) as Record<string, Uint8Array>;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Invalid ZIP.";
+        throw new Error(`Dev pack "${name}": ${msg}`);
+      }
+      const files = normalizeZipEntries(rawFiles);
+      const manifest = readManifestFromFiles(files);
+      const modId = manifest.id;
+      const prior = byModId.get(modId);
+      if (prior !== undefined) {
+        throw new Error(
+          `Two packs detected with same UUID/id ("${modId}"): ${prior} and ${name}.`,
+        );
+      }
+      byModId.set(modId, name);
+
+      const recordId = asModRecordId(`dev:${modId}:${manifest.version}`);
+      const cached: CachedMod = {
+        recordId,
+        modId: manifest.id,
+        version: manifest.version,
+        fetchedAt: Date.now(),
+        files,
+        manifest,
+      };
+      const key = workshopModCacheKey(manifest.id, manifest.version);
+      await this.store.putModCache(key, cached);
+      this.cacheByKey.set(key, cached);
+      found.push({ filename: name, cached, cacheKey: key });
     }
   }
 
@@ -192,7 +275,83 @@ export class ModRepository implements IModRepository {
   }
 
   async install(entry: ModListEntry): Promise<void> {
+    if (entry.modType === "world") {
+      await this.fetchAndImportWorld(entry, { countDownload: true });
+      return;
+    }
     await this.fetchAndCache(entry, { countDownload: true });
+  }
+
+  private async fetchAndImportWorld(
+    entry: ModListEntry,
+    opts: { countDownload: boolean },
+  ): Promise<void> {
+    this.bus.emit({
+      type: "mod:install-started",
+      modId: entry.modId,
+    } satisfies GameEvent);
+    try {
+      if (this.client === null) {
+        throw new WorkshopUnavailableError();
+      }
+      this.bus.emit({
+        type: "mod:install-progress",
+        modId: entry.modId,
+        percent: 10,
+      } satisfies GameEvent);
+
+      const { data: pub } = this.client.storage.from("mods").getPublicUrl(entry.filePath);
+      const res = await fetch(pub.publicUrl);
+      if (!res.ok) {
+        throw new Error(res.statusText || `Download failed (${res.status})`);
+      }
+      const buf = await res.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      if (bytes.length < 2) {
+        throw new Error("Downloaded world is empty.");
+      }
+
+      this.bus.emit({
+        type: "mod:install-progress",
+        modId: entry.modId,
+        percent: 55,
+      } satisfies GameEvent);
+
+      const jsonBytes =
+        bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
+      const text = new TextDecoder().decode(jsonBytes);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        throw new Error("Downloaded world JSON is invalid.");
+      }
+      await this.store.importWorldBundle(parsed);
+
+      if (opts.countDownload) {
+        void this.client.rpc("increment_mod_download_count", {
+          p_mod_uuid: entry.id,
+        });
+      }
+
+      this.bus.emit({
+        type: "mod:install-progress",
+        modId: entry.modId,
+        percent: 100,
+      } satisfies GameEvent);
+      this.bus.emit({
+        type: "mod:install-complete",
+        modId: entry.modId,
+      } satisfies GameEvent);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.bus.emit({
+        type: "mod:install-error",
+        modId: entry.modId,
+        message,
+      } satisfies GameEvent);
+      throw e;
+    }
   }
 
   private async fetchAndCache(
@@ -479,6 +638,115 @@ export class ModRepository implements IModRepository {
         row.created_at instanceof Date
           ? row.created_at.toISOString()
           : String(row.created_at ?? ""),
+      authorName,
+      avgRating: 0,
+      ratingCount: 0,
+      commentCount: 0,
+    };
+  }
+
+  async publishWorld(
+    worldJsonBytes: Uint8Array,
+    coverBytes: Uint8Array,
+    displayName: string,
+    description: string,
+    ownerUserId: string,
+  ): Promise<ModListEntry> {
+    if (this.client === null) {
+      throw new WorkshopUnavailableError();
+    }
+    if (worldJsonBytes.length > MOD_MAX_ZIP_SIZE) {
+      // Reuse the same ceiling so workshop stays predictable (2 MB default).
+      throw new Error(`World export must be at most ${MOD_MAX_ZIP_SIZE} bytes.`);
+    }
+    if (coverBytes.length > MOD_MAX_COVER_SIZE) {
+      throw new Error(`Cover image must be at most ${MOD_MAX_COVER_SIZE} bytes.`);
+    }
+    if (coverBytes.length === 0) {
+      throw new Error("World export is missing a world photo; save the world once, then export again.");
+    }
+    const name = displayName.trim();
+    if (name.length < 1 || name.length > 64) {
+      throw new Error("Display name must be 1–64 characters.");
+    }
+    const desc = description.trim().slice(0, 500);
+
+    const id = crypto.randomUUID();
+    const jsonPath = `worlds/${id}.stratum-world.json`;
+    const coverPath = `covers/${id}.jpg`;
+
+    const { error: upJson } = await this.client.storage.from("mods").upload(jsonPath, worldJsonBytes, {
+      contentType: "application/json",
+      upsert: false,
+    });
+    if (upJson !== null) {
+      throw new Error(clarifyStorageError(upJson.message));
+    }
+
+    const coverMime =
+      coverBytes.length >= 2 && coverBytes[0] === 0xff && coverBytes[1] === 0xd8
+        ? "image/jpeg"
+        : "image/png";
+    const { error: upCover } = await this.client.storage.from("mods").upload(coverPath, coverBytes, {
+      contentType: coverMime,
+      upsert: false,
+    });
+    if (upCover !== null) {
+      void this.client.storage.from("mods").remove([jsonPath]);
+      throw new Error(clarifyStorageError(upCover.message));
+    }
+
+    const modId = `world.${id.replace(/-/g, "").toLowerCase()}`;
+    const version = "1.0.0";
+
+    const { data: inserted, error: insErr } = await this.client
+      .from("stratum_mods")
+      .insert({
+        owner_id: ownerUserId,
+        name,
+        description: desc,
+        mod_id: modId,
+        version,
+        mod_type: "world",
+        file_path: jsonPath,
+        cover_path: coverPath,
+        file_size: worldJsonBytes.length,
+        is_published: true,
+      })
+      .select(
+        "id, name, description, mod_id, version, mod_type, file_path, cover_path, file_size, download_count, created_at",
+      )
+      .single();
+
+    if (insErr !== null || inserted === null) {
+      void this.client.storage.from("mods").remove([jsonPath, coverPath]);
+      throw new Error(insErr?.message ?? "Insert failed.");
+    }
+
+    const row = inserted as Record<string, unknown>;
+    const prof = await this.client
+      .from("profiles")
+      .select("username")
+      .eq("id", ownerUserId)
+      .maybeSingle();
+    const authorName =
+      prof.data !== null && typeof prof.data === "object" && "username" in prof.data
+        ? String((prof.data as { username?: string }).username ?? "")
+        : "";
+
+    return {
+      id: asModRecordId(String(row.id)),
+      name: String(row.name),
+      description: String(row.description ?? ""),
+      modId: String(row.mod_id),
+      version: String(row.version),
+      modType: normalizeWorkshopRowModType(String(row.mod_type ?? "")),
+      filePath: String(row.file_path),
+      coverPath: String(row.cover_path),
+      fileSize: Number(row.file_size ?? 0),
+      downloadCount: Number(row.download_count ?? 0),
+      createdAt:
+        row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""),
       authorName,
       avgRating: 0,
       ratingCount: 0,

@@ -13,6 +13,8 @@ const CMD_HINTS: Record<string, string> = {
   unmute: "/unmute <player|uuid> — Unmute a player",
   ping: "/ping — Round-trip time to the host (when connected)",
   give: "/give @s <item> [count] — Give items (host / OP); /give <player> <item> [count]",
+  summon:
+    "/summon <sheep|pig|zombie|…> [blockX] [woolColor] — Mobs at feet or surface column; sheep wool color optional (host / OP)",
   op: "/op <player> — Grant operator (host only)",
   deop: "/deop <player|uuid> — Revoke operator (host only)",
 };
@@ -25,6 +27,7 @@ const CMD_ORDER = [
   "mute",
   "op",
   "ping",
+  "summon",
   "unban",
   "unmute",
 ] as const;

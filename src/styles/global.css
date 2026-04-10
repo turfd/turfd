@@ -52,6 +52,16 @@ body {
   opacity: 0;
 }
 
+/* Bed sleep transition: dim fade overlay (lower opacity than entry fade). */
+.stratum-sleep-fade {
+  position: fixed;
+  inset: 0;
+  z-index: 10010;
+  background: #000;
+  pointer-events: none;
+  opacity: 0;
+}
+
 /* Multiplayer / session-ended overlay (UIShell) — fade + slide, matches pause/inventory */
 .stratum-session-overlay {
   position: fixed;

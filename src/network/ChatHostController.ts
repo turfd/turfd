@@ -80,6 +80,8 @@ export type ChatHostControllerDeps = {
   executeGive: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/weather set rain|clear`. */
   executeWeather: (issuerPeerId: string, rest: string) => void;
+  /** Host-only: `/summon` (spawn mobs near players). */
+  executeSummon: (issuerPeerId: string, rest: string) => void;
 };
 
 export class ChatHostController {
@@ -173,6 +175,18 @@ export class ChatHostController {
         return true;
       }
       this.d.executeWeather(fromPeerId, rest);
+      return true;
+    }
+
+    if (cmd === "summon") {
+      if (!this.canModerate(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          "You do not have permission to use this command.",
+        );
+        return true;
+      }
+      this.d.executeSummon(fromPeerId, rest);
       return true;
     }
 

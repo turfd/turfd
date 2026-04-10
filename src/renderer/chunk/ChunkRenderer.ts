@@ -80,8 +80,9 @@ export class ChunkRenderer {
     const layer = this.pipeline.layerTilesBack;
     const seen = this._syncSeen;
     seen.clear();
+    const chunkList = [...loadedChunks];
 
-    for (const chunk of loadedChunks) {
+    for (const chunk of chunkList) {
       const key = chunkKey(chunk.coord);
       seen.add(key);
       let triple = this.meshes.get(key);

@@ -23,6 +23,7 @@ import {
   type ListedRoom,
 } from "../../network/roomDirectoryApi";
 import { createWorldPackEditorController } from "../worldEditPacksUi";
+import { gunzipSync, gzipSync } from "fflate";
 import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
 import { MenuBackground } from "./MenuBackground";
 import { WorkshopScreen } from "./WorkshopScreen";
@@ -624,6 +625,20 @@ function injectStyles(base: string): void {
       display: flex;
       justify-content: flex-start;
       flex-shrink: 0;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .mm-import-feedback {
+      font-family: 'M5x7', monospace;
+      font-size: calc(16px + var(--mm-m5-nudge));
+      color: var(--mm-ink-mid);
+      margin: 0 0 10px;
+      min-height: 1.25em;
+      line-height: 1.35;
+    }
+    .mm-import-feedback--error {
+      color: #ff6b6b;
     }
 
     /* ── Action buttons ───────────────────────────── */
@@ -2916,7 +2931,7 @@ function injectStyles(base: string): void {
 // ---------------------------------------------------------------------------
 
 const WHATS_NEW_HTML = `
-  Alpha 0.3 adds full game audio, random rain (not deserts; boosts crops, grass, and saplings.), stairs from logs or planks, and new blocks.
+  Alpha 0.3.1 adds new mobs (zombie, sheep, pig), sugarcane + sugar/paper, bed spawns, world export/import (and Workshop world sharing), /summon, plus Workshop templates + developer mode.
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -3357,6 +3372,11 @@ export class MainMenu {
           title.textContent = "Worlds";
           panel.appendChild(title);
 
+          const importFeedback = document.createElement("p");
+          importFeedback.className = "mm-import-feedback";
+          importFeedback.setAttribute("aria-live", "polite");
+          panel.appendChild(importFeedback);
+
           const list = document.createElement("div");
           list.className = "mm-worldlist";
           panel.appendChild(list);
@@ -3386,9 +3406,52 @@ export class MainMenu {
 
           const footer = document.createElement("div");
           footer.className = "mm-solo-footer";
+          const importInput = document.createElement("input");
+          importInput.type = "file";
+          importInput.accept = "application/json,application/gzip,.json,.gz";
+          importInput.style.cssText =
+            "position:absolute;width:0;height:0;opacity:0;pointer-events:none";
+          importInput.setAttribute("aria-hidden", "true");
+          const importBtn = makeBtn("Import world", "mm-btn mm-btn-subtle");
+          importBtn.addEventListener("click", () => importInput.click());
+          importInput.addEventListener("change", () => {
+            const file = importInput.files?.[0];
+            importInput.value = "";
+            if (file === undefined) {
+              return;
+            }
+            void (async () => {
+              try {
+                importBtn.disabled = true;
+                importFeedback.classList.remove("mm-import-feedback--error");
+                importFeedback.textContent = "Importing…";
+                await store.openDB();
+                const buf = await file.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                const rawBytes = isGzipBytes(bytes) ? gunzipSync(bytes) : bytes;
+                const text = new TextDecoder().decode(rawBytes);
+                const parsed: unknown = JSON.parse(text);
+                const newUuid = await store.importWorldBundle(parsed);
+                const imported = await store.loadWorld(newUuid);
+                importFeedback.textContent =
+                  imported !== undefined
+                    ? `Imported “${imported.name}”.`
+                    : "World imported.";
+              } catch (err: unknown) {
+                importFeedback.textContent =
+                  err instanceof Error ? err.message : "Import failed.";
+                importFeedback.classList.add("mm-import-feedback--error");
+              } finally {
+                importBtn.disabled = false;
+              }
+              await rerenderList();
+            })();
+          });
+          footer.appendChild(importInput);
           const createBtn = makeBtn("New World", "mm-btn");
           createBtn.addEventListener("click", openCreateModal);
           footer.appendChild(createBtn);
+          footer.appendChild(importBtn);
           panel.appendChild(footer);
 
           void rerenderList();
@@ -3588,6 +3651,28 @@ export class MainMenu {
           meta.style.marginTop = "12px";
           meta.textContent = `Seed ${fresh.seed} · Last played ${formatDate(fresh.lastPlayedAt)}`;
 
+          const exportBtn = makeBtn("Export world", "mm-btn mm-btn-subtle");
+          exportBtn.style.marginTop = "14px";
+          exportBtn.addEventListener("click", () => {
+            void (async () => {
+              try {
+                await store.openDB();
+                exportBtn.disabled = true;
+                const bundle = await store.exportWorldBundle(worldUuid);
+                const base = nameInput.value.trim() || fresh.name || "world";
+                triggerCompactWorldDownload(safeWorldExportBasename(base), bundle);
+                feedback.textContent = "Export downloaded.";
+                feedback.classList.remove("mm-feedback-error");
+              } catch (err: unknown) {
+                feedback.textContent =
+                  err instanceof Error ? err.message : "Export failed.";
+                feedback.classList.add("mm-feedback-error");
+              } finally {
+                exportBtn.disabled = false;
+              }
+            })();
+          });
+
           const deleteBtn = makeBtn("Delete world…", "mm-btn mm-btn-danger");
           deleteBtn.style.marginTop = "22px";
           deleteBtn.addEventListener("click", () => {
@@ -3778,6 +3863,7 @@ export class MainMenu {
           }
           generalPanel.appendChild(meta);
           generalPanel.appendChild(packCtrl.generalPackOptions);
+          generalPanel.appendChild(exportBtn);
           generalPanel.appendChild(deleteBtn);
 
           function renderActivePanel(): void {
@@ -4643,4 +4729,29 @@ function makeBtn(text: string, className: string): HTMLButtonElement {
   btn.className = className;
   btn.textContent = text;
   return btn;
+}
+
+function safeWorldExportBasename(worldName: string): string {
+  const t = worldName.trim().slice(0, 72) || "world";
+  const safe = t.replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, "_");
+  return `${safe}.stratum-world.json.gz`;
+}
+
+function isGzipBytes(bytes: Uint8Array): boolean {
+  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
+function triggerCompactWorldDownload(filename: string, data: unknown): void {
+  const json = JSON.stringify(data);
+  const gz = gzipSync(new TextEncoder().encode(json), { level: 9 });
+  const blob = new Blob([new Uint8Array(gz)], { type: "application/gzip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
