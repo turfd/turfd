@@ -3,7 +3,9 @@
  * Block terrain uses {@link BLOCK_TEXTURE_MANIFEST_PATH}; item entities use a record
  * resolved from block + item manifests (see {@link resolveItemTextureRecord}).
  *
- * Optional `_alt_N` files beside each base PNG are discovered automatically (HEAD probe `_alt_1`… until miss).
+ * Optional `_alt_N` files must be listed explicitly in the manifest (same folder as the base PNG).
+ * Runtime HEAD probing was removed: static hosts (e.g. GitHub Pages) often break HEAD or return
+ * misleading responses, which caused hundreds of failed loads for non-existent alts.
  */
 import { Rectangle, Texture, TextureSource } from "pixi.js";
 import { BLOCK_SIZE } from "../core/constants";
@@ -27,48 +29,6 @@ function loadImageElement(url: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
   });
-}
-
-/**
- * For every base manifest key (not already `*_alt_N`): discover optional `name_alt_1.png`, `name_alt_2.png`, …
- * beside the base file. Uses HEAD + image Content-Type check; stops at first miss per base.
- */
-async function discoverAltVariants(raw: Record<string, string>): Promise<Record<string, string>> {
-  const expanded: Record<string, string> = { ...raw };
-
-  const probes: Promise<void>[] = [];
-  for (const [name, path] of Object.entries(raw)) {
-    if (/_alt_\d+$/.test(name)) continue;
-    const dotIdx = path.lastIndexOf(".");
-    const basePath = dotIdx >= 0 ? path.slice(0, dotIdx) : path;
-    const ext = dotIdx >= 0 ? path.slice(dotIdx) : ".png";
-
-    probes.push(
-      (async () => {
-        for (let i = 1; i <= 16; i++) {
-          const altName = `${name}_alt_${i}`;
-          if (altName in expanded) continue;
-          const altPath = `${basePath}_alt_${i}${ext}`;
-          try {
-            const res = await fetch(publicAssetUrl(altPath), {
-              method: "HEAD",
-            });
-            if (!res.ok) break;
-            const ct = (res.headers.get("content-type") ?? "").toLowerCase();
-            // Require a real image/* type. Empty or non-image 200s (common with SPA / proxy
-            // fallbacks) must not register alts or we 404 when packing the atlas.
-            if (!ct.startsWith("image/")) break;
-            expanded[altName] = altPath;
-          } catch {
-            break;
-          }
-        }
-      })(),
-    );
-  }
-
-  await Promise.all(probes);
-  return expanded;
 }
 
 type PackedEntry = {
@@ -221,8 +181,7 @@ export class AtlasLoader {
     if (raw === null || typeof raw !== "object") {
       throw new Error(`${this.manifestRelativePath}: "textures" must be an object`);
     }
-    const expanded = await discoverAltVariants(raw);
-    await this.packTextures(expanded, this.manifestRelativePath);
+    await this.packTextures(raw, this.manifestRelativePath);
   }
 
   /**
