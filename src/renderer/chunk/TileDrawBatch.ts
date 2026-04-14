@@ -136,6 +136,56 @@ function windAnchorWorldY(
   return tallGrass === "top" ? worldY - 1 : worldY;
 }
 
+/**
+ * Phase/frequency anchor for wind: tall-grass pairs share Y; stacked sugar cane shares the
+ * bottom-most cane cell in the column (walk down while same block id).
+ */
+function windAnchorWorldYForWindSway(
+  def: BlockDefinition,
+  worldX: number,
+  worldY: number,
+  sugarCaneBlockId: number,
+  sampleWorldBlockId: (wx: number, wy: number) => number,
+): number {
+  if (def.identifier === "stratum:sugar_cane" && sugarCaneBlockId >= 0) {
+    let wy = worldY;
+    for (;;) {
+      const belowWy = wy - 1;
+      if (sampleWorldBlockId(worldX, belowWy) !== sugarCaneBlockId) {
+        return wy;
+      }
+      wy = belowWy;
+    }
+  }
+  return windAnchorWorldY(worldY, def.tallGrass);
+}
+
+type SugarCaneColumnRange = { baseWy: number; topWy: number };
+
+function sugarCaneColumnRange(
+  worldX: number,
+  worldY: number,
+  sugarCaneBlockId: number,
+  sampleWorldBlockId: (wx: number, wy: number) => number,
+): SugarCaneColumnRange {
+  let baseWy = worldY;
+  while (sampleWorldBlockId(worldX, baseWy - 1) === sugarCaneBlockId) {
+    baseWy--;
+  }
+  let topWy = worldY;
+  while (sampleWorldBlockId(worldX, topWy + 1) === sugarCaneBlockId) {
+    topWy++;
+  }
+  return { baseWy, topWy };
+}
+
+function sugarCaneEdgeSwayMul(edgeWy: number, col: SugarCaneColumnRange): number {
+  const h = Math.max(1, col.topWy + 1 - col.baseWy);
+  const t = Math.max(0, Math.min(1, (edgeWy - col.baseWy) / h));
+  // Keep some base sway while preserving stronger tip bend.
+  return 0.18 + t * 0.82;
+}
+
 export type TileWindSway = {
   /** Index in `positions` of the first vertex (x of top-left). */
   posIndex: number;
@@ -251,6 +301,9 @@ function buildGeometryFromCells(
   splitWaterOverlay = true,
 ): BuiltTileGeometry {
   const chunkOrigin = chunkToWorldOrigin(chunk.coord);
+  const sugarCaneBlockId = registry.isRegistered("stratum:sugar_cane")
+    ? registry.getByIdentifier("stratum:sugar_cane").id
+    : -1;
   const sampleWorldBlockId = (wx: number, wy: number): number => {
     if (opts !== undefined) {
       return opts.sampleBlockId(wx, wy);
@@ -658,10 +711,21 @@ function buildGeometryFromCells(
       const yBottom = py + b + plantY;
 
       const maxWind = def.windSwayMaxPx ?? 0;
+      const isSugarCane = def.identifier === "stratum:sugar_cane";
+      const sugarRange =
+        isSugarCane && sugarCaneBlockId >= 0
+          ? sugarCaneColumnRange(
+              worldX,
+              worldY,
+              sugarCaneBlockId,
+              sampleWorldBlockId,
+            )
+          : null;
       const visibleH = yBottom - yTop;
       const useWindGroundDeadband =
         maxWind > 0 &&
         def.tallGrass !== "top" &&
+        !isSugarCane &&
         visibleH > WIND_SWAY_GROUND_DEADBAND_PX;
 
       const emitQuad = (
@@ -757,7 +821,13 @@ function buildGeometryFromCells(
         const swayPosStart = pi;
         emitQuad(yTop, yBandTop, vTopBase, vBandTop);
 
-        const ay = windAnchorWorldY(worldY, def.tallGrass);
+        const ay = windAnchorWorldYForWindSway(
+          def,
+          worldX,
+          worldY,
+          sugarCaneBlockId,
+          sampleWorldBlockId,
+        );
         windSways.push({
           posIndex: swayPosStart,
           xLeft: px,
@@ -765,13 +835,19 @@ function buildGeometryFromCells(
           phase: windPhaseRad(worldX, ay),
           freqMul: windFreqMul(worldX, ay),
           maxPx: maxWind,
-          bottomWaveMul: 0,
-          topWaveMul:
-            def.tallGrass === "bottom"
+          bottomWaveMul:
+            sugarRange !== null ? sugarCaneEdgeSwayMul(worldY, sugarRange) : 0,
+          topWaveMul: isSugarCane
+            ? sugarCaneEdgeSwayMul(worldY + 1, sugarRange!)
+            : def.tallGrass === "bottom"
               ? WIND_SWAY_TALL_MID_BLEND
               : 1,
           bottomWaveTier: "seam",
-          topWaveTier: def.tallGrass === "bottom" ? "seam" : "crown",
+          topWaveTier: isSugarCane
+            ? "seam"
+            : def.tallGrass === "bottom"
+              ? "seam"
+              : "crown",
           bodySwayWorldCenterX: chunkOrigin.wx * BLOCK_SIZE + px + b * 0.5,
           bodySwayWorldBlockY: worldY,
         });
@@ -830,12 +906,19 @@ function buildGeometryFromCells(
         }
 
         if (maxWind > 0) {
-          const ay = windAnchorWorldY(worldY, def.tallGrass);
-          const bottomWaveMul = 0;
+          const ay = windAnchorWorldYForWindSway(
+            def,
+            worldX,
+            worldY,
+            sugarCaneBlockId,
+            sampleWorldBlockId,
+          );
+          const bottomWaveMul =
+            sugarRange !== null ? sugarCaneEdgeSwayMul(worldY, sugarRange) : 0;
           const topWaveMul = 1;
           const bottomWaveTier: "ground" | "seam" =
-            def.tallGrass === "top" ? "seam" : "ground";
-          const topWaveTier: "seam" | "crown" = "crown";
+            isSugarCane || def.tallGrass === "top" ? "seam" : "ground";
+          const topWaveTier: "seam" | "crown" = isSugarCane ? "seam" : "crown";
           windSways.push({
             posIndex: quadPosStart,
             xLeft: px,

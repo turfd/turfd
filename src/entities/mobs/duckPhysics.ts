@@ -24,6 +24,7 @@ import {
   DUCK_WIDTH_PX,
   MOB_GRAVITY_PX,
   MOB_TERMINAL_VY_PX,
+  mobSwimBobVyDelta,
 } from "./mobConstants";
 import type { MobDuckState } from "./mobTypes";
 
@@ -85,6 +86,7 @@ export function tickDuckPhysics(
   dt: number,
   rng: GeneratorContext,
   solidScratch: AABB[],
+  worldTimeSec: number,
 ): void {
   const wasOnGround = m.onGround;
   m.hurtRemainSec = Math.max(0, m.hurtRemainSec - dt);
@@ -122,6 +124,13 @@ export function tickDuckPhysics(
   if (inWater) {
     m.vy += MOB_GRAVITY_PX * DUCK_WATER_GRAVITY_MULT * dt;
     m.vy -= DUCK_WATER_BUOYANCY_ACCEL_PX * dt;
+    if (m.vy > DUCK_WATER_MAX_SINK_SPEED_PX) {
+      m.vy = DUCK_WATER_MAX_SINK_SPEED_PX;
+    }
+    if (m.vy < DUCK_WATER_MAX_UPWARD_SPEED_PX) {
+      m.vy = DUCK_WATER_MAX_UPWARD_SPEED_PX;
+    }
+    m.vy += mobSwimBobVyDelta(m.id, worldTimeSec, dt);
     if (m.vy > DUCK_WATER_MAX_SINK_SPEED_PX) {
       m.vy = DUCK_WATER_MAX_SINK_SPEED_PX;
     }

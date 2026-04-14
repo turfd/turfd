@@ -30,6 +30,7 @@ import {
   SLIME_PHYSICS_CLAMP_VY_UP_PX,
   ZOMBIE_ATTACK_EXTRA_REACH_BLOCKS,
   ZOMBIE_PREFERRED_GAP_BLOCKS,
+  mobSwimBobVyDelta,
 } from "./mobConstants";
 import type { MobSlimeState } from "./mobTypes";
 
@@ -99,12 +100,14 @@ export function tickSlimePhysics(
   chaseTarget:
     | { x: number; y: number; halfW: number; height: number }
     | null,
+  worldTimeSec: number,
 ): void {
   const wasOnGround = m.onGround;
   m.hurtRemainSec = Math.max(0, m.hurtRemainSec - dt);
   m.damageInvulnRemainSec = Math.max(0, m.damageInvulnRemainSec - dt);
   m.panicRemainSec = Math.max(0, m.panicRemainSec - dt);
   m.slimeJumpCooldownRemainSec = Math.max(0, m.slimeJumpCooldownRemainSec - dt);
+  m.slimeChaseInvertRemainSec = Math.max(0, m.slimeChaseInvertRemainSec - dt);
 
   let moveSign = 0;
   if (m.panicRemainSec > 0) {
@@ -126,8 +129,11 @@ export function tickSlimePhysics(
       moveSign = 0;
     } else {
       moveSign = dx > 0 ? 1 : -1;
+      if (m.slimeChaseInvertRemainSec > 0) {
+        moveSign = -moveSign;
+      }
       m.targetVx = moveSign * SLIME_JUMP_VX_PX;
-      m.facingRight = dx > 0;
+      m.facingRight = moveSign > 0;
     }
   } else {
     m.targetVx = 0;
@@ -179,6 +185,13 @@ export function tickSlimePhysics(
     m.vx = m.targetVx * SLIME_WATER_SPEED_MULT + m.hitKnockVx;
     m.vy += MOB_GRAVITY_PX * SLIME_WATER_GRAVITY_MULT * dt;
     m.vy -= SLIME_WATER_BUOYANCY_ACCEL_PX * dt;
+    if (m.vy > SLIME_WATER_MAX_SINK_SPEED_PX) {
+      m.vy = SLIME_WATER_MAX_SINK_SPEED_PX;
+    }
+    if (m.vy < SLIME_WATER_MAX_UPWARD_SPEED_PX) {
+      m.vy = SLIME_WATER_MAX_UPWARD_SPEED_PX;
+    }
+    m.vy += mobSwimBobVyDelta(m.id, worldTimeSec, dt);
     if (m.vy > SLIME_WATER_MAX_SINK_SPEED_PX) {
       m.vy = SLIME_WATER_MAX_SINK_SPEED_PX;
     }
@@ -268,8 +281,23 @@ export function tickSlimePhysics(
   m.y = feet.y;
   if (hitX) {
     m.vx = 0;
-    m.slimeAirHorizVx = 0;
-    m.targetVx = 0;
+    if (m.panicRemainSec > 0) {
+      m.facingRight = !m.facingRight;
+      m.targetVx = (m.facingRight ? 1 : -1) * SLIME_PANIC_SPEED_PX;
+      if (!inWater && !m.onGround && !m.slimeJumpPriming) {
+        m.slimeAirHorizVx =
+          (m.facingRight ? 1 : -1) * Math.abs(m.slimeAirHorizVx);
+      } else {
+        m.slimeAirHorizVx = 0;
+      }
+    } else if (chaseTarget !== null && !inWater) {
+      m.slimeChaseInvertRemainSec = Math.max(m.slimeChaseInvertRemainSec, 0.34);
+      m.slimeAirHorizVx = 0;
+      m.targetVx = 0;
+    } else {
+      m.slimeAirHorizVx = 0;
+      m.targetVx = 0;
+    }
   }
   if (hitY) {
     m.vy = 0;
@@ -327,7 +355,7 @@ export function applySlimeKnockback(
   m.facingRight = away > 0;
   m.slimeJumpPriming = false;
   m.slimeJumpPrimeElapsedSec = 0;
-  if (m.onGround && !m.inWater) {
+  if (m.onGround && !m.inWater && m.vy > -32) {
     m.vy -= SLIME_KNOCKBACK_GROUND_VY_PX;
   }
 }

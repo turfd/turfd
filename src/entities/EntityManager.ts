@@ -141,7 +141,6 @@ import {
   PLAYER_WIDTH,
   REACH_BLOCKS,
   BOW_MAX_DRAW_SEC,
-  ENTITY_SWIM_VISUAL_SINK_PX,
   DEFAULT_SKIN_ID,
 } from "../core/constants";
 import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
@@ -3291,10 +3290,9 @@ export class EntityManager {
         wool.scale.set(flipX, 1);
       }
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
-      const sheepSwimDown = sheepInWater ? ENTITY_SWIM_VISUAL_SINK_PX : 0;
       root.position.set(
         Math.round(v.x),
-        Math.round(-v.y + SHEEP_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx + sheepSwimDown),
+        Math.round(-v.y + SHEEP_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx),
       );
       if (v.deathAnimRemainSec > 0) {
         let deathBitTex: Texture = base.texture;
@@ -3438,15 +3436,13 @@ export class EntityManager {
       root.scale.set(baseScale, baseScale);
       base.scale.set(flipX, 1);
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
-      const pigSwimDown = pigInWater ? ENTITY_SWIM_VISUAL_SINK_PX : 0;
       root.position.set(
         Math.round(v.x),
         Math.round(
           -v.y +
             PIG_FEET_SPRITE_NUDGE_Y_PX +
             PIG_VISUAL_FEET_DROP_PX +
-            extraNudgeDownPx +
-            pigSwimDown,
+            extraNudgeDownPx,
         ),
       );
       if (v.deathAnimRemainSec > 0) {
@@ -3579,10 +3575,9 @@ export class EntityManager {
       // Keep duck sprite origin fixed across animation frames to avoid visible popping/jitter.
       base.position.set(0, 0);
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
-      const duckSwimDown = duckInWater ? ENTITY_SWIM_VISUAL_SINK_PX : 0;
       root.position.set(
         Math.round(v.x),
-        Math.round(-v.y + DUCK_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx + duckSwimDown),
+        Math.round(-v.y + DUCK_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx),
       );
       if (v.deathAnimRemainSec > 0) {
         this.spawnDeathBitsIfNeeded(
@@ -3817,13 +3812,11 @@ export class EntityManager {
       base.scale.set(flip, 1);
       base.position.set(0, 0);
       root.tint = v.hurt && !useAttack ? 0xff6a6a : 0xffffff;
-      const slimeSwimDown = slimeInWater ? ENTITY_SWIM_VISUAL_SINK_PX : 0;
       const slimeRootY =
         -v.y +
         SLIME_FEET_SPRITE_NUDGE_Y_PX +
         extraNudgeDownPx +
-        SLIME_VISUAL_FEET_DROP_PX +
-        slimeSwimDown;
+        SLIME_VISUAL_FEET_DROP_PX;
       root.position.set(Math.round(v.x), Math.round(slimeRootY));
       if (v.deathAnimRemainSec > 0) {
         this.spawnDeathBitsIfNeeded(
@@ -3982,14 +3975,12 @@ export class EntityManager {
       // Also bias 1px left to avoid a subtle jitter when toggling attack pose.
       base.position.x = useAttack ? (v.facingRight ? -hitBackPx : hitBackPx) - 1 : 0;
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
-      const zombieSwimDown = zombieInWater ? ENTITY_SWIM_VISUAL_SINK_PX : 0;
       root.position.set(
         Math.round(v.x),
         Math.round(
           -v.y +
             ZOMBIE_FEET_SPRITE_NUDGE_Y_PX +
-            (extraNudgeDownPx - 3) +
-            zombieSwimDown,
+            (extraNudgeDownPx - 3),
         ),
       );
 

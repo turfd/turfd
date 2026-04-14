@@ -385,6 +385,7 @@ export class MobManager {
               slimeAirHorizVx: 0,
               slimeJumpDir: 0,
               slimeJumpCooldownRemainSec: 0,
+              slimeChaseInvertRemainSec: 0,
             }
           : p.type === MobType.Sheep
           ? {
@@ -1037,6 +1038,7 @@ export class MobManager {
       slimeAirHorizVx: 0,
       slimeJumpDir: 0,
       slimeJumpCooldownRemainSec: 0,
+      slimeChaseInvertRemainSec: 0,
     };
     this.mobs.set(id, m);
     this.slimePerColumn.set(wx, (this.slimePerColumn.get(wx) ?? 0) + 1);
@@ -2060,6 +2062,8 @@ export class MobManager {
             },
           ];
 
+    const worldTimeSec = worldTimeMs / 1000;
+
     for (const m of this.mobs.values()) {
       m.noDamageSec += dt;
       if (m.deathAnimRemainSec > 0) {
@@ -2075,11 +2079,11 @@ export class MobManager {
       }
 
       if (m.kind === "sheep") {
-        tickSheepPhysics(this.world, m, dt, rng, this.solidScratch);
+        tickSheepPhysics(this.world, m, dt, rng, this.solidScratch, worldTimeSec);
       } else if (m.kind === "pig") {
-        tickPigPhysics(this.world, m, dt, rng, this.solidScratch);
+        tickPigPhysics(this.world, m, dt, rng, this.solidScratch, worldTimeSec);
       } else if (m.kind === "duck") {
-        tickDuckPhysics(this.world, m, dt, rng, this.solidScratch);
+        tickDuckPhysics(this.world, m, dt, rng, this.solidScratch, worldTimeSec);
       } else if (m.kind === "slime") {
         const slimeTarget = this.pickNearestPlayerTarget(m.x, m.y, chaseTargets);
         tickSlimePhysics(
@@ -2089,6 +2093,7 @@ export class MobManager {
           rng,
           this.solidScratch,
           slimeTarget,
+          worldTimeSec,
         );
         if (slimeTarget !== null) {
           const { w: slimeW, h: slimeH } = mobHitboxSizePx("slime");
@@ -2148,7 +2153,15 @@ export class MobManager {
         }
       } else {
         const target = this.pickNearestPlayerTarget(m.x, m.y, chaseTargets);
-        tickZombiePhysics(this.world, m, dt, rng, this.solidScratch, target);
+        tickZombiePhysics(
+          this.world,
+          m,
+          dt,
+          rng,
+          this.solidScratch,
+          worldTimeSec,
+          target,
+        );
         // Hard stop: don't let zombie overlap the nearest player target even if physics tick
         // (step-up, large dt, etc.) would place it inside.
         if (target !== null) {
@@ -2422,6 +2435,7 @@ export class MobManager {
         slimeAirHorizVx: 0,
         slimeJumpDir: 0,
         slimeJumpCooldownRemainSec: 0,
+        slimeChaseInvertRemainSec: 0,
       };
     } else {
       return;
@@ -2565,6 +2579,7 @@ export class MobManager {
                   slimeAirHorizVx: 0,
                   slimeJumpDir: 0,
                   slimeJumpCooldownRemainSec: 0,
+                  slimeChaseInvertRemainSec: 0,
                 }
               : {
                   kind: "zombie",

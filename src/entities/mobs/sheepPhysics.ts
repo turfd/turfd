@@ -24,6 +24,7 @@ import {
   SHEEP_WATER_MAX_UPWARD_SPEED_PX,
   SHEEP_WATER_SPEED_MULT,
   SHEEP_WIDTH_PX,
+  mobSwimBobVyDelta,
 } from "./mobConstants";
 import type { MobSheepState } from "./mobTypes";
 
@@ -95,6 +96,7 @@ export function tickSheepPhysics(
   dt: number,
   rng: GeneratorContext,
   solidScratch: AABB[],
+  worldTimeSec: number,
 ): void {
   const wasOnGround = m.onGround;
   m.hurtRemainSec = Math.max(0, m.hurtRemainSec - dt);
@@ -135,6 +137,13 @@ export function tickSheepPhysics(
   if (inWater) {
     m.vy += MOB_GRAVITY_PX * SHEEP_WATER_GRAVITY_MULT * dt;
     m.vy -= SHEEP_WATER_BUOYANCY_ACCEL_PX * dt;
+    if (m.vy > SHEEP_WATER_MAX_SINK_SPEED_PX) {
+      m.vy = SHEEP_WATER_MAX_SINK_SPEED_PX;
+    }
+    if (m.vy < SHEEP_WATER_MAX_UPWARD_SPEED_PX) {
+      m.vy = SHEEP_WATER_MAX_UPWARD_SPEED_PX;
+    }
+    m.vy += mobSwimBobVyDelta(m.id, worldTimeSec, dt);
     if (m.vy > SHEEP_WATER_MAX_SINK_SPEED_PX) {
       m.vy = SHEEP_WATER_MAX_SINK_SPEED_PX;
     }

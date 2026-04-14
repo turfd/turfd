@@ -24,6 +24,11 @@ export type SeaLevelWaterFillConfig = {
   /** World block Y: filled cells must be ≤ this (inclusive). */
   seaLevelWy: number;
   getSurfaceHeight: (wx: number) => number;
+  /**
+   * When provided, columns where this returns false keep air/plants (no sea fill conversion).
+   * Used to suppress standing water in deserts while leaving flood logic unchanged elsewhere.
+   */
+  shouldPlaceWater?: (wx: number) => boolean;
 };
 
 function isReplaceablePlant(registry: BlockRegistry, airId: number, id: number): boolean {
@@ -74,6 +79,7 @@ export function applySeaLevelFloodWater(
     dirtId,
     seaLevelWy,
     getSurfaceHeight,
+    shouldPlaceWater,
   } = cfg;
 
   for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -153,6 +159,7 @@ export function applySeaLevelFloodWater(
   }
 
   for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+    const wx = originWx + lx;
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       const wy = originWy + ly;
       if (wy > seaLevelWy) {
@@ -160,6 +167,9 @@ export function applySeaLevelFloodWater(
       }
       const idx = localIndex(lx, ly);
       if (!visited[idx]) {
+        continue;
+      }
+      if (shouldPlaceWater !== undefined && !shouldPlaceWater(wx)) {
         continue;
       }
       const id = chunk.blocks[idx]!;
@@ -312,6 +322,7 @@ export function applySeaLevelFloodWaterRegion(
     dirtId,
     seaLevelWy,
     getSurfaceHeight,
+    shouldPlaceWater,
   } = cfg;
 
   const wx0 = bounds.minCx * CHUNK_SIZE;
@@ -419,6 +430,9 @@ export function applySeaLevelFloodWaterRegion(
       }
       const i = vi(wx, wy);
       if (!vis[i]) {
+        continue;
+      }
+      if (shouldPlaceWater !== undefined && !shouldPlaceWater(wx)) {
         continue;
       }
       const id = readWorldBlock(chunkMap, wx, wy, airId);

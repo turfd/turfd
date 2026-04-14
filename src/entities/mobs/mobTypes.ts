@@ -166,4 +166,6 @@ export type MobSlimeState = {
   slimeJumpDir: number;
   /** Ground cooldown before the next hop can start (host sim). */
   slimeJumpCooldownRemainSec: number;
+  /** While positive, chase AI moves horizontally away from the player (after hitting a wall). */
+  slimeChaseInvertRemainSec: number;
 };

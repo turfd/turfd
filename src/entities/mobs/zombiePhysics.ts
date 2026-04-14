@@ -21,6 +21,7 @@ import {
   ZOMBIE_WATER_MAX_UPWARD_SPEED_PX,
   ZOMBIE_WATER_SPEED_MULT,
   ZOMBIE_WIDTH_PX,
+  mobSwimBobVyDelta,
 } from "./mobConstants";
 import type { MobZombieState } from "./mobTypes";
 
@@ -87,6 +88,7 @@ export function tickZombiePhysics(
   dt: number,
   _rng: GeneratorContext,
   solidScratch: AABB[],
+  worldTimeSec: number,
   chaseTarget:
     | { x: number; y: number; halfW: number; height: number }
     | null,
@@ -122,6 +124,13 @@ export function tickZombiePhysics(
   if (inWater) {
     m.vy += MOB_GRAVITY_PX * ZOMBIE_WATER_GRAVITY_MULT * dt;
     m.vy -= ZOMBIE_WATER_BUOYANCY_ACCEL_PX * dt;
+    if (m.vy > ZOMBIE_WATER_MAX_SINK_SPEED_PX) {
+      m.vy = ZOMBIE_WATER_MAX_SINK_SPEED_PX;
+    }
+    if (m.vy < ZOMBIE_WATER_MAX_UPWARD_SPEED_PX) {
+      m.vy = ZOMBIE_WATER_MAX_UPWARD_SPEED_PX;
+    }
+    m.vy += mobSwimBobVyDelta(m.id, worldTimeSec, dt);
     if (m.vy > ZOMBIE_WATER_MAX_SINK_SPEED_PX) {
       m.vy = ZOMBIE_WATER_MAX_SINK_SPEED_PX;
     }

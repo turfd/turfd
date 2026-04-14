@@ -720,24 +720,24 @@ export const TERRAIN_BASE_SURFACE_BIAS_BLOCKS = 2;
 /**
  * Lake biome: horizontal scale in blocks (simplex input `wx / this`). Larger ⇒ rarer lake regions / wider basins.
  */
-export const LAKE_BIOME_SCALE_BLOCKS = 520;
+export const LAKE_BIOME_SCALE_BLOCKS = 640;
 
 /**
  * Lake mask (macro noise 0..1): smoothstep edges. Higher band ⇒ fewer, more separated lakes.
  */
-export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.86;
-export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.96;
+export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.88;
+export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.97;
 
 /**
  * Second noise channel (0..1): multiplied with macro mask for irregular shorelines and extra rarity.
  */
-export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.62;
-export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.84;
+export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.65;
+export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.86;
 
 /**
  * Applied to (macro × micro) so mid-strength shores shrink — fewer large lake footprints.
  */
-export const LAKE_BIOME_INFLUENCE_POW = 1.18;
+export const LAKE_BIOME_INFLUENCE_POW = 1.28;
 
 /** Approximate lake bed depth below {@link WATER_SEA_LEVEL_WY} at full lake influence (before jitter). */
 export const LAKE_BIOME_DEPTH_BLOCKS = 7;
@@ -784,12 +784,6 @@ export const PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT = 0.45;
  * slower limb motion than on land; physics are unchanged.
  */
 export const PLAYER_WATER_WALK_ANIM_SPEED_MULT = 0.42;
-
-/**
- * Extra downward Pixi Y on entity roots while overlapping water (physics feet unchanged).
- * Sinks sprites so mobs read as wading rather than skating on the surface.
- */
-export const ENTITY_SWIM_VISUAL_SINK_PX = 11;
 
 /** Account username length (profiles table CHECK aligns). */
 export const USERNAME_MIN_LENGTH = 3;

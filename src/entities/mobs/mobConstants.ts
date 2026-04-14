@@ -120,17 +120,17 @@ export const PIG_MAX_PER_COLUMN = 2;
 export const PIG_SPAWN_MIN_COMBINED_LIGHT = 6;
 export const DUCK_FRAME_TEXEL_W = 13;
 export const DUCK_FRAME_TEXEL_H = 17;
-export const DUCK_WIDTH_PX = DUCK_FRAME_TEXEL_W * PASSIVE_MOB_TEXEL_SCREEN_SCALE;
-export const DUCK_HEIGHT_PX = DUCK_FRAME_TEXEL_H * PASSIVE_MOB_TEXEL_SCREEN_SCALE;
+export const DUCK_WIDTH_PX = PIG_WIDTH_PX;
+export const DUCK_HEIGHT_PX = PIG_HEIGHT_PX;
 export const DUCK_WATER_SPEED_MULT = PIG_WATER_SPEED_MULT;
 export const DUCK_WATER_GRAVITY_MULT = PIG_WATER_GRAVITY_MULT;
 export const DUCK_WATER_BUOYANCY_ACCEL_PX = PIG_WATER_BUOYANCY_ACCEL_PX;
 export const DUCK_WATER_MAX_SINK_SPEED_PX = PIG_WATER_MAX_SINK_SPEED_PX;
 export const DUCK_WATER_MAX_UPWARD_SPEED_PX = PIG_WATER_MAX_UPWARD_SPEED_PX;
 export const DUCK_MAX_HEALTH = PIG_MAX_HEALTH;
-export const DUCK_MELEE_DAMAGE = 1;
-export const DUCK_WALK_FRAMES = 6;
-export const DUCK_IDLE_FRAMES = 4;
+export const DUCK_MELEE_DAMAGE = PIG_MELEE_DAMAGE;
+export const DUCK_WALK_FRAMES = PIG_WALK_FRAMES;
+export const DUCK_IDLE_FRAMES = PIG_IDLE_FRAMES;
 export const DUCK_FEET_SPRITE_NUDGE_Y_PX = 0;
 export const DUCK_WALK_SPEED_PX = PIG_WALK_SPEED_PX;
 export const DUCK_PANIC_SPEED_PX = PIG_PANIC_SPEED_PX;
@@ -146,8 +146,8 @@ export const DUCK_KNOCKBACK_DECAY_PER_SEC = PIG_KNOCKBACK_DECAY_PER_SEC;
 export const DUCK_KNOCKBACK_HORIZONTAL_CAP_PX = PIG_KNOCKBACK_HORIZONTAL_CAP_PX;
 export const DUCK_DAMAGE_INVULN_SEC = PIG_DAMAGE_INVULN_SEC;
 export const DUCK_DEATH_ANIM_SEC = PIG_DEATH_ANIM_SEC;
-export const DUCK_MAX_PER_COLUMN = 2;
-export const DUCK_SPAWN_MIN_COMBINED_LIGHT = 6;
+export const DUCK_MAX_PER_COLUMN = PIG_MAX_PER_COLUMN;
+export const DUCK_SPAWN_MIN_COMBINED_LIGHT = PIG_SPAWN_MIN_COMBINED_LIGHT;
 export const DUCK_SPRITE_IDLE_FOLDER_REL = "entities/duck/idle";
 export const DUCK_SPRITE_WALK_FOLDER_REL = "entities/duck/walking";
 
@@ -323,6 +323,24 @@ export const MOB_RANDOM_DESPAWN_AVG_SEC = 40;
 
 export const MOB_GRAVITY_PX = 640;
 export const MOB_TERMINAL_VY_PX = 480;
+
+/** Radians per second for {@link mobSwimBobVyDelta} phase advance (shared host + clients via world time). */
+export const MOB_SWIM_BOB_RAD_PER_SEC = 3.7;
+/** Amplitude for swim bob as extra `vy` acceleration × `dt` (world space; matches mob water axes). */
+export const MOB_SWIM_BOB_ACCEL_AMPLITUDE_PX = 92;
+
+/** Small vertical oscillation while submerged; deterministic from id + world time. */
+export function mobSwimBobVyDelta(
+  mobId: number,
+  worldTimeSec: number,
+  dt: number,
+): number {
+  if (dt <= 0 || !Number.isFinite(worldTimeSec)) {
+    return 0;
+  }
+  const phase = worldTimeSec * MOB_SWIM_BOB_RAD_PER_SEC + mobId * 1.917;
+  return Math.sin(phase) * MOB_SWIM_BOB_ACCEL_AMPLITUDE_PX * dt;
+}
 
 /**
  * Slime hop: cap horizontal travel on flat ground to this many blocks

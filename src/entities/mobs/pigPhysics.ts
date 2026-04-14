@@ -24,6 +24,7 @@ import {
   PIG_WATER_MAX_UPWARD_SPEED_PX,
   PIG_WATER_SPEED_MULT,
   PIG_WIDTH_PX,
+  mobSwimBobVyDelta,
 } from "./mobConstants";
 import type { MobPigState } from "./mobTypes";
 
@@ -90,6 +91,7 @@ export function tickPigPhysics(
   dt: number,
   rng: GeneratorContext,
   solidScratch: AABB[],
+  worldTimeSec: number,
 ): void {
   const wasOnGround = m.onGround;
   m.hurtRemainSec = Math.max(0, m.hurtRemainSec - dt);
@@ -127,6 +129,13 @@ export function tickPigPhysics(
   if (inWater) {
     m.vy += MOB_GRAVITY_PX * PIG_WATER_GRAVITY_MULT * dt;
     m.vy -= PIG_WATER_BUOYANCY_ACCEL_PX * dt;
+    if (m.vy > PIG_WATER_MAX_SINK_SPEED_PX) {
+      m.vy = PIG_WATER_MAX_SINK_SPEED_PX;
+    }
+    if (m.vy < PIG_WATER_MAX_UPWARD_SPEED_PX) {
+      m.vy = PIG_WATER_MAX_UPWARD_SPEED_PX;
+    }
+    m.vy += mobSwimBobVyDelta(m.id, worldTimeSec, dt);
     if (m.vy > PIG_WATER_MAX_SINK_SPEED_PX) {
       m.vy = PIG_WATER_MAX_SINK_SPEED_PX;
     }

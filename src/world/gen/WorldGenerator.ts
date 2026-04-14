@@ -295,6 +295,7 @@ export class WorldGenerator {
       dirtId: this.dirtId,
       seaLevelWy: WATER_SEA_LEVEL_WY,
       getSurfaceHeight: (wx) => this.terrain.getSurfaceHeight(wx),
+      shouldPlaceWater: (wx) => !this.terrain.isDesert(wx),
     });
   }
 
@@ -311,6 +312,7 @@ export class WorldGenerator {
         dirtId: this.dirtId,
         seaLevelWy: WATER_SEA_LEVEL_WY,
         getSurfaceHeight: (wx) => this.terrain.getSurfaceHeight(wx),
+        shouldPlaceWater: (wx) => !this.terrain.isDesert(wx),
       });
     }
     this.decorateChunkSurface(chunk, origin.wx, origin.wy);
