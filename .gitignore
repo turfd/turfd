@@ -1,6 +1,9 @@
 /docs
 /node_modules
 
+# Built by CI (`.github/workflows/deploy-github-pages.yml`). Do not commit — avoids stale deploys.
+/dist
+
 # Local Vite-style secrets for dev (see public/secrets.local.example.json)
 /public/secrets.local.json
 .cursor/plans/furnace_smelting_system.md

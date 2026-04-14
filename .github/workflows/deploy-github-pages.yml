@@ -1,3 +1,5 @@
+# Builds on every push to main — you do not need to run `npm run build` locally before pushing.
+# The site GitHub Pages serves is always the artifact from this job, not files committed to the repo.
 name: Deploy to GitHub Pages
 
 on:
