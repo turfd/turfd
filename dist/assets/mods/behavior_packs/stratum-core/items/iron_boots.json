@@ -1,4 +1,4 @@
-{
+﻿{
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
@@ -9,7 +9,7 @@
       "stratum:texture_key": "iron_boots",
       "stratum:max_stack": 1,
       "stratum:max_durability": 195,
-      "stratum:numeric_id": 127,
+      "stratum:numeric_id": 133,
       "stratum:tags": ["stratum:armor", "stratum:armor_boots"],
       "stratum:inventory_tooltip": "Foot armor"
     }

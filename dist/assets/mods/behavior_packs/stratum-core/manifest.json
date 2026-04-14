@@ -18,6 +18,12 @@
     "dandelion.json",
     "poppy.json",
     "stone.json",
+    "granite.json",
+    "smooth_stone.json",
+    "stone_bricks.json",
+    "stone-brick-stairs.json",
+    "stonecutter.json",
+    "chiseled_stone_bricks.json",
     "cobblestone.json",
     "sand.json",
     "sandstone.json",
@@ -87,7 +93,8 @@
     "red_wool.json",
     "black_wool.json",
     "bed.json",
-    "bed_head.json"
+    "bed_head.json",
+    "painting.json"
   ],
   "items": [
     "oak_door.json",
@@ -143,12 +150,14 @@
     "gold_chestplate.json",
     "gold_leggings.json",
     "gold_boots.json",
+    "chiseled_stone_bricks.json",
     "bow.json",
     "arrow.json",
     "flint.json",
     "string.json",
     "feather.json",
-    "rotten_flesh.json"
+    "rotten_flesh.json",
+    "painting.json"
   ],
   "recipes": ["recipes.json"],
   "loot": ["loot/blocks.loot.json", "loot/entities.loot.json"],

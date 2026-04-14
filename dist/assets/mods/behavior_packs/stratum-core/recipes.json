@@ -68,6 +68,44 @@
       "output": { "itemId": "stratum:furnace", "count": 1 }
     },
     {
+      "id": "stratum:stonecutter_from_iron_and_stone",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:iron_ingot", "count": 1 },
+        { "itemId": "stratum:stone", "count": 3 }
+      ],
+      "output": { "itemId": "stratum:stonecutter", "count": 1 }
+    },
+    {
+      "id": "stratum:smooth_stone_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "tag": "stratum:stonecutter_cut_source", "count": 1 }],
+      "output": { "itemId": "stratum:smooth_stone", "count": 1 }
+    },
+    {
+      "id": "stratum:stone_bricks_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "tag": "stratum:stonecutter_cut_source", "count": 4 }],
+      "output": { "itemId": "stratum:stone_bricks", "count": 4 }
+    },
+    {
+      "id": "stratum:stone_brick_stairs_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "itemId": "stratum:stone_bricks", "count": 1 }],
+      "output": { "itemId": "stratum:stone_brick_stairs", "count": 1 }
+    },
+    {
+      "id": "stratum:chiseled_stone_bricks_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "itemId": "stratum:stone_bricks", "count": 1 }],
+      "output": { "itemId": "stratum:chiseled_stone_bricks", "count": 1 }
+    },
+    {
       "id": "stratum:chest_from_planks",
       "category": "Workbench",
       "station": "stratum:crafting_table",
@@ -501,6 +539,16 @@
         { "itemId": "stratum:feather", "count": 1 }
       ],
       "output": { "itemId": "stratum:arrow", "count": 4 }
+    },
+    {
+      "id": "stratum:painting_from_paper_and_sticks",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [
+        { "itemId": "stratum:paper", "count": 1 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:painting", "count": 1 }
     }
   ]
 }

@@ -1,4 +1,4 @@
-{
+﻿{
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
@@ -9,7 +9,7 @@
       "stratum:texture_key": "iron_helmet",
       "stratum:max_stack": 1,
       "stratum:max_durability": 165,
-      "stratum:numeric_id": 124,
+      "stratum:numeric_id": 130,
       "stratum:tags": ["stratum:armor", "stratum:armor_helmet"],
       "stratum:inventory_tooltip": "Head armor"
     }

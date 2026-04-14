@@ -1,4 +1,4 @@
-{
+﻿{
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
@@ -8,7 +8,7 @@
       "stratum:display_name": "Wheat Seeds",
       "stratum:texture_key": "wheat_seeds",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 87
+      "stratum:numeric_id": 93
     }
   }
 }

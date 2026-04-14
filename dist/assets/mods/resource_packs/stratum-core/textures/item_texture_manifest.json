@@ -62,6 +62,7 @@
     "flint": "assets/mods/resource_packs/stratum-core/textures/items/flint.png",
     "string": "assets/mods/resource_packs/stratum-core/textures/items/string.png",
     "feather": "assets/mods/resource_packs/stratum-core/textures/items/feather.png",
-    "rotten_flesh": "assets/mods/resource_packs/stratum-core/textures/items/rotten_flesh.png"
+    "rotten_flesh": "assets/mods/resource_packs/stratum-core/textures/items/rotten_flesh.png",
+    "painting": "assets/mods/resource_packs/stratum-core/textures/items/painting.png"
   }
 }

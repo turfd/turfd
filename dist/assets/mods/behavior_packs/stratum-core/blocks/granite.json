@@ -1,0 +1,27 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": {
+      "identifier": "stratum:granite"
+    },
+    "components": {
+      "stratum:display_name": "Granite",
+      "stratum:texture": {
+        "all": "granite"
+      },
+      "stratum:random_flip_x": true,
+      "stratum:solid": true,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 1.5,
+      "stratum:harvest_tool": "pickaxe",
+      "stratum:requires_tool_for_drops": true,
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 15,
+      "stratum:material": "stone",
+      "stratum:tags": ["stratum:stonecutter_cut_source"],
+      "stratum:loot_table": "stratum:granite",
+      "stratum:numeric_id": 81
+    }
+  }
+}
