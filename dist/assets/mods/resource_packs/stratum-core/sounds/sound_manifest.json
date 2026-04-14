@@ -458,8 +458,6 @@
       "sounds/weather/rain8.ogg"
     ],
     "weather_lightning": [
-      "sounds/weather/thunder_distant.ogg",
-      "sounds/weather/thunder_long.ogg",
       "sounds/weather/thunder1_distance.ogg",
       "sounds/weather/thunder1_long.ogg",
       "sounds/weather/thunder2_distance.ogg",
@@ -496,8 +494,30 @@
       "sounds/entity/pig/step4.ogg",
       "sounds/entity/pig/step5.ogg"
     ],
+    "entity_duck_idle": [
+      "sounds/entity/chicken/say1.ogg",
+      "sounds/entity/chicken/say2.ogg",
+      "sounds/entity/chicken/say3.ogg"
+    ],
+    "entity_duck_step": [
+      "sounds/entity/chicken/step1.ogg",
+      "sounds/entity/chicken/step2.ogg"
+    ],
+    "entity_duck_hurt": [
+      "sounds/entity/chicken/hurt2.ogg"
+    ],
+    "entity_duck_death": [
+      "sounds/entity/chicken/death.ogg"
+    ],
     "entity_pig_death": [
       "sounds/entity/pig/death.ogg"
+    ],
+    "bow": "sounds/bow/bow.ogg",
+    "bowhit": [
+      "sounds/bow/bowhit1.ogg",
+      "sounds/bow/bowhit2.ogg",
+      "sounds/bow/bowhit3.ogg",
+      "sounds/bow/bowhit4.ogg"
     ],
     "water_swim": [
       "sounds/water/swim1.ogg",

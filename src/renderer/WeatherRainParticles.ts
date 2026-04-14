@@ -1,11 +1,21 @@
 /**
  * Diagonal streaks in the same space as the rain tiling (viewport-sized local coords, world-root parent).
- * Blend mode `add` approximates Minecraft's translucent rain particle pass (brightening against dark sky).
+ * Blend mode `overlay` tints the scene beneath (stronger contrast than normal, less blow-out than add).
+ *
+ * Uses a single Mesh with quad-per-streak geometry instead of 150 per-frame Graphics strokes.
  */
-import { Container, Graphics } from "pixi.js";
+import { Container, Mesh, MeshGeometry, Texture } from "pixi.js";
 
 /** Slightly denser than before; tuned for world-space viewport. */
 const DROP_COUNT = 150;
+
+/** Half-width of each streak quad (screen pixels before zoom compensation). */
+const HALF_W_BASE = 0.375;
+
+/** Rain streak colour packed as normalised RGBA (used to tint via vertex color). */
+const R_NORM = 0xa8 / 255;
+const G_NORM = 0xc8 / 255;
+const B_NORM = 0xff / 255;
 
 type Drop = {
   x: number;
@@ -18,21 +28,50 @@ type Drop = {
 
 export class WeatherRainParticles {
   private readonly root: Container;
-  private readonly g: Graphics;
+  private readonly mesh: Mesh;
+  private readonly positions: Float32Array;
+  private readonly uvs: Float32Array;
+  private readonly colors: Float32Array;
+  private readonly indices: Uint32Array;
+  private readonly geo: MeshGeometry;
   private readonly drops: Drop[] = [];
   private rw = 0;
   private rh = 0;
 
   constructor(parent: Container) {
     this.root = new Container();
-    this.g = new Graphics();
-    this.root.addChild(this.g);
     this.root.visible = false;
     this.root.label = "weatherRainParticles";
     this.root.eventMode = "none";
-    /** Minecraft-style rain: additive-ish particles over the tiling layer. */
-    this.root.blendMode = "add";
+    this.root.blendMode = "overlay";
     parent.addChild(this.root);
+
+    const verts = DROP_COUNT * 4;
+    this.positions = new Float32Array(verts * 2);
+    this.uvs = new Float32Array(verts * 2);
+    this.colors = new Float32Array(verts * 4);
+    this.indices = new Uint32Array(DROP_COUNT * 6);
+
+    for (let i = 0; i < DROP_COUNT; i++) {
+      const base = i * 4;
+      const ii = i * 6;
+      this.indices[ii + 0] = base + 0;
+      this.indices[ii + 1] = base + 1;
+      this.indices[ii + 2] = base + 2;
+      this.indices[ii + 3] = base + 2;
+      this.indices[ii + 4] = base + 1;
+      this.indices[ii + 5] = base + 3;
+    }
+
+    this.geo = new MeshGeometry({
+      positions: this.positions,
+      uvs: this.uvs,
+      indices: this.indices,
+    });
+
+    this.mesh = new Mesh({ geometry: this.geo, texture: Texture.WHITE });
+    this.root.addChild(this.mesh);
+
     for (let i = 0; i < DROP_COUNT; i++) {
       this.drops.push({
         x: 0,
@@ -82,10 +121,13 @@ export class WeatherRainParticles {
       }
     }
     this.root.visible = true;
-    this.g.clear();
     const w = this.rw;
     const h = this.rh;
     const invZ = 1 / z;
+    const halfW = Math.max(0.225, HALF_W_BASE / z);
+    const pos = this.positions;
+    const col = this.colors;
+
     for (let i = 0; i < DROP_COUNT; i++) {
       const d = this.drops[i]!;
       if (d.y > h + 40) {
@@ -100,13 +142,32 @@ export class WeatherRainParticles {
         d.x = -25;
       }
       const tilt = d.wind * 0.1;
-      this.g.moveTo(d.x, d.y);
-      this.g.lineTo(d.x + tilt, d.y + d.len);
-      this.g.stroke({
-        width: Math.max(0.45, 0.75 / z),
-        color: 0xa8c8ff,
-        alpha: d.a,
-      });
+      const x0 = d.x;
+      const y0 = d.y;
+      const x1 = d.x + tilt;
+      const y1 = d.y + d.len;
+
+      const pi = i * 8;
+      pos[pi + 0] = x0 - halfW;
+      pos[pi + 1] = y0;
+      pos[pi + 2] = x0 + halfW;
+      pos[pi + 3] = y0;
+      pos[pi + 4] = x1 - halfW;
+      pos[pi + 5] = y1;
+      pos[pi + 6] = x1 + halfW;
+      pos[pi + 7] = y1;
+
+      const ci = i * 16;
+      const a = d.a;
+      col[ci + 0] = R_NORM; col[ci + 1] = G_NORM; col[ci + 2] = B_NORM; col[ci + 3] = a;
+      col[ci + 4] = R_NORM; col[ci + 5] = G_NORM; col[ci + 6] = B_NORM; col[ci + 7] = a;
+      col[ci + 8] = R_NORM; col[ci + 9] = G_NORM; col[ci + 10] = B_NORM; col[ci + 11] = a;
+      col[ci + 12] = R_NORM; col[ci + 13] = G_NORM; col[ci + 14] = B_NORM; col[ci + 15] = a;
+    }
+
+    const posAttr = this.geo.attributes.aPosition;
+    if (posAttr !== undefined) {
+      posAttr.buffer.update();
     }
   }
 }

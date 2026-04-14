@@ -23,9 +23,14 @@ import type { World } from "../World";
 import {
   isGrassDirtOrFarmlandSurface,
   isSaplingIdentifier,
+  isWheatCropIdentifier,
 } from "../plant/soil";
 import type { RemotePlayer } from "../entities/RemotePlayer";
 import { createAABB, overlaps, type AABB } from "../../entities/physics/AABB";
+import {
+  PAINTING_VARIANTS,
+  encodePaintingMeta,
+} from "../painting/paintingData";
 
 /** `TERRAIN_PLACE` wire subtype (byte 1). */
 export const SUB_SIMPLE_FG = 0;
@@ -36,6 +41,7 @@ export const SUB_HOE = 4;
 export const SUB_BUCKET_FILL = 5;
 export const SUB_BG = 6;
 export const SUB_BED_PAIR = 7;
+export const SUB_PAINTING = 8;
 
 /** Bitmask for `TERRAIN_ACK.effects` on the wire. */
 export const ACK_TOOL_USE = 1;
@@ -551,21 +557,51 @@ export function tryHostTerrainPlace(
     const farmlandDryId = registry.getByIdentifier("stratum:farmland_dry").id;
     const farmlandMoistId = registry.getByIdentifier("stratum:farmland_moist").id;
     const cell = world.getBlock(wx, wy);
-    if (cell.id !== farmlandDryId && cell.id !== farmlandMoistId) {
+    if (isWheatCropIdentifier(cell.identifier)) {
       return fail();
     }
-    const above = world.getBlock(wx, wy + 1);
-    const clearAbove =
-      above.id === airId || (above.replaceable && above.id !== airId);
-    if (!clearAbove) {
+    const below = world.getBlock(wx, wy - 1);
+    if (below.id !== farmlandDryId && below.id !== farmlandMoistId) {
       return fail();
     }
-    if (above.id !== airId) {
-      world.spawnLootForBrokenBlock(above.id, wx, wy + 1);
-      world.setBlock(wx, wy + 1, airId);
+    const canPlaceInCell =
+      cell.id === airId || (cell.replaceable && cell.id !== airId);
+    if (!canPlaceInCell) {
+      return fail();
     }
     const wheat0 = registry.getByIdentifier("stratum:wheat_stage_0").id;
-    if (!world.setBlock(wx, wy + 1, wheat0)) {
+    if (!world.hasForegroundPlacementSupport(wx, wy)) {
+      return fail();
+    }
+    const blockAabb = createAABB(
+      wx * BLOCK_SIZE,
+      -(wy + 1) * BLOCK_SIZE,
+      BLOCK_SIZE,
+      BLOCK_SIZE,
+    );
+    const playerAabb = feetToScreenAABB(peerFeet);
+    let overlapsAnyPlayer = overlaps(playerAabb, blockAabb);
+    if (!overlapsAnyPlayer) {
+      for (const rp of remotePlayers.values()) {
+        const feet = rp.getAuthorityFeet();
+        const remoteAabb = feetToScreenAABB({ x: feet.x, y: feet.y });
+        if (overlaps(remoteAabb, blockAabb)) {
+          overlapsAnyPlayer = true;
+          break;
+        }
+      }
+    }
+    if (
+      overlapsAnyPlayer ||
+      !world.canPlaceForegroundWithCactusRules(wx, wy, wheat0)
+    ) {
+      return fail();
+    }
+    if (cell.id !== airId) {
+      world.spawnLootForBrokenBlock(cell.id, wx, wy);
+      world.setBlock(wx, wy, airId);
+    }
+    if (!world.setBlock(wx, wy, wheat0)) {
       return fail();
     }
     return { ok: true, effects: ACK_CONSUME_ONE };
@@ -623,6 +659,48 @@ export function tryHostTerrainPlace(
       return { ok: true, effects: ACK_CONSUME_ONE };
     }
     return fail();
+  }
+
+  if (subtype === SUB_PAINTING) {
+    const variantIndex = aux;
+    if (variantIndex < 0 || variantIndex >= PAINTING_VARIANTS.length) {
+      return fail();
+    }
+    const pv = PAINTING_VARIANTS[variantIndex]!;
+    const paintingBlockId = registry.getByIdentifier("stratum:painting").id;
+
+    for (let oy = 0; oy < pv.height; oy++) {
+      for (let ox = 0; ox < pv.width; ox++) {
+        const cx = wx + ox;
+        const cy = wy + oy;
+        const fg = world.getBlock(cx, cy);
+        if (fg.solid && !fg.replaceable && !fg.water) {
+          return fail();
+        }
+        if (world.getBackgroundId(cx, cy) === 0) {
+          return fail();
+        }
+      }
+    }
+
+    let placed = true;
+    for (let oy = 0; oy < pv.height && placed; oy++) {
+      for (let ox = 0; ox < pv.width && placed; ox++) {
+        const meta = encodePaintingMeta(variantIndex, ox, oy);
+        if (!world.setBlock(wx + ox, wy + oy, paintingBlockId, { cellMetadata: meta })) {
+          placed = false;
+        }
+      }
+    }
+    if (!placed) {
+      for (let oy = 0; oy < pv.height; oy++) {
+        for (let ox = 0; ox < pv.width; ox++) {
+          world.setBlock(wx + ox, wy + oy, 0);
+        }
+      }
+      return fail();
+    }
+    return { ok: true, effects: ACK_CONSUME_ONE };
   }
 
   return fail();

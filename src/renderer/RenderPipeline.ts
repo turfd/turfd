@@ -13,6 +13,7 @@ import {
   DAY_LENGTH_MS,
   MAX_RENDER_DEVICE_PIXEL_RATIO,
 } from "../core/constants";
+import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 
 import type { World } from "../world/World";
@@ -27,12 +28,14 @@ import { WeatherSnowParticles } from "./WeatherSnowParticles";
 /**
  * Named world layers (instances are created by {@link RenderPipeline}).
  * Z-order is back → front: sky → … → particles.
+ * {@link layerWaterOverEntities} draws water after mobs so submerged areas occlude sprites.
  */
 export interface RenderPipelineLayers {
   readonly layerSky: Container;
   readonly layerTilesBack: Container;
   readonly layerTilesMid: Container;
   readonly layerEntities: Container;
+  readonly layerWaterOverEntities: Container;
   readonly layerForeground: Container;
   readonly layerLightmap: Container;
   readonly layerParticles: Container;
@@ -77,6 +80,27 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/** Deterministic 0–1 PRNG for sky star placement (stable across frames until canvas resizes). */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return (): number => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type SkyStarPixel = {
+  x: number;
+  y: number;
+  /** Pixel size in screen-space; larger tiers are rarer/brighter. */
+  s: 2 | 3;
+  /** Base opacity before time-of-day curve */
+  a: number;
+  rgb: [number, number, number];
+};
+
 /**
  * Pixi application, camera, and ordered world layers. Drives `app.render()` from the game loop.
  *
@@ -96,6 +120,10 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _lastSkyCanvasPaintCw = -1;
   private _lastSkyCanvasPaintCh = -1;
   private _lastSkyCanvasPaintLightning = -999;
+  private _lastCullCameraX = Number.NaN;
+  private _lastCullCameraY = Number.NaN;
+  private _lastCullScreenW = -1;
+  private _lastCullScreenH = -1;
   /** Sky flash alpha from {@link updateSky} (0–1). */
   private _skyLightningAlpha = 0;
   /** Last world ms applied to parallax background tint. */
@@ -117,6 +145,11 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _skyCssW = 0;
   private _skyCssH = 0;
 
+  /** Night sky pixel stars (screen space); rebuilt when the sky canvas size changes. */
+  private _skyStars: SkyStarPixel[] = [];
+  private _skyStarsCw = 0;
+  private _skyStarsCh = 0;
+
   private lastScreenW = 0;
   private lastScreenH = 0;
 
@@ -124,6 +157,7 @@ export class RenderPipeline implements RenderPipelineLayers {
   readonly layerTilesBack: Container;
   readonly layerTilesMid: Container;
   readonly layerEntities: Container;
+  readonly layerWaterOverEntities: Container;
   readonly layerForeground: Container;
   readonly layerLightmap: Container;
   readonly layerParticles: Container;
@@ -147,6 +181,9 @@ export class RenderPipeline implements RenderPipelineLayers {
     this.layerTilesBack = new Container({ label: "layerTilesBack" });
     this.layerTilesMid = new Container({ label: "layerTilesMid" });
     this.layerEntities = new Container({ label: "layerEntities" });
+    this.layerWaterOverEntities = new Container({
+      label: "layerWaterOverEntities",
+    });
     this.layerForeground = new Container({ label: "layerForeground" });
     this.layerLightmap = new Container({ label: "layerLightmap" });
     this.layerParticles = new Container({ label: "layerParticles" });
@@ -157,6 +194,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     world.addChild(this.layerTilesBack);
     world.addChild(this.layerTilesMid);
     world.addChild(this.layerEntities);
+    world.addChild(this.layerWaterOverEntities);
     world.addChild(this.layerForeground);
     world.addChild(this.layerLightmap);
     world.addChild(this.layerParticles);
@@ -389,6 +427,7 @@ export class RenderPipeline implements RenderPipelineLayers {
         roundPixels: true,
       });
       tiling.alpha = 0.38;
+      tiling.blendMode = "overlay";
       tiling.visible = false;
       const root = new Container();
       root.label = "weatherRainOverlay";
@@ -441,6 +480,72 @@ export class RenderPipeline implements RenderPipelineLayers {
     this._lastSkyCanvasPaintMs = -1;
   }
 
+  private ensureSkyStarField(cw: number, ch: number): void {
+    if (cw === this._skyStarsCw && ch === this._skyStarsCh && this._skyStars.length > 0) {
+      return;
+    }
+    this._skyStarsCw = cw;
+    this._skyStarsCh = ch;
+    const upperH = Math.max(1, Math.floor(ch * 0.68));
+    const seed = ((cw * 0x9e3779b9) ^ (ch * 0x85ebca6b) ^ 0xf1357aef) >>> 0;
+    const rand = mulberry32(seed);
+    const area = cw * upperH;
+    const n = Math.min(300, Math.max(64, Math.round(area / 12000)));
+    const stars: SkyStarPixel[] = [];
+    for (let i = 0; i < n; i++) {
+      const big = rand() < 0.085;
+      let x = Math.floor(rand() * cw);
+      let y = Math.floor(rand() * upperH);
+      let s: 2 | 3 = 2;
+      if (big && x <= cw - 3 && y <= upperH - 3) {
+        s = 3;
+      } else {
+        x = Math.min(x, cw - 1);
+        y = Math.min(y, upperH - 1);
+      }
+      const a = (s === 3 ? 0.16 : 0.07) + rand() * (s === 3 ? 0.32 : 0.26);
+      const cool = rand();
+      const r = Math.round(198 + cool * 58);
+      const g = Math.round(208 + cool * 48);
+      const b = 255;
+      stars.push({
+        x,
+        y,
+        s,
+        a: Math.min(0.5, a),
+        rgb: [r, g, b],
+      });
+    }
+    this._skyStars = stars;
+  }
+
+  private drawSkyStars(
+    ctx: CanvasRenderingContext2D,
+    lighting: WorldLightingParams,
+  ): void {
+    const visAmb = 1 - smoothstep(0.06, 0.2, lighting.ambient);
+    const visSun = 1 - smoothstep(0.03, 0.3, lighting.sunIntensity);
+    const vis = visAmb * visSun;
+    if (vis < 0.015) {
+      return;
+    }
+    const flash = this._skyLightningAlpha;
+    const storm = 1 - flash * 0.78;
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalCompositeOperation = "lighter";
+    for (const st of this._skyStars) {
+      const alpha = st.a * vis * storm;
+      if (alpha < 0.016) {
+        continue;
+      }
+      ctx.fillStyle = `rgba(${st.rgb[0]},${st.rgb[1]},${st.rgb[2]},${alpha})`;
+      ctx.fillRect(st.x, st.y, st.s, st.s);
+    }
+    ctx.restore();
+  }
+
   /**
    * Paint the sky gradient + celestial bodies on the 2D canvas under Pixi.
    */
@@ -482,6 +587,9 @@ export class RenderPipeline implements RenderPipelineLayers {
     grd.addColorStop(1, hexToCss(bottom));
     ctx.fillStyle = grd;
     ctx.fillRect(0, 0, cw, ch);
+
+    this.ensureSkyStarField(cw, ch);
+    this.drawSkyStars(ctx, lighting);
 
     const { sunDir, moonDir, sunIntensity, moonIntensity } = lighting;
     const spread = cw * 0.38;
@@ -601,7 +709,25 @@ export class RenderPipeline implements RenderPipelineLayers {
       // If a prior frame threw during composite (e.g. WebGL shader error), this can stay false
       // and nothing draws into the albedo RT — terrain/entities look gone until refresh.
       this.camera.worldRoot.visible = true;
-      Culler.shared.cull(this.camera.worldRoot, this.app.renderer.screen, true);
+      const cameraPos = this.camera.getPosition();
+      const screen = this.app.renderer.screen;
+      const shouldCull =
+        !Number.isFinite(this._lastCullCameraX) ||
+        Math.abs(cameraPos.x - this._lastCullCameraX) >= 4 ||
+        Math.abs(cameraPos.y - this._lastCullCameraY) >= 4 ||
+        screen.width !== this._lastCullScreenW ||
+        screen.height !== this._lastCullScreenH;
+      if (shouldCull) {
+        const tCull = import.meta.env.DEV ? chunkPerfNow() : 0;
+        Culler.shared.cull(this.camera.worldRoot, screen, true);
+        this._lastCullCameraX = cameraPos.x;
+        this._lastCullCameraY = cameraPos.y;
+        this._lastCullScreenW = screen.width;
+        this._lastCullScreenH = screen.height;
+        if (import.meta.env.DEV) {
+          chunkPerfLog("renderPipeline:cull", chunkPerfNow() - tCull);
+        }
+      }
       this.app.renderer.render({
         container: this.camera.worldRoot,
         target: this._albedoRT,
@@ -702,6 +828,9 @@ export class RenderPipeline implements RenderPipelineLayers {
       this._skyCssCanvas?.remove();
       this._skyCssCanvas = null;
       this._skyCssCtx = null;
+      this._skyStars.length = 0;
+      this._skyStarsCw = 0;
+      this._skyStarsCh = 0;
       for (const u of this._backgroundBusUnsubs) {
         u();
       }

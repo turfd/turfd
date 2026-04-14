@@ -54,6 +54,16 @@ export class RemotePlayer {
   heldItemId = 0;
   /** Mining / use swing flag from last pose packet (combined with crack overlay in renderer). */
   miningVisualFromNetwork = false;
+  /** Armor item ids (helmet, chest, leggings, boots); `0` = empty. */
+  armorHelmetId = 0;
+  armorChestId = 0;
+  armorLeggingsId = 0;
+  armorBootsId = 0;
+  /** Wire bow draw 0–255. */
+  bowDrawQuantized = 0;
+  /** Reach crosshair display coords (same space as local mouse world pos). */
+  aimDisplayX = 0;
+  aimDisplayY = 0;
 
   private authX: number;
   private authY: number;
@@ -94,6 +104,13 @@ export class RemotePlayer {
     hotbarSlot: number;
     heldItemId: number;
     miningVisual: boolean;
+    armorHelmetId: number;
+    armorChestId: number;
+    armorLeggingsId: number;
+    armorBootsId: number;
+    bowDrawQuantized: number;
+    aimDisplayX: number;
+    aimDisplayY: number;
   } {
     return {
       x: this.authX,
@@ -105,6 +122,13 @@ export class RemotePlayer {
       heldItemId: this.heldItemId,
       miningVisual:
         this.miningVisualFromNetwork || this.breakMining !== null,
+      armorHelmetId: this.armorHelmetId,
+      armorChestId: this.armorChestId,
+      armorLeggingsId: this.armorLeggingsId,
+      armorBootsId: this.armorBootsId,
+      bowDrawQuantized: this.bowDrawQuantized,
+      aimDisplayX: this.aimDisplayX,
+      aimDisplayY: this.aimDisplayY,
     };
   }
 
@@ -216,6 +240,13 @@ export class RemotePlayer {
     hotbarSlot: number,
     heldItemId: number,
     miningVisualFromNetwork: boolean,
+    armorHelmetId: number,
+    armorChestId: number,
+    armorLeggingsId: number,
+    armorBootsId: number,
+    bowDrawQuantized: number,
+    aimDisplayX: number,
+    aimDisplayY: number,
   ): void {
     const err = Math.hypot(x - this.authX, y - this.authY);
     const now = performance.now();
@@ -229,6 +260,13 @@ export class RemotePlayer {
       this.hotbarSlot = hotbarSlot;
       this.heldItemId = heldItemId;
       this.miningVisualFromNetwork = miningVisualFromNetwork;
+      this.armorHelmetId = armorHelmetId;
+      this.armorChestId = armorChestId;
+      this.armorLeggingsId = armorLeggingsId;
+      this.armorBootsId = armorBootsId;
+      this.bowDrawQuantized = bowDrawQuantized;
+      this.aimDisplayX = aimDisplayX;
+      this.aimDisplayY = aimDisplayY;
       this.prevX = x;
       this.prevY = y;
       this.x = x;
@@ -248,6 +286,13 @@ export class RemotePlayer {
     this.hotbarSlot = hotbarSlot;
     this.heldItemId = heldItemId;
     this.miningVisualFromNetwork = miningVisualFromNetwork;
+    this.armorHelmetId = armorHelmetId;
+    this.armorChestId = armorChestId;
+    this.armorLeggingsId = armorLeggingsId;
+    this.armorBootsId = armorBootsId;
+    this.bowDrawQuantized = bowDrawQuantized;
+    this.aimDisplayX = aimDisplayX;
+    this.aimDisplayY = aimDisplayY;
     this.x = x;
     this.y = y;
     this.pushSnapshotSample(now);

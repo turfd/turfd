@@ -1,0 +1,17 @@
+﻿{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:gold_leggings"
+    },
+    "components": {
+      "stratum:display_name": "Golden Leggings",
+      "stratum:texture_key": "gold_leggings",
+      "stratum:max_stack": 1,
+      "stratum:max_durability": 105,
+      "stratum:numeric_id": 143,
+      "stratum:tags": ["stratum:armor", "stratum:armor_leggings"],
+      "stratum:inventory_tooltip": "Leg armor"
+    }
+  }
+}

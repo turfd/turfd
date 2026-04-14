@@ -1,6 +1,14 @@
 /** Fixed-size inventory managing ItemStack slots, stack merging, consumption, and cursor stack. */
 
-import { HOTBAR_SIZE, INVENTORY_SIZE } from "../core/constants";
+import {
+  ARMOR_SLOT_COUNT,
+  ARMOR_UI_SLOT_BASE,
+  HOTBAR_SIZE,
+  INVENTORY_SIZE,
+  PLAYER_ARMOR_BETA_MITIGATION_CAP,
+  PLAYER_ARMOR_BETA_MITIGATION_PER_PIECE,
+  PLAYER_ARMOR_DURABILITY_LOSS_DIVISOR,
+} from "../core/constants";
 import type { ItemDefinition, ItemId, ItemStack } from "../core/itemDefinition";
 import {
   clampDamageForDefinition,
@@ -12,14 +20,41 @@ export type SerializedInventorySlot =
   | { key: string; count: number; damage?: number }
   | null;
 
+/** Armor slot indices: 0=helmet, 1=chestplate, 2=leggings, 3=boots */
+export type ArmorSlot = 0 | 1 | 2 | 3;
+
+/** Map item tags to the armor slot the piece equips in, or null if not typed armor. */
+export function armorSlotFromItemTags(
+  tags: readonly string[] | undefined,
+): ArmorSlot | null {
+  if (tags === undefined) {
+    return null;
+  }
+  if (tags.includes("stratum:armor_helmet")) {
+    return 0;
+  }
+  if (tags.includes("stratum:armor_chestplate")) {
+    return 1;
+  }
+  if (tags.includes("stratum:armor_leggings")) {
+    return 2;
+  }
+  if (tags.includes("stratum:armor_boots")) {
+    return 3;
+  }
+  return null;
+}
+
 export class PlayerInventory {
   private readonly _slots: (ItemStack | null)[];
+  private readonly _armorSlots: (ItemStack | null)[];
   private readonly _registry: ItemRegistry;
   private _cursorStack: ItemStack | null = null;
 
   constructor(registry: ItemRegistry) {
     this._registry = registry;
     this._slots = new Array<ItemStack | null>(INVENTORY_SIZE).fill(null);
+    this._armorSlots = new Array<ItemStack | null>(ARMOR_SLOT_COUNT).fill(null);
   }
 
   /** Number of slots in this inventory. */
@@ -237,6 +272,29 @@ export class PlayerInventory {
     this._slots[slot] = this.slotWithNormalizedDamage(stack);
   }
 
+  /** Returns a copy of the armor stack at the given slot (0=helmet, 1=chestplate, 2=leggings, 3=boots), or null. */
+  getArmorStack(slot: ArmorSlot): ItemStack | null {
+    if (slot < 0 || slot >= ARMOR_SLOT_COUNT) return null;
+    const s = this._armorSlots[slot];
+    if (s === null || s === undefined) return null;
+    return this.copyStack(s);
+  }
+
+  /** Overwrites an armor slot. If stack count is <= 0 the slot is cleared. */
+  setArmorStack(slot: ArmorSlot, stack: ItemStack | null): void {
+    if (slot < 0 || slot >= ARMOR_SLOT_COUNT) return;
+    if (stack === null || stack.count <= 0) {
+      this._armorSlots[slot] = null;
+      return;
+    }
+    const def = this._registry.getById(stack.itemId);
+    if (def !== undefined && isStackBroken(def, stack.damage)) {
+      this._armorSlots[slot] = null;
+      return;
+    }
+    this._armorSlots[slot] = this.slotWithNormalizedDamage(stack);
+  }
+
   /** Swap the contents of two slot indices. */
   swap(slotA: number, slotB: number): void {
     if (
@@ -389,10 +447,121 @@ export class PlayerInventory {
   }
 
   /**
+   * While dragging with LMB, place one armor piece from the cursor into an empty / mergeable
+   * armor slot (mirrors {@link placeOneIntoSlot} for main inventory).
+   */
+  distributeOneFromCursorIntoArmorSlot(armorSlot: ArmorSlot): void {
+    const cur = this._cursorStack;
+    if (cur === null || cur.count <= 0) {
+      return;
+    }
+    const def = this._registry.getById(cur.itemId);
+    if (def === undefined || def.tags === undefined) {
+      return;
+    }
+    const expectedTags = [
+      "stratum:armor_helmet",
+      "stratum:armor_chestplate",
+      "stratum:armor_leggings",
+      "stratum:armor_boots",
+    ] as const;
+    const expectedTag = expectedTags[armorSlot];
+    if (
+      expectedTag === undefined ||
+      (!def.tags.includes(expectedTag) && !def.tags.includes("stratum:armor"))
+    ) {
+      return;
+    }
+    const equipped = this._armorSlots[armorSlot] ?? null;
+    const max = this.maxStackFor(cur.itemId);
+    if (equipped === null || equipped.count <= 0) {
+      this._armorSlots[armorSlot] = this.slotWithNormalizedDamage({
+        itemId: cur.itemId,
+        count: 1,
+        damage: cur.damage,
+      });
+      cur.count -= 1;
+      this.normalizeCursor();
+      return;
+    }
+    if (
+      equipped.itemId === cur.itemId &&
+      equipped.count < max &&
+      this.damageMatchesForMerge(def, equipped.damage, cur.damage)
+    ) {
+      equipped.count += 1;
+      cur.count -= 1;
+      this.normalizeCursor();
+    }
+  }
+
+  /** LMB click on an armor slot (pick up / swap with cursor), matching inventory slot rules. */
+  handleArmorSlotLmbClick(armorSlot: ArmorSlot): void {
+    const cur = this._cursorStack;
+    const armorStack = this._armorSlots[armorSlot] ?? null;
+    if (cur === null) {
+      if (armorStack === null || armorStack.count <= 0) {
+        return;
+      }
+      this._cursorStack = this.copyStack(armorStack);
+      this._armorSlots[armorSlot] = null;
+      return;
+    }
+    const def = this._registry.getById(cur.itemId);
+    if (def === undefined || def.tags === undefined) {
+      return;
+    }
+    const slotTags = [
+      "stratum:armor_helmet",
+      "stratum:armor_chestplate",
+      "stratum:armor_leggings",
+      "stratum:armor_boots",
+    ] as const;
+    const expectedTag = slotTags[armorSlot];
+    if (
+      expectedTag === undefined ||
+      (!def.tags.includes(expectedTag) && !def.tags.includes("stratum:armor"))
+    ) {
+      return;
+    }
+    const existing: ItemStack | null = armorStack;
+    this._armorSlots[armorSlot] = this.slotWithNormalizedDamage(cur);
+    this._cursorStack =
+      existing !== null && existing.count > 0
+        ? this.slotWithNormalizedDamage(existing)
+        : null;
+  }
+
+  /**
+   * Shift–quick-move from an armor slot into main/hotbar storage (merge then empty slots).
+   * @returns First inventory slot that received items, or null if nothing moved.
+   */
+  quickMoveFromArmorSlot(armorSlot: ArmorSlot): number | null {
+    if (this._cursorStack !== null) {
+      return null;
+    }
+    const src = this._armorSlots[armorSlot] ?? null;
+    if (src === null || src.count <= 0) {
+      return null;
+    }
+    const { rest, firstSlot } = this.addItemStackWithFirstSlot(this.copyStack(src));
+    if (firstSlot === null) {
+      return null;
+    }
+    if (rest === null) {
+      this._armorSlots[armorSlot] = null;
+    } else {
+      this._armorSlots[armorSlot] = this.slotWithNormalizedDamage(rest);
+    }
+    return firstSlot;
+  }
+
+  /**
    * Shift–quick-move (Minecraft-style): move the whole stack from `slot` into the other
    * region (main ↔ hotbar), merging into partial stacks first then filling empty slots
    * left-to-right / top-to-bottom. No-op if the cursor already holds items.
    * @returns First target slot that received items, or null if nothing moved.
+   * Armor pieces prefer their armor slot first; returns {@link ARMOR_UI_SLOT_BASE}+slot when equipping.
    */
   quickMoveFromSlot(slot: number): number | null {
     if (slot < 0 || slot >= INVENTORY_SIZE) return null;
@@ -401,9 +570,18 @@ export class PlayerInventory {
     if (src === null || src === undefined || src.count <= 0) return null;
 
     const itemId = src.itemId;
+    const def = this._registry.getById(itemId);
+    const armorTarget = armorSlotFromItemTags(def?.tags);
+    if (armorTarget !== null) {
+      const equipped = this._armorSlots[armorTarget] ?? null;
+      if (equipped === null || equipped.count <= 0) {
+        this.setArmorStack(armorTarget, this.copyStack(src));
+        this._slots[slot] = null;
+        return ARMOR_UI_SLOT_BASE + armorTarget;
+      }
+    }
     let remaining = src.count;
     const max = this.maxStackFor(itemId);
-    const def = this._registry.getById(itemId);
     const dmg = src.damage;
 
     const toHotbar = slot >= HOTBAR_SIZE;
@@ -655,6 +833,227 @@ export class PlayerInventory {
     }
   }
 
+  /**
+   * Serialize armor slots (helmet, chestplate, leggings, boots).
+   * Returns array of 4 slots in that order.
+   */
+  serializeArmor(): SerializedInventorySlot[] {
+    const out: SerializedInventorySlot[] = [];
+    for (let i = 0; i < ARMOR_SLOT_COUNT; i++) {
+      const s = this._armorSlots[i];
+      if (s === null || s === undefined || s.count <= 0) {
+        out.push(null);
+      } else {
+        const def = this._registry.getById(s.itemId);
+        if (def === undefined) {
+          out.push(null);
+        } else {
+          const d = clampDamageForDefinition(def, s.damage);
+          if (def.maxDurability !== undefined && d > 0) {
+            out.push({ key: def.key, count: s.count, damage: d });
+          } else {
+            out.push({ key: def.key, count: s.count });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Restore armor slots from data produced by {@link serializeArmor}.
+   * Unknown keys are silently skipped.
+   */
+  restoreArmor(data: readonly SerializedInventorySlot[]): void {
+    for (let i = 0; i < ARMOR_SLOT_COUNT; i++) {
+      const entry = i < data.length ? data[i] : null;
+      if (entry === null || entry === undefined) {
+        this._armorSlots[i] = null;
+        continue;
+      }
+      const def = this._registry.getByKey(entry.key);
+      if (def === undefined) {
+        this._armorSlots[i] = null;
+        continue;
+      }
+      const d = clampDamageForDefinition(def, entry.damage);
+      if (isStackBroken(def, d)) {
+        this._armorSlots[i] = null;
+        continue;
+      }
+      const stack: ItemStack = { itemId: def.id, count: entry.count };
+      if (def.maxDurability !== undefined && d > 0) {
+        stack.damage = d;
+      }
+      this._armorSlots[i] = stack;
+    }
+  }
+
+  /** Calculate total armor value from equipped armor. Returns value 0-4 (one point per armor piece). */
+  getTotalArmorValue(): number {
+    let armorValue = 0;
+    for (let i = 0; i < ARMOR_SLOT_COUNT; i++) {
+      const s = this._armorSlots[i];
+      if (s !== null && s !== undefined && s.count > 0) {
+        const def = this._registry.getById(s.itemId);
+        if (def !== undefined && def.tags?.some((t) => t.startsWith("stratum:armor_"))) {
+          armorValue += 1;
+        }
+      }
+    }
+    return armorValue;
+  }
+
+  /**
+   * Beta-style armor mitigation (0–1): at full pooled durability, up to
+   * `min(cap, perPiece × pieceCount)` (capped like classic 20 armor ÷ 25); scales by
+   * `(M − D) / (M + 1)` when any equipped piece has `maxDurability` (`M` / `D` pooled).
+   * Same max per tier when pristine (Beta 1.7.x); better tiers last longer via durability.
+   */
+  getEquippedArmorMitigationFraction(): number {
+    const pieceCount = this.getTotalArmorValue();
+    if (pieceCount <= 0) {
+      return 0;
+    }
+    const base = Math.min(
+      PLAYER_ARMOR_BETA_MITIGATION_CAP,
+      PLAYER_ARMOR_BETA_MITIGATION_PER_PIECE * pieceCount,
+    );
+    let maxTotal = 0;
+    let damageTotal = 0;
+    for (let i = 0; i < ARMOR_SLOT_COUNT; i++) {
+      const s = this._armorSlots[i];
+      if (s === null || s === undefined || s.count <= 0) {
+        continue;
+      }
+      const def = this._registry.getById(s.itemId);
+      if (
+        def === undefined ||
+        !def.tags?.some((t) => t.startsWith("stratum:armor_"))
+      ) {
+        continue;
+      }
+      const max = def.maxDurability;
+      if (max === undefined) {
+        continue;
+      }
+      maxTotal += max;
+      damageTotal += clampDamageForDefinition(def, s.damage);
+    }
+    if (maxTotal <= 0) {
+      return Math.max(0, Math.min(1, base));
+    }
+    const durabilityFactor = (maxTotal - damageTotal) / (maxTotal + 1);
+    if (!Number.isFinite(durabilityFactor)) {
+      return 0;
+    }
+    const frac = base * durabilityFactor;
+    return Math.max(0, Math.min(1, frac));
+  }
+
+  /**
+   * Pooled equipped armor remaining on a 0–10 integer scale (same resolution as the health HUD:
+   * five icons × two half-steps each).
+   */
+  getEquippedArmorDurabilityPointsTen(): number {
+    let maxTotal = 0;
+    let damageTotal = 0;
+    for (let i = 0; i < ARMOR_SLOT_COUNT; i++) {
+      const s = this._armorSlots[i];
+      if (s === null || s === undefined || s.count <= 0) {
+        continue;
+      }
+      const def = this._registry.getById(s.itemId);
+      if (
+        def === undefined ||
+        !def.tags?.some((t) => t.startsWith("stratum:armor_"))
+      ) {
+        continue;
+      }
+      const max = def.maxDurability;
+      if (max === undefined) {
+        continue;
+      }
+      maxTotal += max;
+      damageTotal += clampDamageForDefinition(def, s.damage);
+    }
+    if (maxTotal <= 0) {
+      return 0;
+    }
+    const remaining = maxTotal - damageTotal;
+    const raw = (10 * remaining) / maxTotal;
+    if (!Number.isFinite(raw)) {
+      return 0;
+    }
+    return Math.max(0, Math.min(10, Math.floor(raw + 1e-9)));
+  }
+
+  /**
+   * Wear armor from a damage event: `max(1, floor(rawDamage / divisor))` durability points
+   * removed in round-robin across equipped `stratum:armor_*` pieces with `maxDurability`.
+   */
+  applyArmorDurabilityFromDamage(rawDamage: number): void {
+    if (rawDamage <= 0 || !Number.isFinite(rawDamage)) {
+      return;
+    }
+    const div = PLAYER_ARMOR_DURABILITY_LOSS_DIVISOR;
+    const totalLoss = Math.max(1, Math.floor(rawDamage / div));
+    const targets: ArmorSlot[] = [];
+    for (let i = 0; i < ARMOR_SLOT_COUNT; i++) {
+      const s = this._armorSlots[i];
+      if (s === null || s === undefined || s.count <= 0) {
+        continue;
+      }
+      const def = this._registry.getById(s.itemId);
+      if (
+        def === undefined ||
+        !def.tags?.some((t) => t.startsWith("stratum:armor_")) ||
+        def.maxDurability === undefined
+      ) {
+        continue;
+      }
+      targets.push(i as ArmorSlot);
+    }
+    if (targets.length === 0) {
+      return;
+    }
+    for (let k = 0; k < totalLoss; k++) {
+      const active: ArmorSlot[] = [];
+      for (const slot of targets) {
+        const s = this._armorSlots[slot];
+        if (s === null || s === undefined || s.count <= 0) {
+          continue;
+        }
+        const def = this._registry.getById(s.itemId);
+        if (
+          def === undefined ||
+          def.maxDurability === undefined ||
+          !def.tags?.some((t) => t.startsWith("stratum:armor_"))
+        ) {
+          continue;
+        }
+        active.push(slot);
+      }
+      if (active.length === 0) {
+        return;
+      }
+      const slot = active[k % active.length]!;
+      const s = this._armorSlots[slot]!;
+      const def = this._registry.getById(s.itemId);
+      const maxDurability = def?.maxDurability;
+      if (def === undefined || maxDurability === undefined) {
+        continue;
+      }
+      const cur = clampDamageForDefinition(def, s.damage);
+      const next = cur + 1;
+      if (next >= maxDurability) {
+        this._armorSlots[slot] = null;
+      } else {
+        s.damage = next;
+      }
+    }
+  }
+
   /** True if any slot holds at least one item. */
   hasAnyItems(): boolean {
     for (let i = 0; i < INVENTORY_SIZE; i++) {
@@ -716,5 +1115,36 @@ export class PlayerInventory {
     }
 
     return true;
+  }
+
+  /** Count stacks of an item key in the main inventory grid (excludes armor slots). */
+  countItemsByKey(key: string): number {
+    const def = this._registry.getByKey(key);
+    if (def === undefined) {
+      return 0;
+    }
+    let total = 0;
+    for (let i = 0; i < INVENTORY_SIZE; i++) {
+      const s = this._slots[i];
+      if (s !== null && s !== undefined && s.itemId === def.id && s.count > 0) {
+        total += s.count;
+      }
+    }
+    return total;
+  }
+
+  /** Removes one item of `key` from the first slot that contains it. */
+  consumeOneFromAnySlotByKey(key: string): boolean {
+    const def = this._registry.getByKey(key);
+    if (def === undefined) {
+      return false;
+    }
+    for (let i = 0; i < INVENTORY_SIZE; i++) {
+      const s = this._slots[i];
+      if (s !== null && s !== undefined && s.itemId === def.id && s.count > 0) {
+        return this.consumeOneFromSlot(i);
+      }
+    }
+    return false;
   }
 }

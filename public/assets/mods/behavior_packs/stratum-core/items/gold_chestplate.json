@@ -1,0 +1,17 @@
+﻿{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:gold_chestplate"
+    },
+    "components": {
+      "stratum:display_name": "Golden Chestplate",
+      "stratum:texture_key": "gold_chestplate",
+      "stratum:max_stack": 1,
+      "stratum:max_durability": 112,
+      "stratum:numeric_id": 142,
+      "stratum:tags": ["stratum:armor", "stratum:armor_chestplate"],
+      "stratum:inventory_tooltip": "Chest armor"
+    }
+  }
+}

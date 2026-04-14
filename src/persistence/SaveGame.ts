@@ -138,14 +138,35 @@ export class SaveGame {
     return p;
   }
 
-  private async saveNow(): Promise<void> {
-    const chunks = [...this.world.getChunkManager().getLoadedChunks()];
+  /** Write all loaded chunks regardless of dirty state (initial save / manual "save now"). */
+  async saveAll(): Promise<void> {
+    const p = this._saveSerial.then(() => this.saveNow(true));
+    this._saveSerial = p.then(
+      () => {},
+      () => {},
+    );
+    return p;
+  }
+
+  private async saveNow(forceFull = false): Promise<void> {
+    const allChunks = [...this.world.getChunkManager().getLoadedChunks()];
+    const chunks = forceFull
+      ? allChunks
+      : allChunks.filter((c) => c.persistDirty);
+    if (import.meta.env.DEV) {
+      console.debug(
+        `[SaveGame] saving ${chunks.length} dirty / ${allChunks.length} loaded chunks${forceFull ? " (forceFull)" : ""}`,
+      );
+    }
     await this.store.saveChunkBatch(
       this.worldUuid,
       chunks,
       (cx, cy) => this.world.getFurnaceEntitiesForChunk(cx, cy),
       (cx, cy) => this.world.getChestEntitiesForChunk(cx, cy),
     );
+    for (const c of chunks) {
+      c.persistDirty = false;
+    }
 
     const existing = await this.store.loadWorld(this.worldUuid);
     const now = Date.now();
@@ -194,6 +215,7 @@ export class SaveGame {
       previewImageDataUrl,
       moderation: moderationPatch ?? existing?.moderation,
       playerInventory: this.player.inventory.serialize(),
+      playerArmor: this.player.inventory.serializeArmor(),
       blockIdPalette: this.world.getRegistry().buildIdentifierPalette(),
       itemIdLayoutRevision: Math.max(
         existing?.itemIdLayoutRevision ?? 0,

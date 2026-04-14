@@ -1,10 +1,12 @@
 /** Scrollable chest storage beside inventory (paired with {@link InventoryUI}). */
 
 import { INVENTORY_ITEM_ICON_DISPLAY_PX } from "../core/constants";
+import type { ItemDefinition } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { ChestStack } from "../world/chest/ChestTileState";
 import type { ItemIconUrlLookup } from "./atlasItemIcon";
 import { getItemIconStyleForDefinition } from "./atlasItemIcon";
+import "./inventory.css";
 
 const ICON_PX = INVENTORY_ITEM_ICON_DISPLAY_PX;
 
@@ -38,6 +40,8 @@ export class ChestPanel {
   private readonly deps: ChestPanelDeps;
   private readonly iconEls: HTMLDivElement[] = [];
   private readonly countEls: HTMLSpanElement[] = [];
+  private readonly tooltipEl: HTMLDivElement;
+  private tooltipActiveSlot: number | null = null;
   private open = false;
   private visible = false;
   private pointerDownSlot: number | null = null;
@@ -102,6 +106,12 @@ export class ChestPanel {
     scroll.appendChild(grid);
     this.gridEl = grid;
 
+    const tooltip = document.createElement("div");
+    tooltip.className = "inv-chest-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    document.body.appendChild(tooltip);
+    this.tooltipEl = tooltip;
+
     inner.appendChild(title);
     inner.appendChild(scroll);
     root.appendChild(inner);
@@ -109,7 +119,53 @@ export class ChestPanel {
     window.addEventListener("mouseup", this.onWindowMouseUp, true);
   }
 
+  private hideTooltip(): void {
+    this.tooltipActiveSlot = null;
+    this.tooltipEl.classList.remove("inv-item-tooltip--visible");
+    this.tooltipEl.replaceChildren();
+  }
+
+  private showSlotTooltip(slotIndex: number, def: ItemDefinition, clientX: number, clientY: number): void {
+    this.tooltipActiveSlot = slotIndex;
+    this.tooltipEl.replaceChildren();
+    const nameLine = document.createElement("div");
+    nameLine.className = "inv-item-tooltip__name";
+    nameLine.textContent = def.displayName;
+    this.tooltipEl.appendChild(nameLine);
+    const tip = def.inventoryTooltip;
+    if (tip !== undefined && tip.length > 0) {
+      const detail = document.createElement("div");
+      detail.className = "inv-item-tooltip__detail";
+      detail.textContent = tip;
+      this.tooltipEl.appendChild(detail);
+    }
+    this.tooltipEl.classList.add("inv-item-tooltip--visible");
+    requestAnimationFrame(() => {
+      this.positionTooltip(clientX, clientY);
+    });
+  }
+
+  private positionTooltip(clientX: number, clientY: number): void {
+    const pad = 12;
+    const el = this.tooltipEl;
+    const tw = el.offsetWidth;
+    const th = el.offsetHeight;
+    let x = clientX + pad;
+    let y = clientY + pad;
+    if (x + tw > window.innerWidth - 8) {
+      x = clientX - tw - pad;
+    }
+    if (y + th > window.innerHeight - 8) {
+      y = clientY - th - pad;
+    }
+    x = Math.max(8, x);
+    y = Math.max(8, y);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  }
+
   destroy(): void {
+    this.hideTooltip();
     window.removeEventListener("mouseup", this.onWindowMouseUp, true);
     this.root.remove();
   }
@@ -206,8 +262,37 @@ export class ChestPanel {
       this.iconEls.push(icon);
       this.countEls.push(count);
       this.bindSlot(slot, i);
+      this.bindSlotTooltip(slot, i);
     }
     this.lastBuiltSlotCount = slotCount;
+  }
+
+  private bindSlotTooltip(slot: HTMLDivElement, slotIndex: number): void {
+    slot.addEventListener("mouseenter", (e: MouseEvent) => {
+      if (!this.open || !this.visible) {
+        return;
+      }
+      const stack = this.deps.getChestStack(slotIndex);
+      if (stack === null || stack.count <= 0) {
+        return;
+      }
+      const def = this.itemRegistry.getById(stack.itemId);
+      if (def === undefined) {
+        return;
+      }
+      this.showSlotTooltip(slotIndex, def, e.clientX, e.clientY);
+    });
+    slot.addEventListener("mousemove", (e: MouseEvent) => {
+      if (this.tooltipActiveSlot !== slotIndex) {
+        return;
+      }
+      this.positionTooltip(e.clientX, e.clientY);
+    });
+    slot.addEventListener("mouseleave", () => {
+      if (this.tooltipActiveSlot === slotIndex) {
+        this.hideTooltip();
+      }
+    });
   }
 
   /** Scroll the chest storage column so the given slot is in view (e.g. after shift–quick-move). */

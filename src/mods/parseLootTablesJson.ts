@@ -18,6 +18,7 @@ const lootEntrySchema = z
 const lootTableSchema = z
   .object({
     entries: z.array(lootEntrySchema),
+    roll: z.enum(["each", "one_of"]).optional(),
   })
   .strict();
 
@@ -46,9 +47,13 @@ export function parseLootTablesJson(raw: unknown): LootTablesFile {
   const parsed = lootFileSchema.parse(raw);
   const loot_tables: Record<string, LootTable> = {};
   for (const [key, table] of Object.entries(parsed.loot_tables)) {
-    loot_tables[key] = {
+    const t: LootTable = {
       entries: table.entries.map(normalizeEntry),
     };
+    if (table.roll !== undefined) {
+      t.roll = table.roll;
+    }
+    loot_tables[key] = t;
   }
   return {
     format_version: "1.0.0",
@@ -92,8 +97,16 @@ export function registerEntityLootTables(
   if (pig !== undefined) {
     resolver.registerEntityTable(MobType.Pig, pig);
   }
+  const duck = data.loot_tables["stratum:duck"];
+  if (duck !== undefined) {
+    resolver.registerEntityTable(MobType.Duck, duck);
+  }
   const zombie = data.loot_tables["stratum:zombie"];
   if (zombie !== undefined) {
     resolver.registerEntityTable(MobType.Zombie, zombie);
+  }
+  const slime = data.loot_tables["stratum:slime"];
+  if (slime !== undefined) {
+    resolver.registerEntityTable(MobType.Slime, slime);
   }
 }

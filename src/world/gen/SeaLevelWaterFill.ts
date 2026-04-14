@@ -163,7 +163,8 @@ export function applySeaLevelFloodWater(
         continue;
       }
       const id = chunk.blocks[idx]!;
-      if (id === airId || id === grassId || isReplaceablePlant(registry, airId, id)) {
+      // Only convert air and plants to water; grass becomes sand via shore pass
+      if (id === airId || isReplaceablePlant(registry, airId, id)) {
         chunk.blocks[idx] = waterId;
         // Still/source water (flow 0); matches bucket-placed sources and Minecraft oceans.
         chunk.metadata[idx] = withWaterFlowLevel(0, 0);

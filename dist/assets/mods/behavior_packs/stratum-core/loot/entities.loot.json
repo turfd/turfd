@@ -13,7 +13,31 @@
         }
       ]
     },
+    "stratum:duck": {
+      "entries": [
+        {
+          "itemKey": "stratum:raw_chicken",
+          "countMin": 1,
+          "countMax": 2
+        },
+        {
+          "itemKey": "stratum:feather",
+          "countMin": 1,
+          "countMax": 3
+        }
+      ]
+    },
     "stratum:zombie": {
+      "entries": [
+        {
+          "itemKey": "stratum:rotten_flesh",
+          "countMin": 1,
+          "countMax": 2,
+          "chance": 0.5
+        }
+      ]
+    },
+    "stratum:slime": {
       "entries": []
     }
   }

@@ -2,6 +2,7 @@
   "textures": {
     "bread": "assets/mods/resource_packs/stratum-core/textures/items/bread.png",
     "porkchop": "assets/mods/resource_packs/stratum-core/textures/items/porkchop.png",
+    "chicken": "assets/mods/resource_packs/stratum-core/textures/items/chicken.png",
     "cooked_porkchop": "assets/mods/resource_packs/stratum-core/textures/items/cooked_porkchop.png",
     "bucket": "assets/mods/resource_packs/stratum-core/textures/items/bucket.png",
     "water_bucket": "assets/mods/resource_packs/stratum-core/textures/items/water_bucket.png",
@@ -44,6 +45,24 @@
     "stone_sword": "assets/mods/resource_packs/stratum-core/textures/items/stone_sword.png",
     "iron_sword": "assets/mods/resource_packs/stratum-core/textures/items/iron_sword.png",
     "gold_sword": "assets/mods/resource_packs/stratum-core/textures/items/golden_sword.png",
-    "diamond_sword": "assets/mods/resource_packs/stratum-core/textures/items/diamond_sword.png"
+    "diamond_sword": "assets/mods/resource_packs/stratum-core/textures/items/diamond_sword.png",
+    "iron_helmet": "assets/mods/resource_packs/stratum-core/textures/items/iron_helmet.png",
+    "iron_chestplate": "assets/mods/resource_packs/stratum-core/textures/items/iron_chestplate.png",
+    "iron_leggings": "assets/mods/resource_packs/stratum-core/textures/items/iron_leggings.png",
+    "iron_boots": "assets/mods/resource_packs/stratum-core/textures/items/iron_boots.png",
+    "gold_helmet": "assets/mods/resource_packs/stratum-core/textures/items/golden_helmet.png",
+    "gold_chestplate": "assets/mods/resource_packs/stratum-core/textures/items/golden_chestplate.png",
+    "gold_leggings": "assets/mods/resource_packs/stratum-core/textures/items/golden_leggings.png",
+    "gold_boots": "assets/mods/resource_packs/stratum-core/textures/items/golden_boots.png",
+    "bow": "assets/mods/resource_packs/stratum-core/textures/items/bow.png",
+    "bow_pulling_0": "assets/mods/resource_packs/stratum-core/textures/items/bow_pulling_0.png",
+    "bow_pulling_1": "assets/mods/resource_packs/stratum-core/textures/items/bow_pulling_1.png",
+    "bow_pulling_2": "assets/mods/resource_packs/stratum-core/textures/items/bow_pulling_2.png",
+    "arrow": "assets/mods/resource_packs/stratum-core/textures/items/arrow.png",
+    "flint": "assets/mods/resource_packs/stratum-core/textures/items/flint.png",
+    "string": "assets/mods/resource_packs/stratum-core/textures/items/string.png",
+    "feather": "assets/mods/resource_packs/stratum-core/textures/items/feather.png",
+    "rotten_flesh": "assets/mods/resource_packs/stratum-core/textures/items/rotten_flesh.png",
+    "painting": "assets/mods/resource_packs/stratum-core/textures/items/painting.png"
   }
 }

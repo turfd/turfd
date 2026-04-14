@@ -199,10 +199,18 @@ export class ParallaxTileStripRenderer {
         bgMesh.label = `parallaxChunk:${k}:bg`;
         bgMesh.position.set(pos.x, pos.y);
         this.stripRoot.addChild(bgMesh);
-        const { mesh: fgMesh } = buildMesh(chunk, registry, atlas, meshOpts);
+        const { mesh: fgMesh, waterMesh: fgWaterMesh } = buildMesh(
+          chunk,
+          registry,
+          atlas,
+          meshOpts,
+        );
         fgMesh.label = `parallaxChunk:${k}:fg`;
         fgMesh.position.set(pos.x, pos.y);
         this.stripRoot.addChild(fgMesh);
+        fgWaterMesh.label = `parallaxChunk:${k}:fgWater`;
+        fgWaterMesh.position.set(pos.x, pos.y);
+        this.stripRoot.addChild(fgWaterMesh);
       }
     }
 
@@ -465,10 +473,18 @@ export class ParallaxTileStripRenderer {
       bgMesh.label = `parallaxChunk:${k}:bg`;
       bgMesh.position.set(pos.x, pos.y);
       this.stripRoot.addChild(bgMesh);
-      const { mesh: fgMesh } = buildMesh(chunk, opts.registry, opts.atlas, meshOpts);
+      const { mesh: fgMesh, waterMesh: fgWaterMesh } = buildMesh(
+        chunk,
+        opts.registry,
+        opts.atlas,
+        meshOpts,
+      );
       fgMesh.label = `parallaxChunk:${k}:fg`;
       fgMesh.position.set(pos.x, pos.y);
       this.stripRoot.addChild(fgMesh);
+      fgWaterMesh.label = `parallaxChunk:${k}:fgWater`;
+      fgWaterMesh.position.set(pos.x, pos.y);
+      this.stripRoot.addChild(fgWaterMesh);
     }
   }
 

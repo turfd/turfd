@@ -47,24 +47,24 @@ export function stairSolidRectsInCellPixels(shape: StairShape): readonly [
   switch (shape) {
     case 0:
       return [
-        [0, HALF, b, b],
-        [HALF, 0, b, HALF],
+        [0, HALF, b, HALF],
+        [HALF, 0, HALF, HALF],
       ];
     case 1:
       return [
-        [0, HALF, b, b],
+        [0, HALF, b, HALF],
         [0, 0, HALF, HALF],
       ];
     case 2:
       return [
         [0, 0, b, HALF],
-        [HALF, HALF, b, b],
+        [HALF, HALF, HALF, HALF],
       ];
     case 3:
     default:
       return [
         [0, 0, b, HALF],
-        [0, HALF, HALF, b],
+        [0, HALF, HALF, HALF],
       ];
   }
 }

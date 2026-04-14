@@ -21,7 +21,7 @@ import { forEachDeciduousBushCell, forEachSpruceBushCell } from "./gen/treeCanop
 // ---------------------------------------------------------------------------
 
 /** Manhattan distance to search for supporting logs around a leaf block. */
-const LEAF_SUPPORT_RADIUS = 4;
+export const LEAF_SUPPORT_RADIUS = 4;
 
 /** Base delay (seconds) before an unsupported leaf decays. */
 const LEAF_DECAY_BASE_SEC = 1.5;
@@ -152,6 +152,7 @@ export class BlockInteractions {
    * chunk after every streaming tick (catastrophic main-thread cost).
    */
   private readonly wheatHydratedChunkKeys = new Set<string>();
+  private readonly saplingHydratedChunkKeys = new Set<string>();
 
   constructor(world: World, registry: BlockRegistry, bus: EventBus) {
     this.world = world;
@@ -287,6 +288,47 @@ export class BlockInteractions {
         }
       }
       this.sugarCaneHydratedChunkKeys.add(key);
+    }
+  }
+
+  /**
+   * Ensures saplings in loaded chunks have a pending `sapling-grow` timer.
+   * Like wheat, chunks hydrated from disk never emit per-cell `game:block-changed`,
+   * so saplings would otherwise never grow after a reload.
+   */
+  hydrateSaplingSchedulesInLoadedWorld(): void {
+    const chunks = this.world.getChunkManager().getLoadedChunks();
+    const loadedKeys = new Set<string>();
+    for (const chunk of chunks) {
+      loadedKeys.add(`${chunk.coord.cx},${chunk.coord.cy}`);
+    }
+    const stale: string[] = [];
+    for (const key of this.saplingHydratedChunkKeys) {
+      if (!loadedKeys.has(key)) {
+        stale.push(key);
+      }
+    }
+    for (const key of stale) {
+      this.saplingHydratedChunkKeys.delete(key);
+    }
+    for (const chunk of chunks) {
+      const key = `${chunk.coord.cx},${chunk.coord.cy}`;
+      if (this.saplingHydratedChunkKeys.has(key)) {
+        continue;
+      }
+      const { wx: ox, wy: oy } = chunkToWorldOrigin(chunk.coord);
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+          const id = getBlock(chunk, lx, ly);
+          if (!this.saplingIds.has(id)) {
+            continue;
+          }
+          const delay = SAPLING_GROW_MIN_SEC +
+            unixRandom01() * (SAPLING_GROW_MAX_SEC - SAPLING_GROW_MIN_SEC);
+          this.schedule(ox + lx, oy + ly, "sapling-grow", delay);
+        }
+      }
+      this.saplingHydratedChunkKeys.add(key);
     }
   }
 

@@ -4,6 +4,10 @@
  */
 
 import { unixRandom01 } from "../core/unixRandom";
+import { EnvironmentDetector } from "./EnvironmentDetector";
+import { ReverbEngine } from "./ReverbEngine";
+import { SpatialAudioMixer } from "./SpatialAudioMixer";
+import type { World } from "../world/World";
 
 /** World pixels: listener = local player ears/feet; source = where the sound originates. */
 export type SfxWorldSpace = {
@@ -26,9 +30,6 @@ export type SfxOptions = {
 export const DEFAULT_SFX_WORLD_MAX_DIST_PX = 960;
 /** Subtle one-shot detune in cents so repeated SFX do not sound perfectly identical. */
 export const DEFAULT_SFX_PITCH_VARIANCE_CENTS = 14;
-
-/** Horizontal offset in world px that maps to full stereo pan. */
-const SFX_PAN_REF_PX = 420;
 
 function clamp01(v: number): number {
   if (v < 0) {
@@ -72,6 +73,13 @@ export class AudioEngine {
   private masterVol = 1;
   private musicVol = 1;
   private sfxVol = 1;
+  private spatialMixer: SpatialAudioMixer | null = null;
+  private reverbEngine: ReverbEngine | null = null;
+  /** Positional SFX + reverb bus; mirrors {@link sfxVol} so rain/ambient stay dry. */
+  private sfxPositionalTrim: GainNode | null = null;
+  private readonly environmentDetector = new EnvironmentDetector();
+  /** Occlusion raycasts for positional SFX; set from the game loop when a world exists. */
+  private worldForSpatial: World | null = null;
 
   constructor() {
     // AudioContext is created on first playSfx/loadSfx (browser policy).
@@ -97,6 +105,17 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Multiplayer: resume a suspended context after join and retry IR loads (first load can fail if
+   * asset base URL was not ready when the context was first created).
+   */
+  onNetworkSessionReady(): void {
+    this.resumeContext();
+    if (this.reverbEngine !== null) {
+      void this.reverbEngine.loadIRs().catch(() => {});
+    }
+  }
+
   private ensureContext(): AudioContext {
     if (this.ctx === null) {
       const Ctx =
@@ -112,8 +131,18 @@ export class AudioEngine {
       this.sfxGain = this.ctx.createGain();
       this.musicGain.connect(this.masterGain);
       this.sfxGain.connect(this.masterGain);
+      this.spatialMixer = new SpatialAudioMixer(this.ctx);
+      this.reverbEngine = new ReverbEngine(this.ctx);
+      this.sfxPositionalTrim = this.ctx.createGain();
+      this.sfxPositionalTrim.gain.value = this.sfxVol;
+      this.spatialMixer
+        .getOutputNode()
+        .connect(this.reverbEngine.getInputNode());
+      this.reverbEngine.getOutputNode().connect(this.sfxPositionalTrim);
+      this.sfxPositionalTrim.connect(this.masterGain);
       this.masterGain.connect(this.ctx.destination);
       this.applyGainNodes();
+      void this.reverbEngine.loadIRs().catch(() => {});
     }
     return this.ctx;
   }
@@ -145,6 +174,9 @@ export class AudioEngine {
     this.sfxVol = clamp01(v);
     if (this.sfxGain !== null) {
       this.sfxGain.gain.value = this.sfxVol;
+    }
+    if (this.sfxPositionalTrim !== null) {
+      this.sfxPositionalTrim.gain.value = this.sfxVol;
     }
     if (this.sfxAmbientGain !== null) {
       this.sfxAmbientGain.gain.value = this.sfxAmbientUserVol * this.sfxVol;
@@ -379,35 +411,64 @@ export class AudioEngine {
     if (sfx === null) {
       return;
     }
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
     const variance =
       options?.pitchVariance ?? DEFAULT_SFX_PITCH_VARIANCE_CENTS;
-    src.detune.value = (unixRandom01() * 2 - 1) * variance;
-    const playGain = ctx.createGain();
-    let gain = options?.volume ?? 1;
+    const detuneCents = (unixRandom01() * 2 - 1) * variance;
     const w = options?.world;
     if (w !== undefined) {
-      const maxD = w.maxDistPx ?? DEFAULT_SFX_WORLD_MAX_DIST_PX;
-      const dist = Math.hypot(w.sourceX - w.listenerX, w.sourceY - w.listenerY);
-      if (dist >= maxD) {
+      const sm = this.spatialMixer;
+      if (sm === null) {
         return;
       }
-      gain *= Math.max(0, 1 - dist / maxD);
+      sm.updateListenerPosition(w.listenerX, w.listenerY);
+      const played = sm.play({
+        buffer: buf,
+        sourceX: w.sourceX,
+        sourceY: w.sourceY,
+        volume: options?.volume ?? 1,
+        maxDistPx: w.maxDistPx ?? DEFAULT_SFX_WORLD_MAX_DIST_PX,
+        detuneCents,
+        world: this.worldForSpatial ?? undefined,
+      });
+      if (played === null) {
+        return;
+      }
+      return;
     }
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.detune.value = detuneCents;
+    const playGain = ctx.createGain();
+    const gain = options?.volume ?? 1;
     playGain.gain.value = gain;
     src.connect(playGain);
-    if (w !== undefined) {
-      const dx = w.sourceX - w.listenerX;
-      const pan = Math.max(-1, Math.min(1, dx / SFX_PAN_REF_PX));
-      const panner = ctx.createStereoPanner();
-      panner.pan.value = pan;
-      playGain.connect(panner);
-      panner.connect(sfx);
-    } else {
-      playGain.connect(sfx);
-    }
+    playGain.connect(sfx);
     src.start();
+  }
+
+  /**
+   * Throttled listener position for ongoing spatial voices (world pixels, feet).
+   */
+  updateListenerPosition(feetPx: number, feetPy: number): void {
+    this.spatialMixer?.updateListenerPosition(feetPx, feetPy);
+  }
+
+  /** Binds the live world for wall occlusion on spatial SFX (listener→source linecasts). */
+  setWorldForSpatial(world: World | null): void {
+    this.worldForSpatial = world;
+  }
+
+  /**
+   * Infrequent environment probe for reverb wet/dry (world pixels, feet).
+   */
+  updateEnvironment(world: World, feetPx: number, feetPy: number): void {
+    const rev = this.reverbEngine;
+    if (rev === null) {
+      return;
+    }
+    const probe = this.environmentDetector.detect(world, feetPx, feetPy);
+    rev.setEnvironment(probe);
   }
 
   async loadSfx(name: string, url: string): Promise<void> {
@@ -524,6 +585,12 @@ export class AudioEngine {
     this.stopMusic();
     this.stopSfxRainDualAmbient();
     this.stopSfxAmbientLoopInner();
+    this.worldForSpatial = null;
+    this.spatialMixer?.dispose();
+    this.spatialMixer = null;
+    this.reverbEngine?.dispose();
+    this.reverbEngine = null;
+    this.sfxPositionalTrim = null;
     this.buffers.clear();
     this.sfxVariantCount.clear();
     if (this.ctx !== null) {

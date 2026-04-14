@@ -14,7 +14,7 @@ const CMD_HINTS: Record<string, string> = {
   ping: "/ping — Round-trip time to the host (when connected)",
   give: "/give @s <item> [count] — Give items (host / OP); /give <player> <item> [count]",
   summon:
-    "/summon <sheep|pig|zombie|…> [blockX] [woolColor] — Mobs at feet or surface column; sheep wool color optional (host / OP)",
+    "/summon <sheep|pig|duck|zombie|slime> [blockX] [woolColor] — Mobs at feet or surface column; sheep wool color optional (host / OP)",
   op: "/op <player> — Grant operator (host only)",
   deop: "/deop <player|uuid> — Revoke operator (host only)",
 };
@@ -105,10 +105,10 @@ function injectChatChromeStyles(): void {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 34px;
-      height: 34px;
+      width: 44px;
+      height: 44px;
       padding: 0;
-      border-radius: 10px;
+      border-radius: 12px;
       border: 1px solid rgba(255,255,255,0.1);
       background: rgba(28,28,30,0.45);
       color: rgba(242,242,247,0.88);
@@ -667,25 +667,38 @@ export class ChatOverlay {
     this.applyLogVisibility();
   }
 
+  private renderedLineCount = 0;
+
+  private createLineRow(line: { kind: "player" | "system"; text: string; label?: string }): HTMLDivElement {
+    const row = document.createElement("div");
+    row.style.marginBottom = "4px";
+    if (line.kind === "system") {
+      row.style.color = "#b8ddff";
+      row.textContent = line.text;
+    } else {
+      row.style.color = "#f2f2f7";
+      const label = line.label ?? "?";
+      row.textContent = `<${label}> ${line.text}`;
+    }
+    return row;
+  }
+
   private flushLog(): void {
     const log = this.logEl;
     if (log === null) {
       return;
     }
-    log.replaceChildren();
-    for (const line of this.lines) {
-      const row = document.createElement("div");
-      row.style.marginBottom = "4px";
-      if (line.kind === "system") {
-        row.style.color = "#b8ddff";
-        row.textContent = line.text;
-      } else {
-        row.style.color = "#f2f2f7";
-        const label = line.label ?? "?";
-        row.textContent = `<${label}> ${line.text}`;
-      }
-      log.appendChild(row);
+    const total = this.lines.length;
+    // If lines were trimmed (overflow cap), remove excess leading DOM children.
+    while (log.childNodes.length > 0 && this.renderedLineCount > total) {
+      log.removeChild(log.firstChild!);
+      this.renderedLineCount--;
     }
+    // Append only new lines.
+    for (let i = this.renderedLineCount; i < total; i++) {
+      log.appendChild(this.createLineRow(this.lines[i]!));
+    }
+    this.renderedLineCount = total;
     log.scrollTop = log.scrollHeight;
   }
 
@@ -821,5 +834,6 @@ export class ChatOverlay {
     this.logEl = null;
     this.inputEl = null;
     this.hintEl = null;
+    this.renderedLineCount = 0;
   }
 }

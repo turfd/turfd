@@ -101,22 +101,44 @@ export class ChunkManager {
 
   /**
    * Drops chunks whose Chebyshev distance from `centre` exceeds `maxDistance`, except
-   * columns with |cx| <= `spawnStripRadius` (always kept once loaded).
+   * columns with |cx| <= `spawnStripRadius` (kept once loaded, up to `maxSpawnStripColumns`).
+   * After distance eviction, enforces `maxLoadedChunks` hard cap by evicting the farthest
+   * chunks regardless of spawn-strip status.
    * @returns Evicted chunk coordinates (for cache invalidation, etc.).
    */
   updateLoadedChunks(
     centre: ChunkCoord,
     maxDistance: number,
     spawnStripRadius: number,
+    maxLoadedChunks = Infinity,
+    maxSpawnStripColumns = Infinity,
   ): ChunkCoord[] {
     const evicted: ChunkCoord[] = [];
+
+    // Count spawn-strip columns currently loaded.
+    let spawnStripColumnCount = 0;
+    if (maxSpawnStripColumns < Infinity) {
+      const seen = new Set<number>();
+      for (const row of this.loaded.values()) {
+        for (const chunk of row.values()) {
+          if (Math.abs(chunk.coord.cx) <= spawnStripRadius) {
+            seen.add(chunk.coord.cx);
+          }
+        }
+      }
+      spawnStripColumnCount = seen.size;
+    }
+
+    // Pass 1: distance-based eviction with spawn-strip exemption.
     for (const row of this.loaded.values()) {
       for (const chunk of row.values()) {
         const d = Math.max(
           Math.abs(chunk.coord.cx - centre.cx),
           Math.abs(chunk.coord.cy - centre.cy),
         );
-        const inSpawnStrip = Math.abs(chunk.coord.cx) <= spawnStripRadius;
+        const inSpawnStrip =
+          Math.abs(chunk.coord.cx) <= spawnStripRadius &&
+          spawnStripColumnCount <= maxSpawnStripColumns;
         if (d > maxDistance && !inSpawnStrip) {
           evicted.push({ cx: chunk.coord.cx, cy: chunk.coord.cy });
         }
@@ -132,6 +154,43 @@ export class ChunkManager {
         this.loaded.delete(cx);
       }
     }
+
+    // Pass 2: hard cap enforcement — evict farthest chunks regardless of spawn-strip.
+    if (maxLoadedChunks < Infinity) {
+      let loadedCount = 0;
+      for (const row of this.loaded.values()) {
+        loadedCount += row.size;
+      }
+      if (loadedCount > maxLoadedChunks) {
+        const all: { cx: number; cy: number; dist: number }[] = [];
+        for (const row of this.loaded.values()) {
+          for (const chunk of row.values()) {
+            all.push({
+              cx: chunk.coord.cx,
+              cy: chunk.coord.cy,
+              dist: Math.max(
+                Math.abs(chunk.coord.cx - centre.cx),
+                Math.abs(chunk.coord.cy - centre.cy),
+              ),
+            });
+          }
+        }
+        all.sort((a, b) => b.dist - a.dist);
+        const excess = loadedCount - maxLoadedChunks;
+        for (let i = 0; i < excess; i++) {
+          const c = all[i]!;
+          evicted.push({ cx: c.cx, cy: c.cy });
+          const row = this.loaded.get(c.cx);
+          if (row !== undefined) {
+            row.delete(c.cy);
+            if (row.size === 0) {
+              this.loaded.delete(c.cx);
+            }
+          }
+        }
+      }
+    }
+
     return evicted;
   }
 }

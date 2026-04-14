@@ -107,6 +107,8 @@ export function registerBlockItems(
     if (block.id === 0) continue;
     if (block.doorHalf === "bottom" || block.doorHalf === "top") continue;
     if (block.bedHalf === "head") continue;
+    if (block.noBlockItem === true) continue;
+    if (block.isPainting === true) continue;
     if (items.getByKey(block.identifier) !== undefined) continue;
 
     const textureName = block.textureName ?? block.identifier.split(':')[1] ?? block.identifier;

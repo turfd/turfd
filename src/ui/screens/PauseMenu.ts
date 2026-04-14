@@ -59,6 +59,15 @@ function injectPauseStyles(base: string): void {
     }
 
     .pm-overlay {
+      --mm-ink: #f2f2f7;
+      --mm-ink-mid: #aeaeb2;
+      --mm-ink-soft: #8e8e93;
+      --mm-surface: rgba(44, 44, 46, 0.82);
+      --mm-surface-deep: rgba(36, 36, 38, 0.9);
+      --mm-border: rgba(255, 255, 255, 0.1);
+      --mm-border-strong: rgba(255, 255, 255, 0.16);
+      --mm-radius-sm: 10px;
+      --mm-radius-md: 14px;
       position: fixed;
       inset: 0;
       z-index: 1150;
@@ -72,7 +81,7 @@ function injectPauseStyles(base: string): void {
       -webkit-font-smoothing: none;
       -moz-osx-font-smoothing: unset;
       text-rendering: optimizeSpeed;
-      color: #f2f2f7;
+      color: var(--mm-ink);
       opacity: 0;
       visibility: hidden;
       pointer-events: none;
@@ -90,9 +99,9 @@ function injectPauseStyles(base: string): void {
       width: min(26rem, 100%);
       max-height: min(90vh, 100%);
       overflow: hidden;
-      border-radius: 14px;
+      border-radius: var(--mm-radius-md);
       corner-shape: squircle;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid var(--mm-border);
       background: rgba(44, 44, 46, 0.92);
       padding: clamp(1.25rem, 3vw, 1.6rem) clamp(1.35rem, 3.5vw, 1.75rem);
       box-sizing: border-box;
@@ -156,9 +165,9 @@ function injectPauseStyles(base: string): void {
       display: flex;
       flex-direction: column;
       min-width: 0;
-      background: rgba(36, 36, 38, 0.88);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 14px;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-md);
       corner-shape: squircle;
     }
     .pm-settings-host.mm-panel {
@@ -187,37 +196,37 @@ function injectPauseStyles(base: string): void {
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
-      border-radius: 10px;
+      border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid var(--mm-border);
       transition: opacity 0.12s ease, border-color 0.12s ease;
     }
     .pm-btn:hover { opacity: 0.92; }
     .pm-btn:active { opacity: 0.85; }
     .pm-btn-primary {
-      background: #f2f2f7;
+      background: var(--mm-ink);
       color: #1c1c1e;
-      border-color: #f2f2f7;
+      border-color: var(--mm-ink);
     }
     .pm-btn-secondary {
-      background: rgba(36, 36, 38, 0.95);
-      color: #aeaeb2;
+      background: var(--mm-surface-deep);
+      color: var(--mm-ink-mid);
     }
     .pm-btn-secondary:hover {
-      color: #f2f2f7;
-      border-color: rgba(255, 255, 255, 0.16);
+      color: var(--mm-ink);
+      border-color: var(--mm-border-strong);
     }
 
     .pm-section {
       margin-top: 1rem;
       padding-top: 1rem;
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      border-top: 1px solid var(--mm-border);
     }
     .pm-section-title {
       font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      color: #8e8e93;
+      color: var(--mm-ink-soft);
       margin-bottom: 0.55rem;
     }
     .pm-mp-col {
@@ -240,7 +249,7 @@ function injectPauseStyles(base: string): void {
       font-family: 'M5x7', monospace;
       font-size: 20px;
       line-height: 1.45;
-      color: #aeaeb2;
+      color: var(--mm-ink-mid);
       margin-top: 0.15rem;
       min-height: 1.35em;
       word-break: break-all;
@@ -253,17 +262,17 @@ function injectPauseStyles(base: string): void {
       font-size: 15px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      color: #8e8e93;
+      color: var(--mm-ink-soft);
       margin-bottom: 0.35rem;
     }
     .pm-range {
       width: 100%;
-      accent-color: #aeaeb2;
+      accent-color: var(--mm-ink-mid);
     }
     .pm-hint {
       font-family: 'M5x7', monospace;
       font-size: 16px;
-      color: #8e8e93;
+      color: var(--mm-ink-soft);
       margin-top: 0.35rem;
       min-height: 1.2em;
     }
@@ -296,6 +305,7 @@ export class PauseMenu {
   private roomCode: string | null = null;
   private mpBtn: HTMLButtonElement | null = null;
   private mpStatusEl: HTMLDivElement | null = null;
+  private resumeBtn: HTMLButtonElement | null = null;
 
   init(
     mount: HTMLElement,
@@ -352,6 +362,7 @@ export class PauseMenu {
     resumeBtn.addEventListener("click", () => {
       bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
     });
+    this.resumeBtn = resumeBtn;
 
     const saveBtn = document.createElement("button");
     saveBtn.type = "button";
@@ -366,6 +377,11 @@ export class PauseMenu {
     quitBtn.className = "pm-btn pm-btn-secondary";
     quitBtn.textContent = "Save and Quit";
     quitBtn.addEventListener("click", () => {
+      if (quitBtn.disabled) {
+        return;
+      }
+      quitBtn.disabled = true;
+      quitBtn.style.opacity = "0.55";
       bus.emit({ type: "ui:quit" } satisfies GameEvent);
     });
 
@@ -570,6 +586,9 @@ export class PauseMenu {
     el.setAttribute("aria-hidden", open ? "false" : "true");
     if (open) {
       this.syncTimeUi?.(this.lastObservedWorldTimeMs);
+      queueMicrotask(() => {
+        this.resumeBtn?.focus();
+      });
     }
   }
 
@@ -583,7 +602,7 @@ export class PauseMenu {
     if (this.networkRole === "client") {
       btn.disabled = true;
       btn.textContent = "Room";
-      status.style.color = "#aeaeb2";
+      status.style.color = "";
       status.textContent = "Joined another player's room.";
       return;
     }
@@ -591,14 +610,14 @@ export class PauseMenu {
     if (this.networkRole === "host" && this.roomCode !== null) {
       btn.disabled = false;
       btn.textContent = "Close room";
-      status.style.color = "#f2f2f7";
+      status.style.color = "var(--mm-ink)";
       status.textContent = `Code: ${this.roomCode}`;
       return;
     }
 
     btn.disabled = false;
     btn.textContent = "Open room to players";
-    status.style.color = "#aeaeb2";
+    status.style.color = "";
     status.textContent =
       "Open your room so friends can join with your code.";
   }
@@ -613,6 +632,7 @@ export class PauseMenu {
     this.unsubs.length = 0;
     this.mpBtn = null;
     this.mpStatusEl = null;
+    this.resumeBtn = null;
     this.overlay?.remove();
     this.overlay = null;
   }

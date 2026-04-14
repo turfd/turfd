@@ -19,6 +19,7 @@ import type { CachedMod } from "../../mods/workshopTypes";
 import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
 import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
 import { injectSettingsSharedStyles } from "./settingsSharedStyles";
+import { getSkipIntro, setSkipIntro } from "./uiPrefs";
 
 function applyStoredVolumesToEngine(audio: AudioEngine): void {
   audio.setMasterVolume(readVolumeStored(VOL_KEYS.master, 80) / 100);
@@ -167,6 +168,40 @@ export async function mountSettingsPanel(
     row.appendChild(lbl);
     row.appendChild(slider);
     row.appendChild(val);
+    panelAudio.appendChild(row);
+  }
+
+  // --- General toggles (inside Audio tab) ---
+  const generalTitle = document.createElement("div");
+  generalTitle.className = "st-settings-section";
+  generalTitle.textContent = "General";
+  panelAudio.appendChild(generalTitle);
+
+  {
+    const row = document.createElement("div");
+    row.className = "st-settings-toggle-row";
+
+    const lbl = document.createElement("label");
+    lbl.textContent = "Show game intro";
+    const toggleId = "st-toggle-intro";
+    lbl.htmlFor = toggleId;
+
+    const toggle = document.createElement("span");
+    toggle.className = "st-toggle";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = toggleId;
+    input.checked = !getSkipIntro();
+    const track = document.createElement("span");
+    track.className = "st-toggle-track";
+    input.addEventListener("change", () => {
+      setSkipIntro(!input.checked);
+    });
+    toggle.appendChild(input);
+    toggle.appendChild(track);
+
+    row.appendChild(lbl);
+    row.appendChild(toggle);
     panelAudio.appendChild(row);
   }
 

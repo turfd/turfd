@@ -14,6 +14,8 @@ export type Chunk = {
   skyLight: Uint8Array;
   blockLight: Uint8Array;
   dirty: boolean;
+  /** Separate from `dirty` (renderer). Tracks whether this chunk needs persisting since last save. */
+  persistDirty: boolean;
 };
 
 export function createChunk(coord: ChunkCoord): Chunk {
@@ -25,6 +27,7 @@ export function createChunk(coord: ChunkCoord): Chunk {
     skyLight: new Uint8Array(CELL_COUNT),
     blockLight: new Uint8Array(CELL_COUNT),
     dirty: false,
+    persistDirty: true,
   };
 }
 
@@ -35,6 +38,7 @@ export function getBlock(chunk: Chunk, lx: number, ly: number): number {
 export function setBlock(chunk: Chunk, lx: number, ly: number, id: number): void {
   chunk.blocks[localIndex(lx, ly)] = id;
   chunk.dirty = true;
+  chunk.persistDirty = true;
 }
 
 export function getBackground(chunk: Chunk, lx: number, ly: number): number {
@@ -44,4 +48,5 @@ export function getBackground(chunk: Chunk, lx: number, ly: number): number {
 export function setBackground(chunk: Chunk, lx: number, ly: number, id: number): void {
   chunk.background[localIndex(lx, ly)] = id;
   chunk.dirty = true;
+  chunk.persistDirty = true;
 }

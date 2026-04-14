@@ -18,6 +18,11 @@ import { chestVisualRole } from "../../world/chest/chestVisual";
 import { bedHeadPlusXFromMeta } from "../../world/bed/bedMetadata";
 import { doorHingeRightFromMeta } from "../../world/door/doorMetadata";
 import { DOOR_PANEL_WIDTH_PX } from "../../world/door/doorWorld";
+import {
+  PAINTING_VARIANTS,
+  decodePaintingMeta,
+  paintingAtlasKey,
+} from "../../world/painting/paintingData";
 
 const AIR_ID = 0;
 
@@ -82,6 +87,17 @@ const WIND_SWAY_GROUND_PHASE_LAG_RAD = 0.44;
 /** Crown edge is slightly ahead of the reference phase so tips move before the base catches up. */
 const WIND_SWAY_CROWN_PHASE_LEAD_RAD = 0.38;
 
+/** Min |vx| (px/s) before a body adds extra horizontal bend to swaying foliage. */
+const FOLIAGE_BODY_SWAY_VX_MIN = 22;
+/** Horizontal reach (world px) for body influence; 1 at center, 0 at edge. */
+const FOLIAGE_BODY_SWAY_REACH_X = BLOCK_SIZE * 1.5;
+/** Vertical reach (world px, feet space) from the cell midline. */
+const FOLIAGE_BODY_SWAY_REACH_Y = BLOCK_SIZE * 2.6;
+/** Scales extra bend vs the tile’s wind `maxPx`. */
+const FOLIAGE_BODY_SWAY_GAIN = 1.22;
+/** Caps combined wind + body offset (multiples of maxPx). */
+const FOLIAGE_BODY_SWAY_COMBINED_CAP = 3.1;
+
 type WindWaveTier = "ground" | "seam" | "crown";
 
 function windSin(tArg: number, phase: number, tier: WindWaveTier): number {
@@ -136,6 +152,17 @@ export type TileWindSway = {
   bottomWaveTier: "ground" | "seam";
   /** Phase tier for TL/TR (`seam` matches the cell above’s bottom edge). */
   topWaveTier: "seam" | "crown";
+  /** World px: horizontal center of this swayed quad (feet space, for body proximity). */
+  bodySwayWorldCenterX: number;
+  /** World block row index (feet Y up) for vertical proximity. */
+  bodySwayWorldBlockY: number;
+};
+
+/** Feet position + horizontal speed for extra foliage bend (render-time only). */
+export type FoliageWindInfluence = {
+  feetX: number;
+  feetY: number;
+  vx: number;
 };
 
 /** Lit furnace: ping-pong UV animation through `furnace_on_*` atlas frames (see {@link applyFurnaceFireToMesh}). */
@@ -147,10 +174,32 @@ export type TileFurnaceFire = {
   flipX: boolean;
 };
 
+export type TileWaterSurface = {
+  posIndex: number;
+  xLeft: number;
+  xRight: number;
+  yTop: number;
+  yBottom: number;
+  worldLeftX: number;
+  worldRightX: number;
+  worldCenterX: number;
+  worldSurfaceY: number;
+};
+
+export type WaterRippleSample = {
+  x: number;
+  y: number;
+  amplitude: number;
+  bornTimeSec: number;
+};
+
 type BuiltTileGeometry = {
   geometry: MeshGeometry;
+  /** Water quads only; rendered above entities (see {@link buildMesh} `waterMesh`). */
+  waterOverlayGeometry: MeshGeometry;
   windSways: TileWindSway[];
   furnaceFires: TileFurnaceFire[];
+  waterSurfaces: TileWaterSurface[];
 };
 
 /** Seconds per step along the ping-pong (slow “fade” through the strip). */
@@ -198,42 +247,101 @@ function buildGeometryFromCells(
   registry: BlockRegistry,
   atlas: AtlasLoader,
   opts?: TileMeshBuildOptions,
+  /** When false, water stays in the main mesh (background layer; no entity overlap). */
+  splitWaterOverlay = true,
 ): BuiltTileGeometry {
   const chunkOrigin = chunkToWorldOrigin(chunk.coord);
-  let quadCount = 0;
+  const sampleWorldBlockId = (wx: number, wy: number): number => {
+    if (opts !== undefined) {
+      return opts.sampleBlockId(wx, wy);
+    }
+    const lx = wx - chunkOrigin.wx;
+    const ly = wy - chunkOrigin.wy;
+    if (lx < 0 || lx >= CHUNK_SIZE || ly < 0 || ly >= CHUNK_SIZE) {
+      return AIR_ID;
+    }
+    return cells[localIndex(lx, ly)] ?? AIR_ID;
+  };
+  const isWaterBlockId = (blockId: number): boolean => {
+    if (blockId === AIR_ID) {
+      return false;
+    }
+    return registry.getById(blockId).identifier === "stratum:water";
+  };
+  const degenerate = (): MeshGeometry =>
+    new MeshGeometry({
+      positions: new Float32Array([0, 0, 0, 0, 0, 0]),
+      uvs: new Float32Array([0, 0, 0, 0, 0, 0]),
+      indices: new Uint32Array([0, 1, 2]),
+    });
+
+  let mainQuadCount = 0;
+  let waterQuadCount = 0;
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       const id = cells[localIndex(lx, ly)]!;
       if (id === AIR_ID) {
         continue;
       }
-      quadCount += windForegroundQuadsForCell(registry.getById(id), ly);
+      const def = registry.getById(id);
+      if (def.identifier === "stratum:water" && splitWaterOverlay) {
+        waterQuadCount += 1;
+      } else {
+        mainQuadCount += windForegroundQuadsForCell(def, ly);
+      }
     }
   }
 
-  if (quadCount === 0) {
+  if (mainQuadCount === 0 && waterQuadCount === 0) {
+    const g = degenerate();
     return {
-      geometry: new MeshGeometry({
-        positions: new Float32Array([0, 0, 0, 0, 0, 0]),
-        uvs: new Float32Array([0, 0, 0, 0, 0, 0]),
-        indices: new Uint32Array([0, 1, 2]),
-      }),
+      geometry: g,
+      waterOverlayGeometry: degenerate(),
       windSways: [],
       furnaceFires: [],
+      waterSurfaces: [],
     };
   }
 
-  const vCount = quadCount * 4;
-  const iCount = quadCount * 6;
-  const positions = new Float32Array(vCount * 2);
-  const uvs = new Float32Array(vCount * 2);
-  const indices = new Uint32Array(iCount);
+  const vCount = mainQuadCount * 4;
+  const iCount = mainQuadCount * 6;
+  const positions =
+    mainQuadCount > 0
+      ? new Float32Array(vCount * 2)
+      : new Float32Array([0, 0, 0, 0, 0, 0]);
+  const uvs =
+    mainQuadCount > 0
+      ? new Float32Array(vCount * 2)
+      : new Float32Array([0, 0, 0, 0, 0, 0]);
+  const indices =
+    mainQuadCount > 0
+      ? new Uint32Array(iCount)
+      : new Uint32Array([0, 1, 2]);
+
+  const wvCount = waterQuadCount * 4;
+  const wiCount = waterQuadCount * 6;
+  const wPositions =
+    waterQuadCount > 0
+      ? new Float32Array(wvCount * 2)
+      : new Float32Array([0, 0, 0, 0, 0, 0]);
+  const wUvs =
+    waterQuadCount > 0
+      ? new Float32Array(wvCount * 2)
+      : new Float32Array([0, 0, 0, 0, 0, 0]);
+  const wIndices =
+    waterQuadCount > 0
+      ? new Uint32Array(wiCount)
+      : new Uint32Array([0, 1, 2]);
   const windSways: TileWindSway[] = [];
   const furnaceFires: TileFurnaceFire[] = [];
+  const waterSurfaces: TileWaterSurface[] = [];
 
   let pi = 0;
   let ii = 0;
   let vertBase = 0;
+  let wpi = 0;
+  let wii = 0;
+  let wvertBase = 0;
 
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -398,6 +506,58 @@ function buildGeometryFromCells(
         continue;
       }
 
+      if (def.isPainting === true) {
+        const pmeta = chunk.metadata[localIndex(lx, ly)]!;
+        const decoded = decodePaintingMeta(pmeta);
+        const pv = PAINTING_VARIANTS[decoded.variantIndex]!;
+        const pKey = paintingAtlasKey(decoded.variantIndex);
+        const pVariants = atlas.getTextureVariants(pKey);
+        if (pVariants.length > 0) {
+          const pTex = pVariants[0]!;
+          const pfr = pTex.frame;
+          const pLeftU = (pfr.x + decoded.offsetX * pfr.width / pv.width) / sw;
+          const pRightU = (pfr.x + (decoded.offsetX + 1) * pfr.width / pv.width) / sw;
+          const pTopV = (pfr.y + (pv.height - 1 - decoded.offsetY) * pfr.height / pv.height) / sh;
+          const pBotV = (pfr.y + (pv.height - decoded.offsetY) * pfr.height / pv.height) / sh;
+
+          const ppx = lx * BLOCK_SIZE;
+          const ppy = -(ly + 1) * BLOCK_SIZE;
+          const pb = BLOCK_SIZE;
+
+          positions[pi] = ppx;
+          positions[pi + 1] = ppy;
+          uvs[pi] = pLeftU;
+          uvs[pi + 1] = pTopV;
+          pi += 2;
+          positions[pi] = ppx + pb;
+          positions[pi + 1] = ppy;
+          uvs[pi] = pRightU;
+          uvs[pi + 1] = pTopV;
+          pi += 2;
+          positions[pi] = ppx;
+          positions[pi + 1] = ppy + pb;
+          uvs[pi] = pLeftU;
+          uvs[pi + 1] = pBotV;
+          pi += 2;
+          positions[pi] = ppx + pb;
+          positions[pi + 1] = ppy + pb;
+          uvs[pi] = pRightU;
+          uvs[pi + 1] = pBotV;
+          pi += 2;
+
+          const b0 = vertBase;
+          indices[ii] = b0;
+          indices[ii + 1] = b0 + 1;
+          indices[ii + 2] = b0 + 2;
+          indices[ii + 3] = b0 + 1;
+          indices[ii + 4] = b0 + 3;
+          indices[ii + 5] = b0 + 2;
+          ii += 6;
+          vertBase += 4;
+        }
+        continue;
+      }
+
       if (def.doorHalf === "bottom" || def.doorHalf === "top") {
         const meta = chunk.metadata[localIndex(lx, ly)]!;
         const hingeRight =
@@ -545,6 +705,49 @@ function buildGeometryFromCells(
         vertBase += 4;
       };
 
+      const emitWaterQuad = (
+        yT: number,
+        yB: number,
+        vT: number,
+        vB: number,
+      ): number => {
+        const posStart = wpi;
+        wPositions[wpi] = px;
+        wPositions[wpi + 1] = yT;
+        wUvs[wpi] = leftU;
+        wUvs[wpi + 1] = vT;
+        wpi += 2;
+
+        wPositions[wpi] = px + b;
+        wPositions[wpi + 1] = yT;
+        wUvs[wpi] = rightU;
+        wUvs[wpi + 1] = vT;
+        wpi += 2;
+
+        wPositions[wpi] = px;
+        wPositions[wpi + 1] = yB;
+        wUvs[wpi] = leftU;
+        wUvs[wpi + 1] = vB;
+        wpi += 2;
+
+        wPositions[wpi] = px + b;
+        wPositions[wpi + 1] = yB;
+        wUvs[wpi] = rightU;
+        wUvs[wpi + 1] = vB;
+        wpi += 2;
+
+        const b0 = wvertBase;
+        wIndices[wii] = b0;
+        wIndices[wii + 1] = b0 + 1;
+        wIndices[wii + 2] = b0 + 2;
+        wIndices[wii + 3] = b0 + 1;
+        wIndices[wii + 4] = b0 + 3;
+        wIndices[wii + 5] = b0 + 2;
+        wii += 6;
+        wvertBase += 4;
+        return posStart;
+      };
+
       if (useWindGroundDeadband) {
         const yBandTop = yBottom - WIND_SWAY_GROUND_DEADBAND_PX;
         const vBandTop =
@@ -569,10 +772,51 @@ function buildGeometryFromCells(
               : 1,
           bottomWaveTier: "seam",
           topWaveTier: def.tallGrass === "bottom" ? "seam" : "crown",
+          bodySwayWorldCenterX: chunkOrigin.wx * BLOCK_SIZE + px + b * 0.5,
+          bodySwayWorldBlockY: worldY,
         });
       } else {
+        if (def.identifier === "stratum:water" && splitWaterOverlay) {
+          const quadPosStart = emitWaterQuad(yTop, yBottom, vUvTop, vUvBottom);
+          const topNeighborId = sampleWorldBlockId(worldX, worldY + 1);
+          const isTopSurface = !isWaterBlockId(topNeighborId);
+          if (isTopSurface) {
+            waterSurfaces.push({
+              posIndex: quadPosStart,
+              xLeft: px,
+              xRight: px + b,
+              yTop,
+              yBottom,
+              worldLeftX: worldX * BLOCK_SIZE,
+              worldRightX: (worldX + 1) * BLOCK_SIZE,
+              worldCenterX: chunkOrigin.wx * BLOCK_SIZE + px + b * 0.5,
+              worldSurfaceY: (worldY + 1) * BLOCK_SIZE - foot,
+            });
+          }
+          continue;
+        }
+
         const quadPosStart = pi;
         emitQuad(yTop, yBottom, vUvTop, vUvBottom);
+
+        if (def.identifier === "stratum:water") {
+          const topNeighborId = sampleWorldBlockId(worldX, worldY + 1);
+          const isTopSurface = !isWaterBlockId(topNeighborId);
+          if (!isTopSurface) {
+            continue;
+          }
+          waterSurfaces.push({
+            posIndex: quadPosStart,
+            xLeft: px,
+            xRight: px + b,
+            yTop,
+            yBottom,
+            worldLeftX: worldX * BLOCK_SIZE,
+            worldRightX: (worldX + 1) * BLOCK_SIZE,
+            worldCenterX: chunkOrigin.wx * BLOCK_SIZE + px + b * 0.5,
+            worldSurfaceY: (worldY + 1) * BLOCK_SIZE - foot,
+          });
+        }
 
         if (useFurnaceAnim) {
           furnaceFires.push({
@@ -603,6 +847,8 @@ function buildGeometryFromCells(
             topWaveMul,
             bottomWaveTier,
             topWaveTier,
+            bodySwayWorldCenterX: chunkOrigin.wx * BLOCK_SIZE + px + b * 0.5,
+            bodySwayWorldBlockY: worldY,
           });
         }
       }
@@ -611,8 +857,14 @@ function buildGeometryFromCells(
 
   return {
     geometry: new MeshGeometry({ positions, uvs, indices }),
+    waterOverlayGeometry: new MeshGeometry({
+      positions: wPositions,
+      uvs: wUvs,
+      indices: wIndices,
+    }),
     windSways,
     furnaceFires,
+    waterSurfaces,
   };
 }
 
@@ -694,7 +946,12 @@ export function createWorldFgShadowSampler(world: World): FgShadowSampler {
       }
       const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
       const ly = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-      return reg.isSolid(getBlock(chunk, lx, ly));
+      const id = getBlock(chunk, lx, ly);
+      // Chest is rendered as a non-full visual; excluding it avoids square contact-shadow artifacts.
+      if (reg.getById(id).identifier === "stratum:chest") {
+        return false;
+      }
+      return reg.isSolid(id);
     },
   };
 }
@@ -885,7 +1142,7 @@ function buildFgShadowGeometry(
 
 /**
  * Batched contact shadows on back-wall tiles from orthogonally adjacent solid foreground.
- * One Mesh per chunk (shared gradient atlas). Drawn between bg and fg meshes.
+ * One Mesh per chunk (shared gradient atlas per Pixi app). Drawn between bg and fg meshes.
  */
 export function buildFgShadowMesh(
   chunk: Chunk,
@@ -911,8 +1168,11 @@ export function updateFgShadowMesh(
 
 export type ForegroundTileMeshBundle = {
   mesh: Mesh;
+  /** Water-only chunk layer; parent above {@link RenderPipeline.layerEntities} in gameplay. */
+  waterMesh: Mesh;
   windSways: TileWindSway[];
   furnaceFires: TileFurnaceFire[];
+  waterSurfaces: TileWaterSurface[];
 };
 
 export function buildMesh(
@@ -921,21 +1181,28 @@ export function buildMesh(
   atlas: AtlasLoader,
   opts?: TileMeshBuildOptions,
 ): ForegroundTileMeshBundle {
-  const { geometry, windSways, furnaceFires } = buildGeometryFromCells(
-    chunk,
-    chunk.blocks,
-    registry,
-    atlas,
-    opts,
-  );
+  const {
+    geometry,
+    waterOverlayGeometry,
+    windSways,
+    furnaceFires,
+    waterSurfaces,
+  } = buildGeometryFromCells(chunk, chunk.blocks, registry, atlas, opts);
+  const tex = atlas.getAtlasTexture();
   return {
     mesh: new Mesh({
       geometry,
-      texture: atlas.getAtlasTexture(),
+      texture: tex,
+      roundPixels: true,
+    }),
+    waterMesh: new Mesh({
+      geometry: waterOverlayGeometry,
+      texture: tex,
       roundPixels: true,
     }),
     windSways,
     furnaceFires,
+    waterSurfaces,
   };
 }
 
@@ -949,6 +1216,8 @@ export function buildBackgroundMesh(
     chunk.background,
     registry,
     atlas,
+    undefined,
+    false,
   );
   return new Mesh({
     geometry,
@@ -959,21 +1228,28 @@ export function buildBackgroundMesh(
 
 export function updateMesh(
   mesh: Mesh,
+  waterMesh: Mesh,
   chunk: Chunk,
   registry: BlockRegistry,
   atlas: AtlasLoader,
   opts?: TileMeshBuildOptions,
-): { windSways: TileWindSway[]; furnaceFires: TileFurnaceFire[] } {
-  const { geometry, windSways, furnaceFires } = buildGeometryFromCells(
-    chunk,
-    chunk.blocks,
-    registry,
-    atlas,
-    opts,
-  );
+): {
+  windSways: TileWindSway[];
+  furnaceFires: TileFurnaceFire[];
+  waterSurfaces: TileWaterSurface[];
+} {
+  const {
+    geometry,
+    waterOverlayGeometry,
+    windSways,
+    furnaceFires,
+    waterSurfaces,
+  } = buildGeometryFromCells(chunk, chunk.blocks, registry, atlas, opts);
   mesh.geometry.destroy();
+  waterMesh.geometry.destroy();
   mesh.geometry = geometry;
-  return { windSways, furnaceFires };
+  waterMesh.geometry = waterOverlayGeometry;
+  return { windSways, furnaceFires, waterSurfaces };
 }
 
 export function updateBackgroundMesh(
@@ -987,6 +1263,8 @@ export function updateBackgroundMesh(
     chunk.background,
     registry,
     atlas,
+    undefined,
+    false,
   );
   mesh.geometry.destroy();
   mesh.geometry = geometry;
@@ -996,10 +1274,42 @@ export function updateBackgroundMesh(
  * Wind bend in **integer pixels**, crown slightly **ahead in phase** vs ground so tips lead;
  * tall-grass **seam** edges share the reference phase so the two cells stay aligned.
  */
+function extraSwayFromBodies(
+  s: TileWindSway,
+  influences: readonly FoliageWindInfluence[] | undefined,
+): number {
+  if (influences === undefined || influences.length === 0) {
+    return 0;
+  }
+  const cx = s.bodySwayWorldCenterX;
+  const wy = s.bodySwayWorldBlockY;
+  const cellMidYFeet = (wy + 0.5) * BLOCK_SIZE;
+  let sum = 0;
+  for (const inf of influences) {
+    if (Math.abs(inf.vx) < FOLIAGE_BODY_SWAY_VX_MIN) {
+      continue;
+    }
+    const dy = Math.abs(inf.feetY - cellMidYFeet);
+    if (dy > FOLIAGE_BODY_SWAY_REACH_Y) {
+      continue;
+    }
+    const dx = Math.abs(inf.feetX - cx);
+    if (dx > FOLIAGE_BODY_SWAY_REACH_X) {
+      continue;
+    }
+    const px = Math.max(0, 1 - dx / FOLIAGE_BODY_SWAY_REACH_X);
+    const py = Math.max(0, 1 - dy / FOLIAGE_BODY_SWAY_REACH_Y);
+    sum += Math.sign(inf.vx) * px * py * s.maxPx * FOLIAGE_BODY_SWAY_GAIN;
+  }
+  const cap = s.maxPx * (FOLIAGE_BODY_SWAY_COMBINED_CAP - 1);
+  return Math.max(-cap, Math.min(cap, sum));
+}
+
 export function applyWindSwayToMesh(
   mesh: Mesh,
   sways: TileWindSway[],
   timeSec: number,
+  influences?: readonly FoliageWindInfluence[],
 ): void {
   if (sways.length === 0) {
     return;
@@ -1009,11 +1319,11 @@ export function applyWindSwayToMesh(
   for (const s of sways) {
     const tArg = timeSec * WIND_SWAY_BASE_FREQ * s.freqMul;
     const wTop = windSin(tArg, s.phase, s.topWaveTier);
-    const dxTop = Math.max(
+    const dxTopWind = Math.max(
       -s.maxPx,
       Math.min(s.maxPx, Math.round(wTop * s.maxPx * s.topWaveMul)),
     );
-    const dxBottom =
+    const dxBottomWind =
       s.bottomWaveMul <= 0
         ? 0
         : Math.max(
@@ -1027,6 +1337,10 @@ export function applyWindSwayToMesh(
               ),
             ),
           );
+    const extra = Math.round(extraSwayFromBodies(s, influences));
+    const lim = Math.round(s.maxPx * FOLIAGE_BODY_SWAY_COMBINED_CAP);
+    const dxTop = Math.max(-lim, Math.min(lim, dxTopWind + extra));
+    const dxBottom = Math.max(-lim, Math.min(lim, dxBottomWind + extra));
     // Interleaved float32: x,y per vertex; quad order TL, TR, BL, BR (see build loop above).
     const i = s.posIndex;
     pos[i] = s.xLeft + dxTop;
@@ -1093,5 +1407,102 @@ export function applyFurnaceFireToMesh(
   const uvAttr = geom.attributes.aUV;
   if (uvAttr !== undefined) {
     uvAttr.buffer.update();
+  }
+}
+
+const WATER_RIPPLE_RADIUS_PX = BLOCK_SIZE * 10;
+const WATER_RIPPLE_WAVELENGTH_PX = BLOCK_SIZE * 3.8;
+const WATER_RIPPLE_PROPAGATION_SPEED = 18;
+const WATER_RIPPLE_RING_WIDTH_PX = BLOCK_SIZE * 0.95;
+const WATER_RIPPLE_LIFETIME_SEC = 1.8;
+const WATER_RIPPLE_EVENT_GAIN = 0.72;
+const WATER_RIPPLE_TOP_GAIN = 1.45;
+const WATER_RIPPLE_BOTTOM_GAIN = 0.2;
+const WATER_SWELL_SPEED = 0.42;
+const WATER_SWELL_SPATIAL_FREQ = 0.004;
+const WATER_SWELL_AMPLITUDE = 0.14;
+
+function clamp01(v: number): number {
+  if (v <= 0) return 0;
+  if (v >= 1) return 1;
+  return v;
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp01((x - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+export function applyWaterRipplesToMesh(
+  mesh: Mesh,
+  surfaces: readonly TileWaterSurface[],
+  timeSec: number,
+  samples: readonly WaterRippleSample[],
+): void {
+  if (surfaces.length === 0) {
+    return;
+  }
+  const geom = mesh.geometry as MeshGeometry;
+  const pos = geom.positions;
+  const invRadius = 1 / WATER_RIPPLE_RADIUS_PX;
+  const ringSigma2 = WATER_RIPPLE_RING_WIDTH_PX * WATER_RIPPLE_RING_WIDTH_PX;
+  const maxDisp = 3.4;
+  const sampleDispAtWorld = (worldX: number, worldY: number): number => {
+    let disp =
+      Math.sin(timeSec * WATER_SWELL_SPEED + worldX * WATER_SWELL_SPATIAL_FREQ) *
+      WATER_SWELL_AMPLITUDE;
+    for (const sample of samples) {
+      const age = timeSec - sample.bornTimeSec;
+      if (age < 0 || age > WATER_RIPPLE_LIFETIME_SEC) {
+        continue;
+      }
+      const dx = worldX - sample.x;
+      const dy = worldY - sample.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > WATER_RIPPLE_RADIUS_PX) {
+        continue;
+      }
+      const radialEnv = 1 - dist * invRadius;
+      const front = age * WATER_RIPPLE_PROPAGATION_SPEED;
+      const ringDist = dist - front;
+      const ringEnv = Math.exp(-(ringDist * ringDist) / (2 * ringSigma2));
+      const carrier =
+        Math.cos((ringDist / WATER_RIPPLE_WAVELENGTH_PX) * Math.PI * 2) * 0.5 +
+        0.5;
+      const lifeT = age / WATER_RIPPLE_LIFETIME_SEC;
+      const attack = smoothstep(0, 0.12, age);
+      const decay = 1 - smoothstep(0.45, 1, lifeT);
+      disp +=
+        ringEnv *
+        carrier *
+        radialEnv *
+        attack *
+        decay *
+        sample.amplitude *
+        WATER_RIPPLE_EVENT_GAIN;
+    }
+    return Math.max(-maxDisp, Math.min(maxDisp, disp));
+  };
+  for (const s of surfaces) {
+    const topLeftRaw = sampleDispAtWorld(s.worldLeftX, s.worldSurfaceY);
+    const topRightRaw = sampleDispAtWorld(s.worldRightX, s.worldSurfaceY);
+    const topCenterRaw = sampleDispAtWorld(s.worldCenterX, s.worldSurfaceY);
+    const topLeftDisp = topLeftRaw * 0.65 + topCenterRaw * 0.35;
+    const topRightDisp = topRightRaw * 0.65 + topCenterRaw * 0.35;
+    const bottomLeftDisp = topLeftDisp * WATER_RIPPLE_BOTTOM_GAIN;
+    const bottomRightDisp = topRightDisp * WATER_RIPPLE_BOTTOM_GAIN;
+    const i = s.posIndex;
+    pos[i] = s.xLeft;
+    pos[i + 1] = s.yTop + topLeftDisp * WATER_RIPPLE_TOP_GAIN;
+    pos[i + 2] = s.xRight;
+    pos[i + 3] = s.yTop + topRightDisp * WATER_RIPPLE_TOP_GAIN;
+    pos[i + 4] = s.xLeft;
+    pos[i + 5] = s.yBottom + bottomLeftDisp;
+    pos[i + 6] = s.xRight;
+    pos[i + 7] = s.yBottom + bottomRightDisp;
+  }
+  const posAttr = geom.attributes.aPosition;
+  if (posAttr !== undefined) {
+    posAttr.buffer.update();
   }
 }

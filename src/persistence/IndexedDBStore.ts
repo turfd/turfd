@@ -18,7 +18,9 @@ import {
 
 export const DB_NAME = "stratum";
 /** Bumped when a new object store is required so existing browsers run `upgrade` again. */
-export const DB_VERSION = 6;
+export const DB_VERSION = 7;
+
+export const CUSTOM_SKINS_STORE = "custom_skins";
 
 const PLAYER_SETTINGS_KEY = "v1";
 const DEV_PACKS_KEY = "v1";
@@ -40,6 +42,8 @@ export type PlayerSettingsV1 = {
   globalResourcePackRefs: WorkshopModRef[];
   /** Optional keyboard overrides; omitted ⇒ engine defaults. */
   keyBindings?: StoredKeyBindingsV1;
+  /** Selected player skin id (e.g. `"explorer_bob"` or `"custom:uuid"`). Absent ⇒ default. */
+  selectedSkinId?: string;
 };
 
 export type WorldMetadata = {
@@ -66,6 +70,8 @@ export type WorldMetadata = {
   moderation?: WorldModerationPersisted;
   /** Serialized inventory slots; absent in worlds saved before inventory persistence. */
   playerInventory?: import("../items/PlayerInventory").SerializedInventorySlot[];
+  /** Serialized armor slots (helmet, chestplate, leggings, boots); absent in older saves. */
+  playerArmor?: import("../items/PlayerInventory").SerializedInventorySlot[];
   /**
    * Legacy single list; used when `workshopBehaviorMods` / `workshopResourceMods` are absent.
    */
@@ -193,6 +199,9 @@ function upgradeStratumDb(db: IDBPDatabase): void {
   }
   if (!db.objectStoreNames.contains("dev_packs")) {
     db.createObjectStore("dev_packs");
+  }
+  if (!db.objectStoreNames.contains(CUSTOM_SKINS_STORE)) {
+    db.createObjectStore(CUSTOM_SKINS_STORE, { keyPath: "id" });
   }
 }
 
@@ -323,6 +332,27 @@ export class IndexedDBStore {
     return (await db.get("chunks", key)) as ChunkRecord | undefined;
   }
 
+  /**
+   * Read many chunks in one IndexedDB transaction, preserving input order.
+   * This avoids opening a separate transaction per chunk during world streaming.
+   */
+  async loadChunkBatch(
+    worldUuid: string,
+    coords: readonly ChunkCoord[],
+  ): Promise<(ChunkRecord | undefined)[]> {
+    if (coords.length === 0) {
+      return [];
+    }
+    const db = this.requireDb();
+    const tx = db.transaction("chunks", "readonly");
+    const loads = coords.map((coord) =>
+      tx.store.get(chunkStoreKey(worldUuid, coord)),
+    ) as Promise<(ChunkRecord | undefined)>[];
+    const records = await Promise.all(loads);
+    await tx.done;
+    return records;
+  }
+
   async saveChunkBatch(
     worldUuid: string,
     chunks: Chunk[],
@@ -429,6 +459,9 @@ export class IndexedDBStore {
       ...(kb !== undefined && typeof kb === "object" && !Array.isArray(kb)
         ? { keyBindings: cloneStoredKeyBindings(kb) }
         : {}),
+      ...(typeof row.selectedSkinId === "string" && row.selectedSkinId.length > 0
+        ? { selectedSkinId: row.selectedSkinId }
+        : {}),
     };
   }
 
@@ -475,7 +508,53 @@ export class IndexedDBStore {
     if (keyBindings !== undefined) {
       payload.keyBindings = cloneStoredKeyBindingsForWrite(keyBindings);
     }
-    await db.put("player_settings", payload);
+    const skinId = settings.selectedSkinId ?? prev.selectedSkinId;
+    if (skinId !== undefined) {
+      payload.selectedSkinId = skinId;
+    }
+    await db.put("player_settings", payload, PLAYER_SETTINGS_KEY);
+  }
+
+  // ── Custom Skins ──────────────────────────────────────────────────
+
+  async putCustomSkin(id: string, label: string, blob: Blob): Promise<void> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(CUSTOM_SKINS_STORE)) {
+      throw new Error(
+        `IndexedDB object store "${CUSTOM_SKINS_STORE}" is missing; reload the page.`,
+      );
+    }
+    await db.put(CUSTOM_SKINS_STORE, { id, label, blob, createdAt: Date.now() });
+  }
+
+  async listCustomSkins(): Promise<
+    Array<{ id: string; label: string; blob: Blob; createdAt: number }>
+  > {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(CUSTOM_SKINS_STORE)) {
+      return [];
+    }
+    return db.getAll(CUSTOM_SKINS_STORE);
+  }
+
+  async getCustomSkin(
+    id: string,
+  ): Promise<{ id: string; label: string; blob: Blob; createdAt: number } | undefined> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(CUSTOM_SKINS_STORE)) {
+      return undefined;
+    }
+    return db.get(CUSTOM_SKINS_STORE, id) as Promise<
+      { id: string; label: string; blob: Blob; createdAt: number } | undefined
+    >;
+  }
+
+  async deleteCustomSkin(id: string): Promise<void> {
+    const db = this.requireDb();
+    if (!db.objectStoreNames.contains(CUSTOM_SKINS_STORE)) {
+      return;
+    }
+    await db.delete(CUSTOM_SKINS_STORE, id);
   }
 
   private requireDb(): IDBPDatabase {

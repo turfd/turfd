@@ -54,13 +54,16 @@ const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 const CHUNK_METADATA_MAGIC = 0x54_41_44_4d; // 'TADM' LE — per-cell flags (e.g. WORLDGEN_NO_COLLIDE)
 
 /** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 15;
+export const WIRE_PROTOCOL_VERSION = 16;
 
 /** Max UTF-8 bytes for handshake display name (profile + guest labels). */
 export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;
 
 /** Max UTF-8 bytes for Supabase user id (UUID) on the wire. */
 export const HANDSHAKE_ACCOUNT_ID_MAX_BYTES = 64;
+
+/** Max UTF-8 bytes for skin id on the wire (e.g. `"explorer_bob"` or `"custom:uuid"`). */
+export const HANDSHAKE_SKIN_ID_MAX_BYTES = 128;
 
 export type HandshakeWirePayload = {
   version: number;
@@ -69,6 +72,8 @@ export type HandshakeWirePayload = {
   displayName: string;
   /** Empty string = guest / no Supabase session. */
   accountId: string;
+  /** Selected skin id; empty string = default skin. */
+  skinId: string;
 };
 
 export type WorldSyncWirePayload = {
@@ -125,6 +130,10 @@ export class BinarySerializer {
     if (accBytes.length > HANDSHAKE_ACCOUNT_ID_MAX_BYTES) {
       accBytes = accBytes.slice(0, HANDSHAKE_ACCOUNT_ID_MAX_BYTES);
     }
+    let skinBytes = textEnc.encode(msg.skinId);
+    if (skinBytes.length > HANDSHAKE_SKIN_ID_MAX_BYTES) {
+      skinBytes = skinBytes.slice(0, HANDSHAKE_SKIN_ID_MAX_BYTES);
+    }
     const total =
       1 +
       4 +
@@ -133,7 +142,9 @@ export class BinarySerializer {
       2 +
       dnBytes.length +
       2 +
-      accBytes.length;
+      accBytes.length +
+      2 +
+      skinBytes.length;
     const buffer = new ArrayBuffer(total);
     const view = new DataView(buffer);
     let o = 0;
@@ -152,10 +163,14 @@ export class BinarySerializer {
     view.setUint16(o, accBytes.length, LE);
     o += 2;
     new Uint8Array(buffer, o, accBytes.length).set(accBytes);
+    o += accBytes.length;
+    view.setUint16(o, skinBytes.length, LE);
+    o += 2;
+    new Uint8Array(buffer, o, skinBytes.length).set(skinBytes);
     return buffer;
   }
 
-  /** Decodes handshake; legacy buffers (peerId only) yield empty displayName and accountId. */
+  /** Decodes handshake; legacy buffers (peerId only) yield empty displayName, accountId, and skinId. */
   public static deserializeHandshake(buffer: ArrayBuffer): HandshakeWirePayload {
     const view = new DataView(buffer);
     const type = view.getUint8(0);
@@ -172,31 +187,48 @@ export class BinarySerializer {
     let o = 9 + peerIdLen;
     const peerId = textDec.decode(new Uint8Array(buffer, 9, peerIdLen));
     if (o + 2 > buffer.byteLength) {
-      return { version, peerId, displayName: "", accountId: "" };
+      return { version, peerId, displayName: "", accountId: "", skinId: "" };
     }
     const dnLen = view.getUint16(o, LE);
     o += 2;
     if (o + dnLen > buffer.byteLength) {
-      return { version, peerId, displayName: "", accountId: "" };
+      return { version, peerId, displayName: "", accountId: "", skinId: "" };
     }
     const displayName =
       dnLen > 0 ? textDec.decode(new Uint8Array(buffer, o, dnLen)) : "";
     o += dnLen;
     if (o + 2 > buffer.byteLength) {
-      return { version, peerId, displayName: displayName || "Player", accountId: "" };
+      return { version, peerId, displayName: displayName || "Player", accountId: "", skinId: "" };
     }
     const accLen = view.getUint16(o, LE);
     o += 2;
     if (o + accLen > buffer.byteLength) {
-      return { version, peerId, displayName: displayName || "Player", accountId: "" };
+      return { version, peerId, displayName: displayName || "Player", accountId: "", skinId: "" };
     }
     const accountId =
       accLen > 0 ? textDec.decode(new Uint8Array(buffer, o, accLen)) : "";
+    o += accLen;
+    if (o + 2 > buffer.byteLength) {
+      return {
+        version,
+        peerId,
+        displayName: displayName.trim() !== "" ? displayName : "Player",
+        accountId,
+        skinId: "",
+      };
+    }
+    const skinLen = view.getUint16(o, LE);
+    o += 2;
+    const skinId =
+      skinLen > 0 && o + skinLen <= buffer.byteLength
+        ? textDec.decode(new Uint8Array(buffer, o, skinLen))
+        : "";
     return {
       version,
       peerId,
       displayName: displayName.trim() !== "" ? displayName : "Player",
       accountId,
+      skinId,
     };
   }
 

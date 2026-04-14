@@ -29,6 +29,7 @@ export interface CraftingPanelDeps {
   /** When either toggles while open, the recipe list/tabs refresh (station-gated recipes). */
   getNearCraftingTable: () => boolean;
   getNearFurnace: () => boolean;
+  getNearStonecutter: () => boolean;
   canCraftOneBatch: (recipe: RecipeDefinition, inventory: PlayerInventory) => boolean;
   maxCraftableBatches: (recipe: RecipeDefinition, inventory: PlayerInventory) => number;
   recipeTouchesInventory: (recipe: RecipeDefinition, inventory: PlayerInventory) => boolean;
@@ -59,6 +60,7 @@ export class CraftingPanel {
   private open = false;
   private hintTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly unsubResult: () => void;
+  private craftPending = false;
 
   /** Recipes rendered in the current list, keyed by index for event delegation. */
   private renderedRecipes: RecipeDefinition[] = [];
@@ -254,6 +256,7 @@ export class CraftingPanel {
     furnaceChrome.addEventListener("pointerdown", this.onFurnaceChromePointerDown);
 
     this.unsubResult = this.bus.on("craft:result", (e) => {
+      this.craftPending = false;
       if (e.ok) {
         this.flashHint("");
       } else {
@@ -310,6 +313,9 @@ export class CraftingPanel {
       return;
     }
 
+    if (this.craftPending) {
+      return;
+    }
     const invNow = this.deps.getInventory();
     if (!this.deps.canCraftOneBatch(recipe, invNow)) {
       this.flashHint(
@@ -325,6 +331,7 @@ export class CraftingPanel {
     if (batches <= 0) {
       return;
     }
+    this.craftPending = true;
     this.bus.emit({
       type: "craft:request",
       recipeId: recipe.id,
@@ -378,6 +385,7 @@ export class CraftingPanel {
         this.listEl.scrollTop = 0;
       }
     } else {
+      this.craftPending = false;
       this.stopTagCycleTimer();
       this.hideTooltip();
       this.lastStationProximityKey = null;
@@ -426,7 +434,7 @@ export class CraftingPanel {
   }
 
   private stationProximityKey(): string {
-    return `${this.deps.getNearCraftingTable() ? 1 : 0},${this.deps.getNearFurnace() ? 1 : 0}`;
+    return `${this.deps.getNearCraftingTable() ? 1 : 0},${this.deps.getNearFurnace() ? 1 : 0},${this.deps.getNearStonecutter() ? 1 : 0}`;
   }
 
   update(_inventory: PlayerInventory): void {

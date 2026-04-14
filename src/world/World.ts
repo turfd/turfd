@@ -2,6 +2,7 @@
 import { yieldToNextFrame } from "../core/asyncYield";
 import { unixRandom01 } from "../core/unixRandom";
 import {
+  ARROW_STUCK_COLLECT_SNAP_PX,
   BLOCK_SIZE,
   PLAYER_HEIGHT,
   CHEST_DOUBLE_SLOTS,
@@ -12,12 +13,15 @@ import {
   SKY_LIGHT_MAX,
   VIEW_DISTANCE_CHUNKS,
   SPAWN_CHUNK_RADIUS,
+  LOADED_CHUNK_HARD_CAP,
+  MAX_SPAWN_STRIP_COLUMNS,
   STEP_INTERVAL,
   STREAM_CHUNK_HYSTERESIS_BLOCKS,
   WATER_FLOW_EVERY_N_TICKS,
   WORLDGEN_NO_COLLIDE,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
+  LIGHT_RECOMPUTE_BUDGET_PER_TICK,
 } from "../core/constants";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import type { EventBus } from "../core/EventBus";
@@ -25,11 +29,14 @@ import type { ItemId, ItemStack } from "../core/itemDefinition";
 import type { ILootResolver } from "../core/loot";
 import {
   ITEM_ID_LAYOUT_REVISION_CURRENT,
+  ITEM_ID_LAYOUT_REVISION_GRANITE,
   ITEM_ID_LAYOUT_REVISION_STAIRS,
   migrateChestPersistedChunk,
   migrateChestPersistedChunkFromRevision1,
+  migrateChestPersistedChunkFromRevision2,
   migrateFurnacePersistedChunk,
   migrateFurnacePersistedChunkFromRevision1,
+  migrateFurnacePersistedChunkFromRevision2,
 } from "../items/itemIdLayoutMigration";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { ChunkRecord, IndexedDBStore } from "../persistence/IndexedDBStore";
@@ -64,11 +71,21 @@ import {
   doorLatchedOpenFromMeta,
 } from "./door/doorMetadata";
 import { bedHeadPlusXFromMeta } from "./bed/bedMetadata";
+import {
+  PAINTING_VARIANTS,
+  decodePaintingMeta,
+} from "./painting/paintingData";
 import { GeneratorContext } from "./gen/GeneratorContext";
 import { WorldGenerator } from "./gen/WorldGenerator";
 import { resimulateWaterFromSources, tickWaterFlow } from "./water/WaterSimulation";
 import { createAABB, type AABB } from "../entities/physics/AABB";
 import { RemotePlayer } from "./entities/RemotePlayer";
+import {
+  ArrowProjectile,
+  type HostArrowStrikeResult,
+} from "../entities/ArrowProjectile";
+
+export type { HostArrowStrikeResult } from "../entities/ArrowProjectile";
 import { DroppedItem } from "../entities/DroppedItem";
 import {
   createEmptyFurnaceTileState,
@@ -168,6 +185,10 @@ export type WorldLoadProgressCallback = (progress: WorldLoadProgress) => void;
 
 /** Pack signed chunk coords into one number for Set deduping (assumes each axis in [-32768, 32767]). */
 const CHUNK_COORD_PACK_BIAS = 32768;
+/** Max new chunks to load/generate per streaming pass to avoid long frame stalls. */
+const CHUNK_LOAD_PASS_BUDGET = 96;
+/** Max ms spent recomputing lighting per animation frame during chunk streaming settle. */
+const CHUNK_LOAD_LIGHT_MS_PER_FRAME = 5;
 function packChunkCoordKey(cx: number, cy: number): number {
   return ((cx + CHUNK_COORD_PACK_BIAS) << 16) | (cy + CHUNK_COORD_PACK_BIAS);
 }
@@ -178,6 +199,10 @@ function unpackChunkCoordKey(key: number): ChunkCoord {
     cy: (key & 0xffff) - CHUNK_COORD_PACK_BIAS,
   };
 }
+
+const LIGHT_RECOMPUTE_SKY = 1 << 0;
+const LIGHT_RECOMPUTE_BLOCK = 1 << 1;
+const LIGHT_RECOMPUTE_BOTH = LIGHT_RECOMPUTE_SKY | LIGHT_RECOMPUTE_BLOCK;
 
 export class World {
   private readonly registry: BlockRegistry;
@@ -196,8 +221,11 @@ export class World {
   private readonly remoteGroundKickAccum = new Map<string, number>();
   private readonly bus?: EventBus;
   private readonly _droppedItems = new Map<string, DroppedItem>();
+  private readonly _arrows = new Map<string, ArrowProjectile>();
   private _dropSeq = 0;
+  private _arrowSeq = 0;
   private _nextNetDropId = 1;
+  private _nextNetArrowId = 1;
   /** When set (multiplayer host), spawned drops use net ids and invoke this hook. */
   private _netDropReplicate:
     | ((p: {
@@ -209,6 +237,18 @@ export class World {
         vx: number;
         vy: number;
         damage: number;
+      }) => void)
+    | null = null;
+  /** When set (multiplayer host), spawned arrows use net ids `a{id}` and invoke this hook. */
+  private _netArrowReplicate:
+    | ((p: {
+        netArrowId: number;
+        x: number;
+        y: number;
+        vx: number;
+        vy: number;
+        damage: number;
+        shooterFeetX: number;
       }) => void)
     | null = null;
   /** Multiplayer client: pending pickup requests (avoid duplicate RPC). */
@@ -226,6 +266,10 @@ export class World {
   private readonly _dropSolidScratch: AABB[] = [];
   /** Cached `getSkyExposureTop` per world column `wx` (invalidated on block / chunk changes). */
   private readonly _skyTopByWx = new Map<number, number>();
+  private readonly _lightAbsorptionById = new Map<number, number>();
+  private readonly _lightEmissionById = new Map<number, number>();
+  /** Hot path for lighting / sky column scans (avoids `registry.getById` per cell). */
+  private readonly _solidById = new Map<number, boolean>();
   /** Hysteresis centre for {@link streamChunksAroundPlayer}; seeded in {@link init}. */
   private streamCentreCx: number | null = null;
   private streamCentreCy: number | null = null;
@@ -253,14 +297,14 @@ export class World {
    * standalone item ids (see {@link ITEM_ID_LAYOUT_REVISION_CURRENT}). Network chunk apply skips this.
    */
   private readonly _needsItemIdLayoutMigration: boolean;
-  private readonly _itemIdLayoutMigrationKind: "legacy" | "rev1Minus2" | "none";
+  private readonly _itemIdLayoutMigrationKind: "legacy" | "rev1Minus2" | "rev2Plus6" | "none";
 
   /**
    * When &gt; 0, {@link setBlock} / {@link setBlockWithoutPlantCascade} use a fast path for
    * air/water-only writes: no per-cell events, deferred lighting until {@link popBulkForegroundWrites}.
    */
   private _bulkFgDepth = 0;
-  private readonly _bulkFgChunkKeys = new Set<string>();
+  private readonly _bulkFgChunkKeys = new Set<number>();
   private readonly _bulkFgSkyWx = new Set<number>();
 
   /** World keys `${wx},${bottomWy}` for door bottom cells (see {@link doorAnchorBottomWy}). */
@@ -274,6 +318,18 @@ export class World {
     string,
     { effective: boolean; latched: boolean }
   >();
+
+  /**
+   * Chunk coords queued for light recomputation during the current tick.
+   * Flushed once per tick via {@link flushPendingLightRecomputes}.
+   */
+  private readonly _pendingLightChunks = new Map<number, number>();
+
+  /**
+   * Block-changed events queued during the current tick.
+   * Flushed once per tick via {@link flushPendingBlockChangedEvents}.
+   */
+  private readonly _pendingBlockChangedEvents: GameEvent[] = [];
 
   constructor(
     registry: BlockRegistry,
@@ -306,6 +362,9 @@ export class World {
     if (rev >= ITEM_ID_LAYOUT_REVISION_CURRENT) {
       this._itemIdLayoutMigrationKind = "none";
       this._needsItemIdLayoutMigration = false;
+    } else if (rev >= ITEM_ID_LAYOUT_REVISION_GRANITE) {
+      this._itemIdLayoutMigrationKind = "rev2Plus6";
+      this._needsItemIdLayoutMigration = true;
     } else if (rev >= ITEM_ID_LAYOUT_REVISION_STAIRS) {
       this._itemIdLayoutMigrationKind = "rev1Minus2";
       this._needsItemIdLayoutMigration = true;
@@ -345,6 +404,23 @@ export class World {
     this._netDropReplicate = hook;
   }
 
+  /** Multiplayer host: replicate every {@link spawnArrow} to clients. */
+  setNetArrowReplicationHook(
+    hook:
+      | ((p: {
+          netArrowId: number;
+          x: number;
+          y: number;
+          vx: number;
+          vy: number;
+          damage: number;
+          shooterFeetX: number;
+        }) => void)
+      | null,
+  ): void {
+    this._netArrowReplicate = hook;
+  }
+
   /** Apply a host-authored drop on clients (`DROP_SPAWN`). */
   applyAuthoritativeDropSpawn(p: {
     netId: number;
@@ -377,6 +453,27 @@ export class World {
   removeAuthoritativeDropByNetId(netId: number): void {
     this._dropPickupPending.delete(netId);
     this._droppedItems.delete(`n${netId}`);
+  }
+
+  /** Apply a host-authored arrow on clients (`ARROW_SPAWN`). */
+  applyAuthoritativeArrowSpawn(p: {
+    netArrowId: number;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    damage: number;
+    shooterFeetX: number;
+  }): void {
+    const id = `a${p.netArrowId}`;
+    if (this._arrows.has(id)) {
+      return;
+    }
+    const dmg = Math.max(0, Math.floor(p.damage));
+    this._arrows.set(
+      id,
+      new ArrowProjectile(id, p.x, p.y, p.vx, p.vy, dmg, p.shooterFeetX),
+    );
   }
 
   private requireItemRegistry(): ItemRegistry {
@@ -479,7 +576,29 @@ export class World {
     const { lx, ly } = worldToLocalBlock(wx, wy);
     setBackground(chunk, lx, ly, id);
     this.emitBackgroundBlockChanged(wx, wy, oldBg, id);
+
+    if (id === 0 && oldBg !== 0) {
+      const fg = this.getBlock(wx, wy);
+      if (fg.isPainting === true) {
+        this.breakPaintingAt(wx, wy);
+      }
+    }
+
     return true;
+  }
+
+  private breakPaintingAt(wx: number, wy: number): void {
+    const pmeta = this.getMetadata(wx, wy);
+    const decoded = decodePaintingMeta(pmeta);
+    const pv = PAINTING_VARIANTS[decoded.variantIndex]!;
+    const anchorX = wx - decoded.offsetX;
+    const anchorY = wy - decoded.offsetY;
+    this.spawnLootForBrokenBlock(this.getBlock(wx, wy).id, anchorX, anchorY);
+    for (let oy = 0; oy < pv.height; oy++) {
+      for (let ox = 0; ox < pv.width; ox++) {
+        this.setBlock(anchorX + ox, anchorY + oy, 0);
+      }
+    }
   }
 
   getMetadata(wx: number, wy: number): number {
@@ -943,6 +1062,173 @@ export class World {
   }
 
   /**
+   * Spawns an arrow projectile at world pixel coordinates (feet-space, Y up).
+   * `vx`/`vy` use the same convention as dropped items (+vy = world down).
+   */
+  spawnArrow(
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+    damage: number,
+    shooterFeetX: number,
+  ): void {
+    const dmg = Math.max(0, Math.floor(damage));
+    let id: string;
+    if (this._netArrowReplicate !== null) {
+      const netArrowId = this._nextNetArrowId++;
+      id = `a${netArrowId}`;
+      this._netArrowReplicate({
+        netArrowId,
+        x,
+        y,
+        vx,
+        vy,
+        damage: dmg,
+        shooterFeetX,
+      });
+    } else {
+      id = `arrow-${++this._arrowSeq}`;
+    }
+    this._arrows.set(id, new ArrowProjectile(id, x, y, vx, vy, dmg, shooterFeetX));
+  }
+
+  /**
+   * Integrates arrows, resolves mob strikes via `tryStrike` when provided.
+   * Flying arrows stick in blocks or embed in mobs; mob-stuck arrows follow `mobFeetLookup`.
+   */
+  updateArrows(
+    dt: number,
+    tryStrike:
+      | ((
+          prevX: number,
+          prevY: number,
+          nextX: number,
+          nextY: number,
+          damage: number,
+          shooterFeetX: number,
+        ) => HostArrowStrikeResult)
+      | null,
+    mobFeetLookup?: (
+      mobId: number,
+    ) =>
+      | { x: number; y: number; tiltRad: number; facingRight: boolean }
+      | undefined,
+    /** Called when a flying arrow embeds in terrain (`bowhit` SFX). */
+    onArrowStuckBlock?: (worldX: number, worldY: number) => void,
+    /** Host/solo: mob embed after damage (e.g. refresh local-only HP bar). */
+    onArrowStickMob?: (mobId: number) => void,
+  ): void {
+    if (mobFeetLookup !== undefined) {
+      for (const [id, arrow] of [...this._arrows.entries()]) {
+        if (!arrow.isStuckInMob()) {
+          continue;
+        }
+        const feet = mobFeetLookup(arrow.stuckMobId);
+        if (feet === undefined) {
+          this._arrows.delete(id);
+        } else {
+          arrow.syncStuckMobPosition(
+            feet.x,
+            feet.y,
+            feet.tiltRad,
+            feet.facingRight,
+          );
+        }
+      }
+    }
+
+    for (const [id, arrow] of [...this._arrows.entries()]) {
+      if (!arrow.isFlying()) {
+        continue;
+      }
+      const ox = arrow.x;
+      const oy = arrow.y;
+      const life = arrow.tick(dt, this, this._dropSolidScratch);
+      if (life === "dead") {
+        this._arrows.delete(id);
+        continue;
+      }
+      if (life === "stuck_block") {
+        onArrowStuckBlock?.(arrow.x, arrow.y);
+        continue;
+      }
+      if (tryStrike !== null) {
+        const r = tryStrike(ox, oy, arrow.x, arrow.y, arrow.damage, arrow.shooterFeetX);
+        if (r.kind === "stickMob") {
+          arrow.stickToMob(
+            r.mobId,
+            r.offsetX,
+            r.offsetY,
+            r.rotationRad,
+            r.mobFacingRight,
+          );
+          onArrowStickMob?.(r.mobId);
+          if (mobFeetLookup !== undefined) {
+            const feetNow = mobFeetLookup(r.mobId);
+            if (feetNow !== undefined) {
+              arrow.syncStuckMobPosition(
+                feetNow.x,
+                feetNow.y,
+                feetNow.tiltRad,
+                feetNow.facingRight,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /** Remove every arrow embedded in this mob (called when the mob is removed from the world). */
+  removeArrowsStuckToMob(mobId: number): void {
+    for (const [id, arrow] of [...this._arrows.entries()]) {
+      if (arrow.isStuckInMob() && arrow.stuckMobId === mobId) {
+        this._arrows.delete(id);
+      }
+    }
+  }
+
+  /**
+   * Picks up **block-stuck** arrows near the player into inventory (not mob-stuck; those are not
+   * retrievable).
+   */
+  collectGroundStuckArrows(
+    playerPos: { x: number; y: number },
+    inventory: { addItemStack(stack: ItemStack): ItemStack | null },
+    arrowItemId: ItemId,
+    onPickedUp?: () => void,
+  ): void {
+    const snap2 = ARROW_STUCK_COLLECT_SNAP_PX * ARROW_STUCK_COLLECT_SNAP_PX;
+    for (const [id, arrow] of [...this._arrows.entries()]) {
+      if (!arrow.isStuckInBlock()) {
+        continue;
+      }
+      const dx = arrow.x - playerPos.x;
+      const dy = arrow.y - playerPos.y;
+      if (dx * dx + dy * dy > snap2) {
+        continue;
+      }
+      const stack: ItemStack = { itemId: arrowItemId, count: 1 };
+      const overflow = inventory.addItemStack(stack);
+      if (overflow === null) {
+        onPickedUp?.();
+        this._arrows.delete(id);
+      }
+    }
+  }
+
+  /** @internal Used by EntityManager for rendering. */
+  getArrows(): ReadonlyMap<string, ArrowProjectile> {
+    return this._arrows;
+  }
+
+  /** Clears every arrow (e.g. when resetting mobs / world session). */
+  clearAllArrows(): void {
+    this._arrows.clear();
+  }
+
+  /**
    * Begin batching air/water foreground writes (fluid sim). Pair with {@link popBulkForegroundWrites}.
    * Defers lighting and per-cell `game:block-changed` until the matching pop.
    */
@@ -965,30 +1251,20 @@ export class World {
       this.invalidateSkyTopColumn(wx);
     }
     this._bulkFgSkyWx.clear();
-    const affected = new Set<string>();
+    const affected = new Set<number>();
     for (const key of this._bulkFgChunkKeys) {
       affected.add(key);
-      const comma = key.indexOf(",");
-      const cx = Number.parseInt(key.slice(0, comma), 10);
-      const cy = Number.parseInt(key.slice(comma + 1), 10);
-      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
-        continue;
-      }
-      affected.add(`${cx - 1},${cy}`);
-      affected.add(`${cx + 1},${cy}`);
-      affected.add(`${cx},${cy - 1}`);
-      affected.add(`${cx},${cy + 1}`);
+      const { cx, cy } = unpackChunkCoordKey(key);
+      affected.add(packChunkCoordKey(cx - 1, cy));
+      affected.add(packChunkCoordKey(cx + 1, cy));
+      affected.add(packChunkCoordKey(cx, cy - 1));
+      affected.add(packChunkCoordKey(cx, cy + 1));
     }
     this._bulkFgChunkKeys.clear();
     const chunkCoords: { cx: number; cy: number }[] = [];
     for (const key of affected) {
-      const comma = key.indexOf(",");
-      const cx = Number.parseInt(key.slice(0, comma), 10);
-      const cy = Number.parseInt(key.slice(comma + 1), 10);
-      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
-        continue;
-      }
-      this.recomputeChunkLight(cx, cy);
+      const { cx, cy } = unpackChunkCoordKey(key);
+      this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
       chunkCoords.push({ cx, cy });
     }
     if (chunkCoords.length > 0) {
@@ -1044,7 +1320,7 @@ export class World {
     setBlock(chunk, lx, ly, newId);
     chunk.metadata[idx] = newMeta;
     chunk.dirty = true;
-    this._bulkFgChunkKeys.add(`${coord.cx},${coord.cy}`);
+    this._bulkFgChunkKeys.add(packChunkCoordKey(coord.cx, coord.cy));
     this._bulkFgSkyWx.add(wx);
     return true;
   }
@@ -1102,20 +1378,34 @@ export class World {
     }
 
     const { cx, cy } = worldToChunk(wx, wy);
-    this.recomputeChunkLight(cx, cy);
+    const oldDef = this.registry.getById(oldId);
+    const newDef = this.registry.getById(id);
+    const affectsSky =
+      oldDef.solid !== newDef.solid ||
+      oldDef.lightAbsorption !== newDef.lightAbsorption;
+    const affectsBlock =
+      oldDef.lightEmission !== newDef.lightEmission ||
+      oldDef.lightAbsorption !== newDef.lightAbsorption ||
+      oldDef.solid !== newDef.solid;
+    const lightMode =
+      (affectsSky ? LIGHT_RECOMPUTE_SKY : 0) |
+      (affectsBlock ? LIGHT_RECOMPUTE_BLOCK : 0);
+    if (lightMode !== 0) {
+      this._queueLightRecompute(cx, cy, lightMode);
+    }
     const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     if (localX === 0) {
-      this.recomputeChunkLight(cx - 1, cy);
+      this._queueLightRecompute(cx - 1, cy, LIGHT_RECOMPUTE_BOTH);
     }
     if (localX === CHUNK_SIZE - 1) {
-      this.recomputeChunkLight(cx + 1, cy);
+      this._queueLightRecompute(cx + 1, cy, LIGHT_RECOMPUTE_BOTH);
     }
     if (localY === 0) {
-      this.recomputeChunkLight(cx, cy - 1);
+      this._queueLightRecompute(cx, cy - 1, LIGHT_RECOMPUTE_BOTH);
     }
     if (localY === CHUNK_SIZE - 1) {
-      this.recomputeChunkLight(cx, cy + 1);
+      this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
     }
 
     this.breakPlantsIfSupportLost(wx, wy);
@@ -1149,7 +1439,7 @@ export class World {
     if (oldId === newId && oldMeta === newMeta) {
       return;
     }
-    this.bus.emit({
+    this._pendingBlockChangedEvents.push({
       type: "game:block-changed",
       wx,
       wy,
@@ -1169,7 +1459,7 @@ export class World {
     if (this.bus === undefined || oldId === newId) {
       return;
     }
-    this.bus.emit({
+    this._pendingBlockChangedEvents.push({
       type: "game:block-changed",
       wx,
       wy,
@@ -1374,20 +1664,34 @@ export class World {
       this.nudgeDroppedItemsFromBlock(wx, wy);
     }
     const { cx, cy } = worldToChunk(wx, wy);
-    this.recomputeChunkLight(cx, cy);
+    const oldDef = this.registry.getById(oldId);
+    const newDef = this.registry.getById(id);
+    const affectsSky =
+      oldDef.solid !== newDef.solid ||
+      oldDef.lightAbsorption !== newDef.lightAbsorption;
+    const affectsBlock =
+      oldDef.lightEmission !== newDef.lightEmission ||
+      oldDef.lightAbsorption !== newDef.lightAbsorption ||
+      oldDef.solid !== newDef.solid;
+    const lightMode =
+      (affectsSky ? LIGHT_RECOMPUTE_SKY : 0) |
+      (affectsBlock ? LIGHT_RECOMPUTE_BLOCK : 0);
+    if (lightMode !== 0) {
+      this._queueLightRecompute(cx, cy, lightMode);
+    }
     const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     if (localX === 0) {
-      this.recomputeChunkLight(cx - 1, cy);
+      this._queueLightRecompute(cx - 1, cy, LIGHT_RECOMPUTE_BOTH);
     }
     if (localX === CHUNK_SIZE - 1) {
-      this.recomputeChunkLight(cx + 1, cy);
+      this._queueLightRecompute(cx + 1, cy, LIGHT_RECOMPUTE_BOTH);
     }
     if (localY === 0) {
-      this.recomputeChunkLight(cx, cy - 1);
+      this._queueLightRecompute(cx, cy - 1, LIGHT_RECOMPUTE_BOTH);
     }
     if (localY === CHUNK_SIZE - 1) {
-      this.recomputeChunkLight(cx, cy + 1);
+      this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
     }
     this.emitForegroundBlockChanged(wx, wy, oldId, id, oldMeta, 0);
     this.markWaterActiveForBlockChange(wx, wy, oldId, id);
@@ -1402,8 +1706,8 @@ export class World {
   }
 
   /** @internal Fluid sim: clear cells without plant cascade recursion (skips chest break for speed). */
-  setBlockWithoutPlantCascadeForWater(wx: number, wy: number, id: number): void {
-    this.setBlockWithoutPlantCascade(wx, wy, id, { skipChestBreak: true });
+  setBlockWithoutPlantCascadeForWater(wx: number, wy: number, id: number): boolean {
+    return this.setBlockWithoutPlantCascade(wx, wy, id, { skipChestBreak: true });
   }
 
   /** Numeric id of `stratum:water` (cached). */
@@ -1428,10 +1732,7 @@ export class World {
       const waterId = this.getWaterBlockId();
       if (this._pendingWaterTopologyResim) {
         this._pendingWaterTopologyResim = false;
-        this.clearActiveWaterChunkKeys();
-        resimulateWaterFromSources(this, this.airId, waterId);
-        this._waterSimTick += 1;
-        return;
+        this.setActiveWaterChunkKeys(resimulateWaterFromSources(this, waterId));
       }
       this._waterSimTick += 1;
       if (
@@ -1670,6 +1971,8 @@ export class World {
       centre,
       SIMULATION_DISTANCE_CHUNKS,
       SPAWN_CHUNK_RADIUS,
+      LOADED_CHUNK_HARD_CAP,
+      MAX_SPAWN_STRIP_COLUMNS,
     );
     for (const { cx, cy } of evicted) {
       this.removeFurnaceTilesInChunk(cx, cy);
@@ -1705,11 +2008,28 @@ export class World {
         enqueue(cx, cy);
       }
     }
+    if (pending.length > CHUNK_LOAD_PASS_BUDGET) {
+      pending.sort((a, b) => {
+        const da = Math.max(Math.abs(a.cx - centreCx), Math.abs(a.cy - centreCy));
+        const db = Math.max(Math.abs(b.cx - centreCx), Math.abs(b.cy - centreCy));
+        if (da !== db) {
+          return da - db;
+        }
+        if (a.cx !== b.cx) {
+          return a.cx - b.cx;
+        }
+        return a.cy - b.cy;
+      });
+      pending.length = CHUNK_LOAD_PASS_BUDGET;
+    }
+
     const total = pending.length;
     let loaded = 0;
     const tLoad = import.meta.env.DEV ? chunkPerfNow() : 0;
-    for (const coord of pending) {
-      const record = await this.store.loadChunk(this.worldUuid, coord);
+    const records = await this.store.loadChunkBatch(this.worldUuid, pending);
+    for (let i = 0; i < pending.length; i++) {
+      const coord = pending[i]!;
+      const record = records[i];
       if (record !== undefined) {
         const chunk = this.chunkFromRecord(record);
         this.chunks.putChunk(chunk);
@@ -1792,15 +2112,12 @@ export class World {
       affected.add(packChunkCoordKey(cx, cy + 1));
     }
     const tLight = import.meta.env.DEV ? chunkPerfNow() : 0;
-    let lightI = 0;
     for (const key of affected) {
-      const cx = (key >>> 16) - CHUNK_COORD_PACK_BIAS;
-      const cy = (key & 0xffff) - CHUNK_COORD_PACK_BIAS;
-      this.recomputeChunkLight(cx, cy);
-      lightI += 1;
-      if (affected.size > 8 && lightI % 8 === 0) {
-        await yieldToNextFrame();
-      }
+      const { cx, cy } = unpackChunkCoordKey(key);
+      this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
+    }
+    if (affected.size > 0) {
+      await this._drainPendingLightRecomputesWithinFrames(CHUNK_LOAD_LIGHT_MS_PER_FRAME);
     }
     if (import.meta.env.DEV && affected.size > 0) {
       chunkPerfLog("loadChunksAroundCentre:lighting", chunkPerfNow() - tLight, {
@@ -1887,15 +2204,113 @@ export class World {
     return chunk.blockLight[localY * CHUNK_SIZE + localX] ?? 0;
   }
 
-  recomputeChunkLight(chunkX: number, chunkY: number): void {
+  /** Queue a chunk for deferred light recomputation (deduped, flushed once per tick). */
+  private _queueLightRecompute(cx: number, cy: number, mode = LIGHT_RECOMPUTE_BOTH): void {
+    if (mode === 0) {
+      return;
+    }
+    const key = packChunkCoordKey(cx, cy);
+    const prev = this._pendingLightChunks.get(key) ?? 0;
+    this._pendingLightChunks.set(key, prev | mode);
+  }
+
+  /** Flush all queued block-changed events to the EventBus. Call once per tick after all mutations. */
+  flushPendingBlockChangedEvents(): void {
+    if (this._pendingBlockChangedEvents.length === 0 || this.bus === undefined) {
+      return;
+    }
+    for (let i = 0; i < this._pendingBlockChangedEvents.length; i++) {
+      this.bus.emit(this._pendingBlockChangedEvents[i]!);
+    }
+    this._pendingBlockChangedEvents.length = 0;
+  }
+
+  /** Flush all pending light recomputes accumulated during the current tick. */
+  flushPendingLightRecomputes(): void {
+    const pending = this._pendingLightChunks;
+    if (pending.size === 0) {
+      return;
+    }
+    const t0 = import.meta.env.DEV ? chunkPerfNow() : 0;
+    let processed = 0;
+    const queueBefore = pending.size;
+    for (const [key, mode] of pending) {
+      const { cx, cy } = unpackChunkCoordKey(key);
+      this.recomputeChunkLight(cx, cy, mode);
+      pending.delete(key);
+      processed += 1;
+      if (processed >= LIGHT_RECOMPUTE_BUDGET_PER_TICK) {
+        break;
+      }
+    }
+    if (import.meta.env.DEV) {
+      chunkPerfLog("world:flushPendingLightRecomputes", chunkPerfNow() - t0, {
+        processed,
+        queueBefore,
+        queueAfter: pending.size,
+      });
+    }
+  }
+
+  /**
+   * Process the pending light queue until empty, spending at most `msBudget` per slice
+   * then yielding a frame (chunk streaming settle — avoids multi‑hundred‑ms main-thread stalls).
+   */
+  private async _drainPendingLightRecomputesWithinFrames(msBudget: number): Promise<void> {
+    const pending = this._pendingLightChunks;
+    while (pending.size > 0) {
+      const sliceStart =
+        typeof performance !== "undefined" && performance.now !== undefined
+          ? performance.now()
+          : 0;
+      while (pending.size > 0) {
+        if (
+          typeof performance !== "undefined" &&
+          performance.now !== undefined &&
+          performance.now() - sliceStart >= msBudget
+        ) {
+          break;
+        }
+        const iter = pending.keys().next();
+        if (iter.done) {
+          break;
+        }
+        const key = iter.value;
+        const mode = pending.get(key);
+        pending.delete(key);
+        if (mode === undefined) {
+          continue;
+        }
+        const { cx, cy } = unpackChunkCoordKey(key);
+        this.recomputeChunkLight(cx, cy, mode);
+      }
+      if (pending.size > 0) {
+        await yieldToNextFrame();
+      }
+    }
+  }
+
+  recomputeChunkLight(chunkX: number, chunkY: number, mode = LIGHT_RECOMPUTE_BOTH): void {
     const chunk = this.chunks.getChunk({ cx: chunkX, cy: chunkY });
     if (chunk === undefined) {
       return;
     }
 
+    const t0 = import.meta.env.DEV ? chunkPerfNow() : 0;
     const reader = this._makeReader();
-    computeSkyLight(chunkX, chunkY, chunk.skyLight, reader);
-    computeBlockLight(chunkX, chunkY, chunk.blockLight, reader);
+    if ((mode & LIGHT_RECOMPUTE_SKY) !== 0) {
+      computeSkyLight(chunkX, chunkY, chunk.skyLight, reader);
+    }
+    if ((mode & LIGHT_RECOMPUTE_BLOCK) !== 0) {
+      computeBlockLight(chunkX, chunkY, chunk.blockLight, reader);
+    }
+    if (import.meta.env.DEV) {
+      chunkPerfLog("world:recomputeChunkLight", chunkPerfNow() - t0, {
+        chunkX,
+        chunkY,
+        mode,
+      });
+    }
 
     this.bus?.emit({
       type: "world:light-updated",
@@ -1978,22 +2393,17 @@ export class World {
       this.markWaterNeighborhoodActiveAtChunk(cx, cy);
       applied.push(coord);
     }
-    const affected = new Set<string>();
+    const affected = new Set<number>();
     for (const { cx, cy } of applied) {
-      affected.add(`${cx},${cy}`);
-      affected.add(`${cx - 1},${cy}`);
-      affected.add(`${cx + 1},${cy}`);
-      affected.add(`${cx},${cy - 1}`);
-      affected.add(`${cx},${cy + 1}`);
+      affected.add(packChunkCoordKey(cx, cy));
+      affected.add(packChunkCoordKey(cx - 1, cy));
+      affected.add(packChunkCoordKey(cx + 1, cy));
+      affected.add(packChunkCoordKey(cx, cy - 1));
+      affected.add(packChunkCoordKey(cx, cy + 1));
     }
     for (const key of affected) {
-      const [cxStr, cyStr] = key.split(",");
-      const acx = Number.parseInt(cxStr ?? "0", 10);
-      const acy = Number.parseInt(cyStr ?? "0", 10);
-      if (!Number.isFinite(acx) || !Number.isFinite(acy)) {
-        continue;
-      }
-      this.recomputeChunkLight(acx, acy);
+      const { cx, cy } = unpackChunkCoordKey(key);
+      this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
     }
   }
 
@@ -2006,17 +2416,47 @@ export class World {
   } {
     return {
       getBlock: (wx, wy) => this.getBlockId(wx, wy),
-      isSolid: (wx, wy) => this.getBlock(wx, wy).solid,
+      isSolid: (wx, wy) => this.getSolidById(this.getBlockId(wx, wy)),
       getLightAbsorption: (wx, wy) => {
         const id = this.getBlockId(wx, wy);
-        return this.registry.getById(id).lightAbsorption;
+        return this.getLightAbsorptionById(id);
       },
       getLightEmission: (wx, wy) => {
         const id = this.getBlockId(wx, wy);
-        return this.registry.getById(id).lightEmission;
+        return this.getLightEmissionById(id);
       },
       getSkyExposureTop: (wx) => this._getSkyExposureTop(wx),
     };
+  }
+
+  private getSolidById(id: number): boolean {
+    const hit = this._solidById.get(id);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const value = this.registry.getById(id).solid;
+    this._solidById.set(id, value);
+    return value;
+  }
+
+  private getLightAbsorptionById(id: number): number {
+    const hit = this._lightAbsorptionById.get(id);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const value = this.registry.getById(id).lightAbsorption;
+    this._lightAbsorptionById.set(id, value);
+    return value;
+  }
+
+  private getLightEmissionById(id: number): number {
+    const hit = this._lightEmissionById.get(id);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const value = this.registry.getById(id).lightEmission;
+    this._lightEmissionById.set(id, value);
+    return value;
   }
 
   private _getSkyExposureTop(wx: number): number {
@@ -2024,11 +2464,27 @@ export class World {
     if (hit !== undefined) {
       return hit;
     }
+    const cx = Math.floor(wx / CHUNK_SIZE);
+    const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const minCy = Math.floor(WORLD_Y_MIN / CHUNK_SIZE);
+    const maxCy = Math.floor(WORLD_Y_MAX / CHUNK_SIZE);
     let top = WORLD_Y_MIN;
-    for (let wy = WORLD_Y_MAX; wy >= WORLD_Y_MIN; wy--) {
-      if (this.getBlock(wx, wy).solid) {
-        top = wy;
-        break;
+    for (let cy = maxCy; cy >= minCy; cy--) {
+      const chunk = this.chunks.getChunkXY(cx, cy);
+      if (chunk === undefined) {
+        continue;
+      }
+      const chunkWorldY0 = cy * CHUNK_SIZE;
+      const yStart = Math.min(WORLD_Y_MAX, chunkWorldY0 + CHUNK_SIZE - 1);
+      const yEnd = Math.max(WORLD_Y_MIN, chunkWorldY0);
+      for (let wy = yStart; wy >= yEnd; wy--) {
+        const ly = wy - chunkWorldY0;
+        const id = getBlock(chunk, lx, ly);
+        if (this.getSolidById(id)) {
+          top = wy;
+          this._skyTopByWx.set(wx, top);
+          return top;
+        }
       }
     }
     this._skyTopByWx.set(wx, top);
@@ -2192,6 +2648,8 @@ export class World {
           e = migrateFurnacePersistedChunk(e);
         } else if (this._itemIdLayoutMigrationKind === "rev1Minus2") {
           e = migrateFurnacePersistedChunkFromRevision1(e);
+        } else if (this._itemIdLayoutMigrationKind === "rev2Plus6") {
+          e = migrateFurnacePersistedChunkFromRevision2(e);
         }
       }
       const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
@@ -2230,12 +2688,15 @@ export class World {
 
   /**
    * Host/offline: advance smelting queue / fuel / output buffer.
+   * @param simulationChunkKeys If provided, only furnaces in these chunk keys are ticked.
+   *        Furnaces outside are skipped this tick (catch-up via `lastProcessedWorldTimeMs` on re-entry).
    */
   tickFurnaces(
     dtSec: number,
     worldTimeMs: number,
     items: ItemRegistry,
     smelting: SmeltingRegistry,
+    simulationChunkKeys?: ReadonlySet<string>,
   ): string[] {
     if (this._furnaceBlockId === null) {
       return [];
@@ -2254,7 +2715,15 @@ export class World {
         this._furnaceTiles.delete(key);
         continue;
       }
-      const next = stepFurnaceTile(prev, dtSec, worldTimeMs, items, smelting);
+      if (simulationChunkKeys !== undefined) {
+        const { cx, cy } = worldToChunk(wx, wy);
+        if (!simulationChunkKeys.has(`${cx},${cy}`)) {
+          continue;
+        }
+      }
+      const elapsedMs = worldTimeMs - prev.lastProcessedWorldTimeMs;
+      const effectiveDt = elapsedMs > 0 ? Math.max(dtSec, elapsedMs / 1000) : dtSec;
+      const next = stepFurnaceTile(prev, effectiveDt, worldTimeMs, items, smelting);
       const prevLit = this.isFurnaceVisuallyLitFromState(prev);
       const nextLit = this.isFurnaceVisuallyLitFromState(next);
       if (!furnaceTilesEqual(prev, next)) {
@@ -2398,6 +2867,8 @@ export class World {
           e = migrateChestPersistedChunk(e);
         } else if (this._itemIdLayoutMigrationKind === "rev1Minus2") {
           e = migrateChestPersistedChunkFromRevision1(e);
+        } else if (this._itemIdLayoutMigrationKind === "rev2Plus6") {
+          e = migrateChestPersistedChunkFromRevision2(e);
         }
       }
       const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
@@ -2633,6 +3104,13 @@ export class World {
     hotbarSlot: number,
     heldItemId: number,
     miningVisualFromNetwork: boolean,
+    armorHelmetId = 0,
+    armorChestId = 0,
+    armorLeggingsId = 0,
+    armorBootsId = 0,
+    bowDrawQuantized = 0,
+    aimDisplayX = 0,
+    aimDisplayY = 0,
   ): void {
     const existing = this.remotePlayers.get(peerId);
     if (existing === undefined) {
@@ -2640,6 +3118,13 @@ export class World {
       created.hotbarSlot = hotbarSlot;
       created.heldItemId = heldItemId;
       created.miningVisualFromNetwork = miningVisualFromNetwork;
+      created.armorHelmetId = armorHelmetId;
+      created.armorChestId = armorChestId;
+      created.armorLeggingsId = armorLeggingsId;
+      created.armorBootsId = armorBootsId;
+      created.bowDrawQuantized = bowDrawQuantized;
+      created.aimDisplayX = aimDisplayX;
+      created.aimDisplayY = aimDisplayY;
       this.remotePlayers.set(peerId, created);
     } else {
       existing.setTarget(
@@ -2651,6 +3136,13 @@ export class World {
         hotbarSlot,
         heldItemId,
         miningVisualFromNetwork,
+        armorHelmetId,
+        armorChestId,
+        armorLeggingsId,
+        armorBootsId,
+        bowDrawQuantized,
+        aimDisplayX,
+        aimDisplayY,
       );
     }
   }

@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:painting"
+    },
+    "components": {
+      "stratum:display_name": "Painting",
+      "stratum:texture_key": "painting",
+      "stratum:places_block": "stratum:painting",
+      "stratum:numeric_id": 146
+    }
+  }
+}

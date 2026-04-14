@@ -100,6 +100,7 @@ export type GameEvent =
       peerId: string;
       displayName: string;
       accountId: string;
+      skinId: string;
     }
   | { type: "net:peer-left"; peerId: string }
   | { type: "net:handshake-success"; isHost: boolean }
@@ -126,6 +127,24 @@ export type GameEvent =
       placesBlockId: number;
       aux: number;
     }
+  | {
+      type: "bow:fire-request";
+      dirX: number;
+      dirY: number;
+      speedPx: number;
+      /** Eased charge 0–1 for damage scaling (matches bow draw feel). */
+      chargeNorm: number;
+      shooterFeetX: number;
+    }
+  | {
+      type: "bow:net-fire-request";
+      dirX: number;
+      dirY: number;
+      speedPx: number;
+      chargeNorm: number;
+      shooterFeetX: number;
+      shooterFeetY: number;
+    }
   | { type: "network:world-time-received"; worldTimeMs: number }
   | { type: "world:light-updated"; chunkX: number; chunkY: number }
   | {
@@ -146,6 +165,7 @@ export type GameEvent =
   | { type: "furnace:output-slot-click"; slotIndex: number; button: number }
   | { type: "chest:open-request"; wx: number; wy: number }
   | { type: "crafting-table:open-request"; wx: number; wy: number }
+  | { type: "stonecutter:open-request"; wx: number; wy: number }
   | { type: "furnace:open-request"; wx: number; wy: number }
   | { type: "bed:sleep-request"; wx: number; wy: number }
   /** Door opened/closed by proximity (not redstone latch); latch stays closed both frames. */
@@ -226,4 +246,11 @@ export type GameEvent =
   | { type: "workshop:delete-requested"; recordId: string }
   | { type: "workshop:deleted"; recordId: string }
   | { type: "workshop:set-published-requested"; recordId: string; isPublished: boolean }
-  | { type: "workshop:error"; message: string };
+  | { type: "workshop:error"; message: string }
+  /** Cosmetic: floating damage digits at a world anchor (feet Y up). */
+  | {
+      type: "fx:damage-number";
+      worldAnchorX: number;
+      worldAnchorY: number;
+      damage: number;
+    };

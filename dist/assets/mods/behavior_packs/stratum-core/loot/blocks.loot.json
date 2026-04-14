@@ -47,8 +47,10 @@
       ]
     },
     "stratum:gravel": {
+      "roll": "one_of",
       "entries": [
-        { "itemKey": "stratum:gravel", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:flint", "countMin": 1, "countMax": 1, "chance": 0.1 },
+        { "itemKey": "stratum:gravel", "countMin": 1, "countMax": 1, "chance": 0.9 }
       ]
     },
     "stratum:glass": {

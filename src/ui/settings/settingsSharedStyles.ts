@@ -272,6 +272,65 @@ export function injectSettingsSharedStyles(base: string): void {
       flex-wrap: wrap;
       gap: 10px;
     }
+
+    /* Toggle switch */
+    .st-settings-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .st-settings-toggle-row label {
+      font-family: 'BoldPixels', monospace;
+      font-size: 15px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--st-mm-ink-soft);
+      flex: 1;
+      cursor: pointer;
+      user-select: none;
+    }
+    .st-toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .st-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      position: absolute;
+    }
+    .st-toggle-track {
+      position: absolute;
+      inset: 0;
+      background: rgba(120, 120, 128, 0.36);
+      border-radius: 12px;
+      transition: background 200ms ease;
+      cursor: pointer;
+    }
+    .st-toggle-track::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: var(--st-mm-ink);
+      border-radius: 50%;
+      transition: transform 200ms ease;
+    }
+    .st-toggle input:checked + .st-toggle-track {
+      background: #34c759;
+    }
+    .st-toggle input:checked + .st-toggle-track::after {
+      transform: translateX(20px);
+    }
+    .st-toggle input:focus-visible + .st-toggle-track {
+      outline: 2px solid var(--st-mm-border-strong);
+      outline-offset: 2px;
+    }
   `;
   document.head.appendChild(style);
 }

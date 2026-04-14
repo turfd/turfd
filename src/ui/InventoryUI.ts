@@ -1,6 +1,9 @@
 /** DOM inventory overlay (27 main + 9 hotbar), slot interactions, and cursor stack wiring. */
 
 import {
+  ARMOR_SLOT_COUNT,
+  ARMOR_UI_SLOT_BASE,
+  bowDrawItemTextureName,
   HOTBAR_SIZE,
   INVENTORY_ANIM_MS,
   INVENTORY_ITEM_ICON_DISPLAY_PX,
@@ -10,7 +13,7 @@ import {
 } from "../core/constants";
 import type { ItemDefinition, ItemId, ItemStack } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
-import type { PlayerInventory } from "../items/PlayerInventory";
+import type { ArmorSlot, PlayerInventory } from "../items/PlayerInventory";
 import { fetchItemIconUrlMapForRegistry } from "../core/textureManifest";
 import type { ItemIconUrlLookup } from "./atlasItemIcon";
 import { getItemIconStyleForDefinition } from "./atlasItemIcon";
@@ -64,6 +67,13 @@ export class InventoryUI {
   private readonly overlayCounts: HTMLSpanElement[] = [];
   private readonly overlayDurabilityWraps: HTMLDivElement[] = [];
   private readonly overlayDurabilityFills: HTMLDivElement[] = [];
+  /** Armor slots: 0=helmet, 1=chestplate, 2=leggings, 3=boots */
+  private readonly armorSlots: HTMLDivElement[] = [];
+  private readonly armorIcons: HTMLDivElement[] = [];
+  private readonly armorCounts: HTMLSpanElement[] = [];
+  private readonly armorDurabilityWraps: HTMLDivElement[] = [];
+  private readonly armorDurabilityFills: HTMLDivElement[] = [];
+  private readonly armorEmptySlotBackgrounds: string[] = [];
   private readonly itemRegistry: ItemRegistry;
   private readonly getInventory: GetInventory;
   private iconUrlLookup: Map<string, string> | null = null;
@@ -76,7 +86,11 @@ export class InventoryUI {
   private readonly hotbarItemNameEl: HTMLDivElement;
   private readonly heartsRowEl: HTMLDivElement;
   private readonly heartClipEls: HTMLDivElement[] = [];
+  private readonly armorHudRowEl: HTMLDivElement;
+  /** HUD armor shields beside hearts (one clip per {@link PLAYER_HEART_COUNT}). */
+  private readonly armorHudClipEls: HTMLDivElement[] = [];
   private prevHealthForAria = -1;
+  private prevArmorHudPointsTen = -1;
   private readonly itemTooltipEl: HTMLDivElement;
   private tooltipActiveSlot: number | null = null;
   private inventoryOpen = false;
@@ -96,6 +110,8 @@ export class InventoryUI {
 
   /** Previous serialized stack per slot; null until first {@link update} (avoids startup bump spam). */
   private prevInventoryKeys: string[] | null = null;
+  /** Last bow icon atlas key for selected hotbar (so pull frames refresh while drawing). */
+  private prevBowHotbarVisualKey = "";
 
   private readonly onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null;
   private readonly onDropCursorStackOutside:
@@ -244,9 +260,16 @@ export class InventoryUI {
             downEl !== null
           ) {
             this.onShiftQuickMoveFromOverlay(slot, downEl);
-          } else {
+          } else if (slot < INVENTORY_SIZE) {
             this.getInventory().quickMoveFromSlot(slot);
           }
+        } else if (
+          slot >= ARMOR_UI_SLOT_BASE &&
+          slot < ARMOR_UI_SLOT_BASE + ARMOR_SLOT_COUNT
+        ) {
+          this.getInventory().handleArmorSlotLmbClick(
+            (slot - ARMOR_UI_SLOT_BASE) as ArmorSlot,
+          );
         } else {
           this.getInventory().handleLmbClick(slot);
         }
@@ -334,6 +357,38 @@ export class InventoryUI {
       this.heartClipEls.push(clip);
     }
 
+    const armorHudRow = document.createElement("div");
+    armorHudRow.className = "inv-armor-hud-row";
+    armorHudRow.setAttribute("role", "status");
+    armorHudRow.setAttribute("aria-live", "polite");
+    armorHudRow.setAttribute("aria-atomic", "true");
+    this.armorHudRowEl = armorHudRow;
+    for (let i = 0; i < PLAYER_HEART_COUNT; i++) {
+      const slot = document.createElement("div");
+      slot.className = "inv-shield-slot";
+      const empty = document.createElement("i");
+      empty.className = "fa-solid fa-shield inv-shield inv-shield--empty";
+      empty.setAttribute("aria-hidden", "true");
+      const clip = document.createElement("div");
+      clip.className = "inv-heart-clip inv-heart-clip--empty";
+      const full = document.createElement("i");
+      full.className = "fa-solid fa-shield inv-shield inv-shield--full";
+      full.setAttribute("aria-hidden", "true");
+      clip.appendChild(full);
+      slot.appendChild(empty);
+      slot.appendChild(clip);
+      armorHudRow.appendChild(slot);
+      this.armorHudClipEls.push(clip);
+    }
+
+    const hudStatusRow = document.createElement("div");
+    hudStatusRow.className = "inv-hud-status-row";
+    hudStatusRow.appendChild(heartsRow);
+    hudStatusRow.appendChild(armorHudRow);
+
+    const hotbarChrome = document.createElement("div");
+    hotbarChrome.className = "inv-hotbar-chrome";
+
     const hotbarWrap = document.createElement("div");
     hotbarWrap.className = "inv-hotbar-wrap";
 
@@ -366,9 +421,10 @@ export class InventoryUI {
       this.bindSlotTooltip(slot, i);
     }
     hotbarWrap.appendChild(hotbarRow);
+    hotbarChrome.appendChild(hudStatusRow);
+    hotbarChrome.appendChild(hotbarWrap);
     hotbarStack.appendChild(hotbarName);
-    hotbarStack.appendChild(heartsRow);
-    hotbarStack.appendChild(hotbarWrap);
+    hotbarStack.appendChild(hotbarChrome);
     root.appendChild(hotbarStack);
 
     const overlay = document.createElement("div");
@@ -384,6 +440,42 @@ export class InventoryUI {
     const title = document.createElement("div");
     title.className = "inv-panel-title";
     title.textContent = "Inventory";
+
+    // Armor slots panel (4 vertical slots on the left)
+    const armorPanel = document.createElement("div");
+    armorPanel.className = "inv-armor-panel";
+
+    const armorTitle = document.createElement("div");
+    armorTitle.className = "inv-panel-title";
+    armorTitle.textContent = "Armor";
+    armorPanel.appendChild(armorTitle);
+
+    const armorGrid = document.createElement("div");
+    armorGrid.className = "inv-grid inv-grid--armor";
+    const armorEmptyIcons = [
+      "assets/mods/resource_packs/stratum-core/textures/GUI/armor/empty_armor_slot_helmet.png",
+      "assets/mods/resource_packs/stratum-core/textures/GUI/armor/empty_armor_slot_chestplate.png",
+      "assets/mods/resource_packs/stratum-core/textures/GUI/armor/empty_armor_slot_leggings.png",
+      "assets/mods/resource_packs/stratum-core/textures/GUI/armor/empty_armor_slot_boots.png",
+    ];
+    for (let i = 0; i < 4; i++) {
+      const slotIndex = ARMOR_UI_SLOT_BASE + i;
+      const emptyIcon = armorEmptyIcons[i]!;
+      const { slot, icon, count, dur, durFill } = this.makeSlotElements(
+        String(slotIndex),
+        emptyIcon,
+      );
+      armorGrid.appendChild(slot);
+      this.armorSlots.push(slot);
+      this.armorIcons.push(icon);
+      this.armorCounts.push(count);
+      this.armorDurabilityWraps.push(dur);
+      this.armorDurabilityFills.push(durFill);
+      this.armorEmptySlotBackgrounds.push(emptyIcon);
+      this.bindArmorSlotElement(slot, i as import("../items/PlayerInventory").ArmorSlot);
+      this.bindArmorSlotTooltip(slot, i as import("../items/PlayerInventory").ArmorSlot);
+    }
+    armorPanel.appendChild(armorGrid);
 
     const labelMain = document.createElement("div");
     labelMain.className = "inv-label-row";
@@ -444,6 +536,7 @@ export class InventoryUI {
     craftingMount.className = "inv-crafting-mount";
     this.craftingMount = craftingMount;
 
+    overlayRow.appendChild(armorPanel);
     overlayRow.appendChild(panel);
     overlayRow.appendChild(chestMount);
     overlayRow.appendChild(craftingMount);
@@ -539,7 +632,7 @@ export class InventoryUI {
     });
   }
 
-  private makeSlotElements(dataSlot: string): {
+  private makeSlotElements(dataSlot: string, backgroundImage?: string): {
     slot: HTMLDivElement;
     icon: HTMLDivElement;
     count: HTMLSpanElement;
@@ -549,6 +642,11 @@ export class InventoryUI {
     const slot = document.createElement("div");
     slot.className = "inv-slot";
     slot.dataset.slot = dataSlot;
+    if (backgroundImage) {
+      slot.style.backgroundImage = `url(${backgroundImage})`;
+      slot.style.backgroundSize = "cover";
+      slot.style.backgroundPosition = "center";
+    }
     const icon = document.createElement("div");
     icon.className = "inv-slot-icon";
     const dur = document.createElement("div");
@@ -599,6 +697,13 @@ export class InventoryUI {
   getOverlaySlotElement(slotIndex: number): HTMLElement | null {
     return this.root.querySelector(
       `.inv-panel .inv-slot[data-slot="${slotIndex}"]`,
+    );
+  }
+
+  /** Armor column slot cell (helmet … boots). */
+  getArmorSlotElement(armorSlot: ArmorSlot): HTMLElement | null {
+    return this.root.querySelector(
+      `.inv-armor-panel .inv-slot[data-slot="${ARMOR_UI_SLOT_BASE + armorSlot}"]`,
     );
   }
 
@@ -659,6 +764,33 @@ export class InventoryUI {
     }
   }
 
+  private syncArmorHud(inventory: PlayerInventory): void {
+    const u = inventory.getEquippedArmorDurabilityPointsTen();
+    const hasArmor = u > 0;
+    this.armorHudRowEl.classList.toggle("inv-armor-hud-row--hidden", !hasArmor);
+    this.armorHudRowEl.setAttribute("aria-hidden", hasArmor ? "false" : "true");
+    if (u !== this.prevArmorHudPointsTen) {
+      this.prevArmorHudPointsTen = u;
+      this.armorHudRowEl.setAttribute(
+        "aria-label",
+        `Armor durability: ${u} of 10`,
+      );
+    }
+    for (let i = 0; i < PLAYER_HEART_COUNT; i++) {
+      const clip = this.armorHudClipEls[i]!;
+      const ptsThis = u - i * 2;
+      let level: "full" | "half" | "empty";
+      if (ptsThis >= 2) {
+        level = "full";
+      } else if (ptsThis === 1) {
+        level = "half";
+      } else {
+        level = "empty";
+      }
+      clip.className = `inv-heart-clip inv-heart-clip--${level}`;
+    }
+  }
+
   /**
    * Refreshes all slots from the live inventory (no cached stacks).
    */
@@ -666,12 +798,14 @@ export class InventoryUI {
     inventory: PlayerInventory,
     selectedHotbarSlot: number,
     health: number,
+    bowDrawSec: number,
   ): void {
     const urlLookup = this.iconUrlLookup;
     const displayPx = INVENTORY_ITEM_ICON_DISPLAY_PX;
     const sel = Math.min(selectedHotbarSlot, HOTBAR_SIZE - 1);
 
     this.syncHearts(health);
+    this.syncArmorHud(inventory);
 
     const initialSync = this.prevInventoryKeys === null;
     const bumpSlots = new Set<number>();
@@ -699,6 +833,18 @@ export class InventoryUI {
     this.prevSelectedHotbarSlot = sel;
 
     const selStack = inventory.getStack(sel);
+    const bowHotbarVisualKey =
+      selStack !== null &&
+      selStack.count > 0 &&
+      this.itemRegistry.getById(selStack.itemId)?.key === "stratum:bow"
+        ? bowDrawItemTextureName(bowDrawSec)
+        : "";
+    const bowHotbarDirty = bowHotbarVisualKey !== this.prevBowHotbarVisualKey;
+    this.prevBowHotbarVisualKey = bowHotbarVisualKey;
+    if (bowHotbarDirty) {
+      this.overlayDirty = true;
+    }
+
     const selKey =
       selStack !== null && selStack.count > 0
         ? `${sel}:${selStack.itemId}`
@@ -725,7 +871,8 @@ export class InventoryUI {
       if (
         !initialSync &&
         !bumpSlots.has(i) &&
-        !(selectionChanged && (i === sel || i === prevSel))
+        !(selectionChanged && (i === sel || i === prevSel)) &&
+        !(i === sel && bowHotbarDirty)
       ) {
         continue;
       }
@@ -740,6 +887,7 @@ export class InventoryUI {
         displayPx,
         i === sel,
         bumpSlots.has(i),
+        { worldSlot: i, hotbarSelected: sel, bowDrawSec },
       );
     }
 
@@ -762,7 +910,8 @@ export class InventoryUI {
           isOverlayHotbarRow &&
           selectionChanged &&
           (slotIndex === sel || slotIndex === prevSel)
-        )
+        ) &&
+        !(isOverlayHotbarRow && slotIndex === sel && bowHotbarDirty)
       ) {
         continue;
       }
@@ -777,9 +926,37 @@ export class InventoryUI {
         displayPx,
         isOverlayHotbarRow && slotIndex === sel,
         bumpSlots.has(slotIndex),
+        { worldSlot: slotIndex, hotbarSelected: sel, bowDrawSec },
       );
     }
     this.overlayDirty = false;
+
+    // Sync armor slots (helmet, chestplate, leggings, boots)
+    for (let i = 0; i < 4; i++) {
+      const armorStack = inventory.getArmorStack(i as import("../items/PlayerInventory").ArmorSlot);
+      const slotEl = this.armorSlots[i]!;
+      if (armorStack === null || armorStack.count <= 0) {
+        const bg = this.armorEmptySlotBackgrounds[i]!;
+        slotEl.style.backgroundImage = `url(${bg})`;
+        slotEl.style.backgroundSize = "cover";
+        slotEl.style.backgroundPosition = "center";
+      } else {
+        slotEl.style.backgroundImage = "none";
+      }
+      this.fillSlot(
+        armorStack,
+        this.armorIcons[i]!,
+        this.armorCounts[i]!,
+        slotEl,
+        this.armorDurabilityWraps[i]!,
+        this.armorDurabilityFills[i]!,
+        urlLookup,
+        displayPx,
+        false,
+        false,
+        undefined,
+      );
+    }
   }
 
   private fillSlot(
@@ -793,6 +970,7 @@ export class InventoryUI {
     displayPx: number,
     selected: boolean,
     playBump: boolean,
+    hotbarBowContext?: { worldSlot: number; hotbarSelected: number; bowDrawSec: number },
   ): void {
     if (selected) {
       slotEl.classList.add("inv-slot--selected");
@@ -831,7 +1009,16 @@ export class InventoryUI {
       return;
     }
 
-    const style = getItemIconStyleForDefinition(def, urlLookup, displayPx);
+    const iconDef: Pick<ItemDefinition, "textureName" | "stairItemIconClip"> =
+      hotbarBowContext !== undefined &&
+      def.key === "stratum:bow" &&
+      hotbarBowContext.worldSlot === hotbarBowContext.hotbarSelected
+        ? {
+            textureName: bowDrawItemTextureName(hotbarBowContext.bowDrawSec),
+            stairItemIconClip: def.stairItemIconClip,
+          }
+        : def;
+    const style = getItemIconStyleForDefinition(iconDef, urlLookup, displayPx);
     iconEl.style.cssText = style;
     iconEl.removeAttribute("title");
     slotEl.removeAttribute("title");
@@ -888,7 +1075,89 @@ export class InventoryUI {
   destroy(): void {
     this.hideItemTooltip();
     this.clearHotbarNameTimers();
+    this.panelResizeObserver.disconnect();
+    window.removeEventListener("resize", this.onInvWindowResizeForSidePanels, true);
     window.removeEventListener("mouseup", this.onWindowMouseUp, true);
     this.root.remove();
+  }
+
+  /** Bind click/drag handlers for armor slots (same pointer lifecycle as main slots). */
+  private bindArmorSlotElement(
+    slot: HTMLDivElement,
+    armorSlot: import("../items/PlayerInventory").ArmorSlot,
+  ): void {
+    const slotIndex = ARMOR_UI_SLOT_BASE + armorSlot;
+    slot.addEventListener("mousedown", (e: MouseEvent) => {
+      if (!this.inventoryOpen) {
+        return;
+      }
+      if (e.button !== 0 && e.button !== 2) {
+        return;
+      }
+      e.preventDefault();
+      this.pointerDownSlot = slotIndex;
+      this.pointerDownSlotEl = slot;
+      this.pointerDownButton = e.button;
+      this.dragOccurred = false;
+      if (e.button === 2) {
+        this.rmbPlacedOnDown = false;
+        const inv = this.getInventory();
+        if (inv.getCursorStack() !== null) {
+          inv.distributeOneFromCursorIntoArmorSlot(armorSlot);
+          this.rmbPlacedOnDown = true;
+        }
+      }
+    });
+
+    slot.addEventListener("mouseenter", (e: MouseEvent) => {
+      if (!this.inventoryOpen) {
+        return;
+      }
+      if (
+        this.pointerDownSlot !== null &&
+        slotIndex !== this.pointerDownSlot
+      ) {
+        this.dragOccurred = true;
+      }
+      const inv = this.getInventory();
+      if ((e.buttons & 1) !== 0 && inv.getCursorStack() !== null) {
+        inv.distributeOneFromCursorIntoArmorSlot(armorSlot);
+      }
+      if ((e.buttons & 2) !== 0 && inv.getCursorStack() !== null) {
+        inv.distributeOneFromCursorIntoArmorSlot(armorSlot);
+      }
+    });
+
+    slot.addEventListener("contextmenu", (ev: Event) => {
+      if (this.inventoryOpen) {
+        ev.preventDefault();
+      }
+    });
+  }
+
+  /** Bind tooltip handlers for armor slots. */
+  private bindArmorSlotTooltip(
+    slot: HTMLDivElement,
+    armorSlot: import("../items/PlayerInventory").ArmorSlot,
+  ): void {
+    slot.addEventListener("mouseenter", (e: MouseEvent) => {
+      if (!this.inventoryOpen) return;
+      const armorStack = this.getInventory().getArmorStack(armorSlot);
+      if (armorStack !== null && this.iconUrlLookup !== null) {
+        const def = this.itemRegistry.getById(armorStack.itemId);
+        if (def !== undefined) {
+          this.fillItemTooltip(def);
+          this.itemTooltipEl.classList.add("inv-item-tooltip--visible");
+          this.positionItemTooltip(e.clientX, e.clientY);
+        }
+      }
+    });
+    slot.addEventListener("mousemove", (e: MouseEvent) => {
+      if (!this.inventoryOpen) return;
+      this.positionItemTooltip(e.clientX, e.clientY);
+    });
+    slot.addEventListener("mouseleave", () => {
+      this.hideItemTooltip();
+    });
   }
 }

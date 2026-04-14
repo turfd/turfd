@@ -21,6 +21,14 @@ import type { BreakTargetLayer } from "../entities/Player";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { AtlasLoader } from "./AtlasLoader";
 import type { RenderPipeline } from "./RenderPipeline";
+import { ObjectPool } from "../utils/pool";
+
+const breakSpritePool = new ObjectPool<Sprite>(
+  () => new Sprite(),
+  (s) => { s.visible = false; s.removeFromParent(); },
+  0,
+  512,
+);
 
 const MAX_ALIVE = 320;
 
@@ -274,9 +282,13 @@ export class BlockBreakParticles {
     });
     sub.source.scaleMode = "nearest";
 
-    const sprite = new Sprite(sub);
+    const sprite = breakSpritePool.acquire();
+    sprite.texture = sub;
     sprite.anchor.set(0.5, 0.5);
     sprite.roundPixels = true;
+    sprite.visible = true;
+    sprite.alpha = 1;
+    sprite.rotation = 0;
     sprite.width = 2;
     sprite.height = 2;
     if (flipX) {
@@ -397,9 +409,13 @@ export class BlockBreakParticles {
     });
     sub.source.scaleMode = "nearest";
 
-    const sprite = new Sprite(sub);
+    const sprite = breakSpritePool.acquire();
+    sprite.texture = sub;
     sprite.anchor.set(0.5, 0.5);
     sprite.roundPixels = true;
+    sprite.visible = true;
+    sprite.alpha = 1;
+    sprite.rotation = 0;
     sprite.width = pw;
     sprite.height = ph;
     if (flipX) {
@@ -442,10 +458,10 @@ export class BlockBreakParticles {
       p.sprite.position.set(p.x, p.y);
       p.sprite.alpha = Math.max(0, p.life / p.maxLife);
       if (p.life <= 0) {
-        this.root.removeChild(p.sprite);
-        p.sprite.destroy({ texture: false });
+        breakSpritePool.release(p.sprite);
         p.tex.destroy(false);
-        this.particles.splice(i, 1);
+        this.particles[i] = this.particles[this.particles.length - 1]!;
+        this.particles.pop();
       }
     }
   }
@@ -455,8 +471,7 @@ export class BlockBreakParticles {
       u();
     }
     for (const p of this.particles) {
-      this.root.removeChild(p.sprite);
-      p.sprite.destroy({ texture: false });
+      breakSpritePool.release(p.sprite);
       p.tex.destroy(false);
     }
     this.particles.length = 0;

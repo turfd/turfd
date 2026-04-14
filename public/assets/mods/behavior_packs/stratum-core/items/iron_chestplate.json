@@ -1,0 +1,17 @@
+﻿{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:iron_chestplate"
+    },
+    "components": {
+      "stratum:display_name": "Iron Chestplate",
+      "stratum:texture_key": "iron_chestplate",
+      "stratum:max_stack": 1,
+      "stratum:max_durability": 240,
+      "stratum:numeric_id": 131,
+      "stratum:tags": ["stratum:armor", "stratum:armor_chestplate"],
+      "stratum:inventory_tooltip": "Chest armor"
+    }
+  }
+}

@@ -61,6 +61,18 @@ const uiEntrySchema = z
     entity_pig_step: pathOrPaths.optional(),
     /** Pig death one-shot (`playSfx("entity_pig_death")`). */
     entity_pig_death: pathOrPaths.optional(),
+    /** Duck idle vocal (`playSfx("entity_duck_idle")`). */
+    entity_duck_idle: pathOrPaths.optional(),
+    /** Duck footsteps (`playSfx("entity_duck_step")`). */
+    entity_duck_step: pathOrPaths.optional(),
+    /** Duck hurt vocal (`playSfx("entity_duck_hurt")`). */
+    entity_duck_hurt: pathOrPaths.optional(),
+    /** Duck death vocal (`playSfx("entity_duck_death")`). */
+    entity_duck_death: pathOrPaths.optional(),
+    /** Bow release / shot (`playSfx("bow")`). */
+    bow: pathOrPaths.optional(),
+    /** Arrow impacts solid block (`playSfx("bowhit")`); arrays → random variant. */
+    bowhit: pathOrPaths.optional(),
   })
   .strict();
 
@@ -198,6 +210,32 @@ async function loadSoundManifestJson(
     jobs.push(
       loadPathOrPaths(audio, packBaseUrl, "entity_pig_death", ui.entity_pig_death),
     );
+  }
+  if (ui?.entity_duck_idle !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_duck_idle", ui.entity_duck_idle),
+    );
+  }
+  if (ui?.entity_duck_step !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_duck_step", ui.entity_duck_step),
+    );
+  }
+  if (ui?.entity_duck_hurt !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_duck_hurt", ui.entity_duck_hurt),
+    );
+  }
+  if (ui?.entity_duck_death !== undefined) {
+    jobs.push(
+      loadPathOrPaths(audio, packBaseUrl, "entity_duck_death", ui.entity_duck_death),
+    );
+  }
+  if (ui?.bow !== undefined) {
+    jobs.push(loadPathOrPaths(audio, packBaseUrl, "bow", ui.bow));
+  }
+  if (ui?.bowhit !== undefined) {
+    jobs.push(loadPathOrPaths(audio, packBaseUrl, "bowhit", ui.bowhit));
   }
   await Promise.all(jobs);
 }

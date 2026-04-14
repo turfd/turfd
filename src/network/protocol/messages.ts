@@ -85,7 +85,16 @@ export enum MessageType {
   SLEEP_REQUEST = 0x25,
   /** Host → clients: play sleep transition (fade + pose). */
   SLEEP_TRANSITION = 0x26,
-  /** Host → clients: authoritative season transition state. */
+  /** Host → clients: batched block updates (2+ mutations in one tick). */
+  BLOCK_UPDATE_BATCH = 0x27,
+  /** Peer → host or host → peers: custom skin PNG data for a player. */
+  PLAYER_SKIN_DATA = 0x28,
+  /** Host → one client: your melee hit landed (damage FX + health bar for attacker only). */
+  MOB_HIT_FEEDBACK = 0x29,
+  /** Client → host: bow release (host spawns arrow + consumes ammo authoritatively). */
+  BOW_FIRE_REQUEST = 0x2a,
+  /** Host → clients: replicated arrow projectile spawn. */
+  ARROW_SPAWN = 0x2b,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -97,6 +106,8 @@ export interface HandshakeMessage {
   peerId: string;
   displayName: string;
   accountId: string;
+  /** Selected skin id; empty string = default skin. */
+  skinId: string;
 }
 
 export type ChunkDataMsg = {
@@ -319,6 +330,19 @@ export type BlockUpdateMsg = {
   cellMetadata?: number;
 };
 
+export type BlockUpdateBatchEntry = {
+  x: number;
+  y: number;
+  blockId: number;
+  layer: number;
+  cellMetadata: number;
+};
+
+export type BlockUpdateBatchMsg = {
+  type: MessageType.BLOCK_UPDATE_BATCH;
+  entries: BlockUpdateBatchEntry[];
+};
+
 /** Player state on the wire; includes numeric player id and facing for physics sync. */
 export type PlayerStateMsg = {
   type: MessageType.PLAYER_STATE;
@@ -334,6 +358,16 @@ export type PlayerStateMsg = {
   heldItemId: number;
   /** True while mining a block or during hand-use swing (matches local body + held break pose). */
   miningVisual: boolean;
+  /** Armor slots: helmet, chestplate, leggings, boots (`0` = empty). Wire v2+; absent on legacy decode → zeros. */
+  armorHelmetId?: number;
+  armorChestId?: number;
+  armorLeggingsId?: number;
+  armorBootsId?: number;
+  /** Bow draw 0–255 → scaled by client using `BOW_MAX_DRAW_SEC`. */
+  bowDrawQuantized?: number;
+  /** Reach crosshair in display space (same axes as `InputManager.mouseWorldPos`). */
+  aimDisplayX?: number;
+  aimDisplayY?: number;
 };
 
 /** Host-forwarded client pose so joiners and other clients attribute it to `subjectPeerId`. */
@@ -348,6 +382,13 @@ export type PlayerStateRelayMsg = {
   hotbarSlot: number;
   heldItemId: number;
   miningVisual: boolean;
+  armorHelmetId?: number;
+  armorChestId?: number;
+  armorLeggingsId?: number;
+  armorBootsId?: number;
+  bowDrawQuantized?: number;
+  aimDisplayX?: number;
+  aimDisplayY?: number;
 };
 
 export type EntitySpawnMsg = {
@@ -365,7 +406,10 @@ export type EntityDespawnMsg = {
   entityId: number;
 };
 
-/** Wire: flags bit0 = facingRight, bit1 = panic, bit2 = walking, bit3 = hurtTint, bit4 = attackSwing, bit5 = burning. */
+/** Wire: flags bit0 = facingRight, bit1 = panic, bit2 = walking, bit3 = hurtTint, bit4 = attackSwing, bit5 = burning, bit6 = slime onGround, bit7 = slime jump priming (Slime entity type only). */
+export const ENTITY_STATE_FLAG_SLIME_ON_GROUND = 1 << 6;
+export const ENTITY_STATE_FLAG_SLIME_JUMP_PRIMING = 1 << 7;
+
 export type EntityStateMsg = {
   type: MessageType.ENTITY_STATE;
   entityId: number;
@@ -390,9 +434,13 @@ export type EntityHitRequestMsg = {
    */
   heldItemId?: number;
   /**
-   * Optional: bit 0 = sprint knockback (Java sprint-attack). Absent on 7-byte legacy payloads.
+   * Optional: reserved wire flags (legacy bit 0 = sprint; ignored by Terraria knockback).
    */
   attackFlags?: number;
+  /**
+   * Optional: legacy wire v4 (byte 8); melee knockback uses attacker feet X vs mob (host), not this.
+   */
+  facingRight?: boolean;
 };
 
 /** Host → client: authoritative damage to the receiving player (e.g. zombie melee). */
@@ -443,6 +491,46 @@ export type SleepTransitionMsg = {
   durationMs: number;
 };
 
+export type PlayerSkinDataMsg = {
+  type: MessageType.PLAYER_SKIN_DATA;
+  /** Peer id of the player whose skin data is being sent (for relay). */
+  subjectPeerId: string;
+  /** Raw PNG bytes of the custom skin sprite sheet. */
+  skinPngBytes: Uint8Array;
+};
+
+export type MobHitFeedbackMsg = {
+  type: MessageType.MOB_HIT_FEEDBACK;
+  entityId: number;
+  damage: number;
+  worldAnchorX: number;
+  worldAnchorY: number;
+};
+
+export type BowFireRequestMsg = {
+  type: MessageType.BOW_FIRE_REQUEST;
+  dirX: number;
+  dirY: number;
+  speedPx: number;
+  chargeNorm: number;
+  shooterFeetX: number;
+  shooterFeetY: number;
+};
+
+export type ArrowSpawnMsg = {
+  type: MessageType.ARROW_SPAWN;
+  netArrowId: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  damage: number;
+  shooterFeetX: number;
+};
+
+/** Max custom skin PNG size on the wire (256 KB). */
+export const PLAYER_SKIN_DATA_MAX_BYTES = 256 * 1024;
+
 /** Wire: type byte + two float64 (17 bytes). */
 export const ASSIGNED_SPAWN_WIRE_BYTE_LENGTH = 17;
 
@@ -485,7 +573,12 @@ export type NetworkMessage =
   | PackStackMsg
   | FurnaceSnapshotMsg
   | ChestSnapshotMsg
-  | BlockBreakProgressMsg;
+  | BlockBreakProgressMsg
+  | BlockUpdateBatchMsg
+  | PlayerSkinDataMsg
+  | MobHitFeedbackMsg
+  | BowFireRequestMsg
+  | ArrowSpawnMsg;
 
 const LE = true;
 
@@ -575,7 +668,7 @@ function decodePackStackRefs(
 }
 
 /** Wire size of a `PLAYER_STATE` packet (type byte + payload). */
-export const PLAYER_STATE_WIRE_BYTE_LENGTH = 40;
+export const PLAYER_STATE_WIRE_BYTE_LENGTH = 57;
 
 /** `poseFlags` in {@link writePlayerStateWire} — bit 0 = mining / hand-swing visual. */
 export const PLAYER_STATE_FLAG_MINING_VISUAL = 1;
@@ -592,6 +685,13 @@ export function writePlayerStateWire(
   hotbarSlot: number,
   heldItemId: number,
   miningVisual: boolean,
+  armorHelmetId: number,
+  armorChestId: number,
+  armorLeggingsId: number,
+  armorBootsId: number,
+  bowDrawQuantized: number,
+  aimDisplayX: number,
+  aimDisplayY: number,
 ): void {
   view.setUint8(0, MessageType.PLAYER_STATE);
   view.setUint16(1, playerId, LE);
@@ -606,6 +706,13 @@ export function writePlayerStateWire(
     39,
     miningVisual ? PLAYER_STATE_FLAG_MINING_VISUAL : 0,
   );
+  view.setUint16(40, armorHelmetId & 0xffff, LE);
+  view.setUint16(42, armorChestId & 0xffff, LE);
+  view.setUint16(44, armorLeggingsId & 0xffff, LE);
+  view.setUint16(46, armorBootsId & 0xffff, LE);
+  view.setUint8(48, bowDrawQuantized & 0xff);
+  view.setFloat32(49, aimDisplayX, LE);
+  view.setFloat32(53, aimDisplayY, LE);
 }
 
 export function encode(msg: NetworkMessage): ArrayBuffer {
@@ -616,6 +723,7 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         peerId: msg.peerId,
         displayName: msg.displayName,
         accountId: msg.accountId,
+        skinId: msg.skinId,
       });
 
     case MessageType.CHUNK_DATA: {
@@ -712,6 +820,13 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         msg.hotbarSlot,
         msg.heldItemId,
         msg.miningVisual,
+        msg.armorHelmetId ?? 0,
+        msg.armorChestId ?? 0,
+        msg.armorLeggingsId ?? 0,
+        msg.armorBootsId ?? 0,
+        msg.bowDrawQuantized ?? 0,
+        msg.aimDisplayX ?? 0,
+        msg.aimDisplayY ?? 0,
       );
       return buf;
     }
@@ -996,15 +1111,16 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
     }
 
     case MessageType.ENTITY_HIT_REQUEST: {
-      // v2: heldItemId (uint16). v3: + attackFlags (uint8) for sprint knockback, etc.
+      // v2: heldItemId (uint16). v3: + attackFlags (uint8). v4: + facingRight (uint8) for melee KB.
       const held = msg.heldItemId ?? 0;
       const flags = msg.attackFlags ?? 0;
-      const buf = new ArrayBuffer(8);
+      const buf = new ArrayBuffer(9);
       const v = new DataView(buf);
       v.setUint8(0, MessageType.ENTITY_HIT_REQUEST);
       v.setUint32(1, msg.entityId >>> 0, LE);
       v.setUint16(5, held & 0xffff, LE);
       v.setUint8(7, flags & 0xff);
+      v.setUint8(8, msg.facingRight === true ? 1 : 0);
       return buf;
     }
 
@@ -1034,7 +1150,7 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       if (sid.byteLength > CHAT_PEER_ID_MAX) {
         throw new Error("PLAYER_STATE_RELAY: subjectPeerId too long");
       }
-      const buf = new ArrayBuffer(1 + 2 + sid.byteLength + 32 + 1 + 4);
+      const buf = new ArrayBuffer(1 + 2 + sid.byteLength + 54);
       const view = new DataView(buf);
       let o = 0;
       view.setUint8(o++, MessageType.PLAYER_STATE_RELAY);
@@ -1055,9 +1171,21 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       view.setUint16(o, msg.heldItemId & 0xffff, LE);
       o += 2;
       view.setUint8(
-        o,
+        o++,
         msg.miningVisual ? PLAYER_STATE_FLAG_MINING_VISUAL : 0,
       );
+      view.setUint16(o, (msg.armorHelmetId ?? 0) & 0xffff, LE);
+      o += 2;
+      view.setUint16(o, (msg.armorChestId ?? 0) & 0xffff, LE);
+      o += 2;
+      view.setUint16(o, (msg.armorLeggingsId ?? 0) & 0xffff, LE);
+      o += 2;
+      view.setUint16(o, (msg.armorBootsId ?? 0) & 0xffff, LE);
+      o += 2;
+      view.setUint8(o++, (msg.bowDrawQuantized ?? 0) & 0xff);
+      view.setFloat32(o, msg.aimDisplayX ?? 0, LE);
+      o += 4;
+      view.setFloat32(o, msg.aimDisplayY ?? 0, LE);
       return buf;
     }
 
@@ -1094,6 +1222,76 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       view.setUint8(o, msg.crackStageEncoded);
       return buf;
     }
+
+    case MessageType.BLOCK_UPDATE_BATCH: {
+      const count = msg.entries.length;
+      const ENTRY_BYTES = 4 + 4 + 2 + 1 + 1;
+      const buf = new ArrayBuffer(1 + 2 + count * ENTRY_BYTES);
+      const view = new DataView(buf);
+      view.setUint8(0, MessageType.BLOCK_UPDATE_BATCH);
+      view.setUint16(1, count, LE);
+      let off = 3;
+      for (let i = 0; i < count; i++) {
+        const e = msg.entries[i]!;
+        view.setInt32(off, e.x, LE); off += 4;
+        view.setInt32(off, e.y, LE); off += 4;
+        view.setUint16(off, e.blockId, LE); off += 2;
+        view.setUint8(off++, e.layer);
+        view.setUint8(off++, e.cellMetadata);
+      }
+      return buf;
+    }
+
+    case MessageType.PLAYER_SKIN_DATA: {
+      const peerBytes = textEnc.encode(msg.subjectPeerId);
+      const buf = new ArrayBuffer(1 + 2 + peerBytes.length + 4 + msg.skinPngBytes.length);
+      const view = new DataView(buf);
+      let off = 0;
+      view.setUint8(off, MessageType.PLAYER_SKIN_DATA); off += 1;
+      view.setUint16(off, peerBytes.length, LE); off += 2;
+      new Uint8Array(buf, off, peerBytes.length).set(peerBytes); off += peerBytes.length;
+      view.setUint32(off, msg.skinPngBytes.length, LE); off += 4;
+      new Uint8Array(buf, off, msg.skinPngBytes.length).set(msg.skinPngBytes);
+      return buf;
+    }
+
+    case MessageType.MOB_HIT_FEEDBACK: {
+      const buf = new ArrayBuffer(1 + 4 + 2 + 8 + 8);
+      const view = new DataView(buf);
+      view.setUint8(0, MessageType.MOB_HIT_FEEDBACK);
+      view.setUint32(1, msg.entityId >>> 0, LE);
+      view.setUint16(5, msg.damage & 0xffff, LE);
+      view.setFloat64(7, msg.worldAnchorX, LE);
+      view.setFloat64(15, msg.worldAnchorY, LE);
+      return buf;
+    }
+
+    case MessageType.BOW_FIRE_REQUEST: {
+      const buf = new ArrayBuffer(1 + 8 * 5);
+      const view = new DataView(buf);
+      view.setUint8(0, MessageType.BOW_FIRE_REQUEST);
+      view.setFloat64(1, msg.dirX, LE);
+      view.setFloat64(9, msg.dirY, LE);
+      view.setFloat64(17, msg.speedPx, LE);
+      view.setFloat64(25, msg.chargeNorm, LE);
+      view.setFloat64(33, msg.shooterFeetX, LE);
+      view.setFloat64(41, msg.shooterFeetY, LE);
+      return buf;
+    }
+
+    case MessageType.ARROW_SPAWN: {
+      const buf = new ArrayBuffer(1 + 4 + 8 * 6);
+      const view = new DataView(buf);
+      view.setUint8(0, MessageType.ARROW_SPAWN);
+      view.setUint32(1, msg.netArrowId >>> 0, LE);
+      view.setFloat64(5, msg.x, LE);
+      view.setFloat64(13, msg.y, LE);
+      view.setFloat64(21, msg.vx, LE);
+      view.setFloat64(29, msg.vy, LE);
+      view.setFloat64(37, msg.damage, LE);
+      view.setFloat64(45, msg.shooterFeetX, LE);
+      return buf;
+    }
   }
 }
 
@@ -1110,6 +1308,7 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         peerId: p.peerId,
         displayName: p.displayName,
         accountId: p.accountId,
+        skinId: p.skinId,
       };
     }
 
@@ -1232,11 +1431,27 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       let hotbarSlot = 0;
       let heldItemId = 0;
       let miningVisual = false;
+      let armorHelmetId = 0;
+      let armorChestId = 0;
+      let armorLeggingsId = 0;
+      let armorBootsId = 0;
+      let bowDrawQuantized = 0;
+      let aimDisplayX = 0;
+      let aimDisplayY = 0;
       if (v.byteLength >= 40) {
         hotbarSlot = v.getUint8(36);
         heldItemId = v.getUint16(37, LE);
         miningVisual =
           (v.getUint8(39) & PLAYER_STATE_FLAG_MINING_VISUAL) !== 0;
+      }
+      if (v.byteLength >= 57) {
+        armorHelmetId = v.getUint16(40, LE);
+        armorChestId = v.getUint16(42, LE);
+        armorLeggingsId = v.getUint16(44, LE);
+        armorBootsId = v.getUint16(46, LE);
+        bowDrawQuantized = v.getUint8(48);
+        aimDisplayX = v.getFloat32(49, LE);
+        aimDisplayY = v.getFloat32(53, LE);
       }
       return {
         type: MessageType.PLAYER_STATE,
@@ -1249,6 +1464,13 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         hotbarSlot,
         heldItemId,
         miningVisual,
+        armorHelmetId,
+        armorChestId,
+        armorLeggingsId,
+        armorBootsId,
+        bowDrawQuantized,
+        aimDisplayX,
+        aimDisplayY,
       };
     }
 
@@ -1567,6 +1789,7 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         entityId: v.getUint32(1, LE),
         ...(heldItemId !== 0 ? { heldItemId } : {}),
         ...(attackFlags !== 0 ? { attackFlags } : {}),
+        ...(v.byteLength >= 9 ? { facingRight: v.getUint8(8) !== 0 } : {}),
       };
     }
 
@@ -1617,6 +1840,13 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       let hotbarSlot = 0;
       let heldItemId = 0;
       let miningVisual = false;
+      let armorHelmetId = 0;
+      let armorChestId = 0;
+      let armorLeggingsId = 0;
+      let armorBootsId = 0;
+      let bowDrawQuantized = 0;
+      let aimDisplayX = 0;
+      let aimDisplayY = 0;
       if (v.byteLength >= o + 4) {
         hotbarSlot = v.getUint8(o);
         o += 1;
@@ -1624,6 +1854,22 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         o += 2;
         miningVisual =
           (v.getUint8(o) & PLAYER_STATE_FLAG_MINING_VISUAL) !== 0;
+        o += 1;
+      }
+      if (v.byteLength >= o + 17) {
+        armorHelmetId = v.getUint16(o, LE);
+        o += 2;
+        armorChestId = v.getUint16(o, LE);
+        o += 2;
+        armorLeggingsId = v.getUint16(o, LE);
+        o += 2;
+        armorBootsId = v.getUint16(o, LE);
+        o += 2;
+        bowDrawQuantized = v.getUint8(o);
+        o += 1;
+        aimDisplayX = v.getFloat32(o, LE);
+        o += 4;
+        aimDisplayY = v.getFloat32(o, LE);
       }
       return {
         type: MessageType.PLAYER_STATE_RELAY,
@@ -1636,6 +1882,13 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         hotbarSlot,
         heldItemId,
         miningVisual,
+        armorHelmetId,
+        armorChestId,
+        armorLeggingsId,
+        armorBootsId,
+        bowDrawQuantized,
+        aimDisplayX,
+        aimDisplayY,
       };
     }
 
@@ -1683,6 +1936,97 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         wy,
         layer,
         crackStageEncoded,
+      };
+    }
+
+    case MessageType.BLOCK_UPDATE_BATCH: {
+      if (v.byteLength < 3) {
+        throw new Error("BLOCK_UPDATE_BATCH: buffer too short");
+      }
+      const count = v.getUint16(1, LE);
+      const ENTRY_BYTES = 4 + 4 + 2 + 1 + 1;
+      if (v.byteLength < 3 + count * ENTRY_BYTES) {
+        throw new Error("BLOCK_UPDATE_BATCH: truncated");
+      }
+      const entries: BlockUpdateBatchEntry[] = [];
+      let off = 3;
+      for (let i = 0; i < count; i++) {
+        const x = v.getInt32(off, LE); off += 4;
+        const y = v.getInt32(off, LE); off += 4;
+        const blockId = v.getUint16(off, LE); off += 2;
+        const layer = v.getUint8(off++);
+        const cellMetadata = v.getUint8(off++);
+        entries.push({ x, y, blockId, layer, cellMetadata });
+      }
+      return {
+        type: MessageType.BLOCK_UPDATE_BATCH,
+        entries,
+      };
+    }
+
+    case MessageType.PLAYER_SKIN_DATA: {
+      if (v.byteLength < 7) {
+        throw new Error("PLAYER_SKIN_DATA: buffer too short");
+      }
+      let off = 1;
+      const peerLen = v.getUint16(off, LE); off += 2;
+      if (off + peerLen + 4 > v.byteLength) {
+        throw new Error("PLAYER_SKIN_DATA: truncated peer id");
+      }
+      const subjectPeerId = textDec.decode(new Uint8Array(buf, off, peerLen)); off += peerLen;
+      const pngLen = v.getUint32(off, LE); off += 4;
+      if (off + pngLen > v.byteLength) {
+        throw new Error("PLAYER_SKIN_DATA: truncated PNG data");
+      }
+      const skinPngBytes = new Uint8Array(buf, off, pngLen);
+      return {
+        type: MessageType.PLAYER_SKIN_DATA,
+        subjectPeerId,
+        skinPngBytes,
+      };
+    }
+
+    case MessageType.MOB_HIT_FEEDBACK: {
+      if (v.byteLength < 23) {
+        throw new Error("MOB_HIT_FEEDBACK: buffer too short");
+      }
+      return {
+        type: MessageType.MOB_HIT_FEEDBACK,
+        entityId: v.getUint32(1, LE),
+        damage: v.getUint16(5, LE),
+        worldAnchorX: v.getFloat64(7, LE),
+        worldAnchorY: v.getFloat64(15, LE),
+      };
+    }
+
+    case MessageType.BOW_FIRE_REQUEST: {
+      if (v.byteLength < 49) {
+        throw new Error("BOW_FIRE_REQUEST: buffer too short");
+      }
+      return {
+        type: MessageType.BOW_FIRE_REQUEST,
+        dirX: v.getFloat64(1, LE),
+        dirY: v.getFloat64(9, LE),
+        speedPx: v.getFloat64(17, LE),
+        chargeNorm: v.getFloat64(25, LE),
+        shooterFeetX: v.getFloat64(33, LE),
+        shooterFeetY: v.getFloat64(41, LE),
+      };
+    }
+
+    case MessageType.ARROW_SPAWN: {
+      if (v.byteLength < 53) {
+        throw new Error("ARROW_SPAWN: buffer too short");
+      }
+      return {
+        type: MessageType.ARROW_SPAWN,
+        netArrowId: v.getUint32(1, LE),
+        x: v.getFloat64(5, LE),
+        y: v.getFloat64(13, LE),
+        vx: v.getFloat64(21, LE),
+        vy: v.getFloat64(29, LE),
+        damage: v.getFloat64(37, LE),
+        shooterFeetX: v.getFloat64(45, LE),
       };
     }
 

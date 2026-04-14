@@ -1,6 +1,10 @@
 /** Authoritative crafting: canCraft / craft transactions against {@link PlayerInventory}. */
 
-import { RECIPE_STATION_CRAFTING_TABLE, RECIPE_STATION_FURNACE } from "../core/constants";
+import {
+  RECIPE_STATION_CRAFTING_TABLE,
+  RECIPE_STATION_FURNACE,
+  RECIPE_STATION_STONECUTTER,
+} from "../core/constants";
 import type { ItemId } from "../core/itemDefinition";
 import type { CraftResult, IngredientSlot, RecipeDefinition } from "../core/recipe";
 import type { PlayerInventory } from "../items/PlayerInventory";
@@ -10,6 +14,7 @@ import type { RecipeRegistry } from "../world/RecipeRegistry";
 export interface CraftingStationContext {
   readonly nearCraftingTable: boolean;
   readonly nearFurnace: boolean;
+  readonly nearStonecutter: boolean;
 }
 
 /** Per-slot counts for crafting UI (inventory only; ignores station, cursor, output space). */
@@ -82,6 +87,9 @@ export class CraftingSystem {
     if (recipe.station === RECIPE_STATION_FURNACE) {
       return ctx.nearFurnace;
     }
+    if (recipe.station === RECIPE_STATION_STONECUTTER) {
+      return ctx.nearStonecutter;
+    }
     return false;
   }
 
@@ -127,6 +135,8 @@ export class CraftingSystem {
         reason = "Move closer to a crafting table.";
       } else if (recipe.station === RECIPE_STATION_FURNACE && !ctx.nearFurnace) {
         reason = "Move closer to a furnace.";
+      } else if (recipe.station === RECIPE_STATION_STONECUTTER && !ctx.nearStonecutter) {
+        reason = "Move closer to a stonecutter.";
       }
       return { ok: false, reason };
     }

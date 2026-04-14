@@ -28,7 +28,12 @@ import { ParallaxTileStripRenderer } from "../../renderer/ParallaxTileStripRende
 import { OcclusionTexture } from "../../renderer/lighting/OcclusionTexture";
 import { IndirectLightTexture } from "../../renderer/lighting/IndirectLightTexture";
 import { CompositePass } from "../../renderer/lighting/CompositePass";
-import { buildMesh, buildBackgroundMesh } from "../../renderer/chunk/TileDrawBatch";
+import {
+  buildMesh,
+  buildBackgroundMesh,
+  buildFgShadowMesh,
+  createWorldFgShadowSampler,
+} from "../../renderer/chunk/TileDrawBatch";
 import { BlockRegistry } from "../../world/blocks/BlockRegistry";
 import { WorldGenerator } from "../../world/gen/WorldGenerator";
 import type { Chunk } from "../../world/chunk/Chunk";
@@ -53,14 +58,14 @@ const MENU_VIEW_OFFSET_X_BLOCKS = 100;
 
 /**
  * Adaptive zoom: same formula as Camera.getEffectiveZoom().
- * Keeps at most MAX_VISIBLE_BLOCKS_X blocks visible across the screen width,
- * but never drops below MIN_ZOOM.
+ * Keeps at most `maxVisibleBlocksX` blocks visible across the screen width,
+ * but never drops below `minZoom`.
  */
-const MAX_VISIBLE_BLOCKS_X = 20;
-const MIN_ZOOM             = 2;
+const DEFAULT_MAX_VISIBLE_BLOCKS_X = 20;
+const DEFAULT_MIN_ZOOM = 2;
 
-function computeZoom(screenW: number): number {
-  return Math.max(MIN_ZOOM, screenW / (MAX_VISIBLE_BLOCKS_X * BLOCK_SIZE));
+function computeZoom(screenW: number, maxVisibleBlocksX: number, minZoom: number): number {
+  return Math.max(minZoom, screenW / (maxVisibleBlocksX * BLOCK_SIZE));
 }
 
 const PAN_SPEED_X       = 0.040;  // rad/s
@@ -115,6 +120,12 @@ class ChunkMap {
 
   getChunk(cx: number, cy: number): Chunk | undefined {
     return this.map.get(`${cx},${cy}`);
+  }
+
+  getChunkAt(wx: number, wy: number): Chunk | undefined {
+    const cx = Math.floor(wx / CHUNK_SIZE);
+    const cy = Math.floor(wy / CHUNK_SIZE);
+    return this.getChunk(cx, cy);
   }
 
   getRegistry(): BlockRegistry { return this.registry; }
@@ -258,11 +269,28 @@ export class MenuBackground {
   private rafId: number | null = null;
   private startTime = 0;
   private destroyed = false;
+  private disableMotion = false;
+  private disableIntroSlide = false;
+  private deferHeavyInitMs = 0;
 
-  constructor() {
+  constructor(
+    opts: {
+      maxVisibleBlocksX?: number;
+      minZoom?: number;
+      disableMotion?: boolean;
+      disableIntroSlide?: boolean;
+      deferHeavyInitMs?: number;
+    } = {},
+  ) {
+    this.maxVisibleBlocksX = opts.maxVisibleBlocksX ?? DEFAULT_MAX_VISIBLE_BLOCKS_X;
+    this.minZoom = opts.minZoom ?? DEFAULT_MIN_ZOOM;
+    this.disableMotion = opts.disableMotion ?? false;
+    this.disableIntroSlide = opts.disableIntroSlide ?? false;
+    this.deferHeavyInitMs = Math.max(0, Math.floor(opts.deferHeavyInitMs ?? 0));
     this.initFinished = new Promise<void>((resolve) => {
       this.resolveInitFinished = resolve;
     });
+    this.zoom = this.getMinZoom();
   }
 
   // World rendering
@@ -287,7 +315,11 @@ export class MenuBackground {
   private baseX = 0;
   private baseY = 0;
   private panRangeXPx = 0;
-  private zoom = MIN_ZOOM;
+  private zoom = DEFAULT_MIN_ZOOM;
+  private maxVisibleBlocksX = DEFAULT_MAX_VISIBLE_BLOCKS_X;
+  private minZoom = DEFAULT_MIN_ZOOM;
+  private userPanXPx = 0;
+  private userPanYPx = 0;
 
   /** Surface block Y at menu mid-X; needed to recompute layout on window resize. */
   private surfaceYForLayout = 0;
@@ -303,7 +335,6 @@ export class MenuBackground {
   private slideRevealStartMs = 0;
   /** Pixels to slide at intro start; updated on resize. */
   private introSlideMaxPx = 0;
-  private parallaxSlideMaxPx = 0;
 
   /** Remove sky/backdrop and destroy Pixi when bailing out of {@link init} mid-flight. */
   private tearDownPartialInit(app: Application | null): void {
@@ -327,7 +358,54 @@ export class MenuBackground {
     }
   }
 
+  private getMaxVisibleBlocksX(): number {
+    return this.maxVisibleBlocksX;
+  }
+
+  private getMinZoom(): number {
+    return this.minZoom;
+  }
+
+  setZoomConfig(next: { maxVisibleBlocksX?: number; minZoom?: number }): void {
+    if (typeof next.maxVisibleBlocksX === "number" && Number.isFinite(next.maxVisibleBlocksX)) {
+      this.maxVisibleBlocksX = Math.max(4, next.maxVisibleBlocksX);
+    }
+    if (typeof next.minZoom === "number" && Number.isFinite(next.minZoom)) {
+      this.minZoom = Math.max(0.25, next.minZoom);
+    }
+    // Force a layout recompute next frame.
+    this.lastRendererW = 0;
+    this.lastRendererH = 0;
+    this.syncLayoutFromRenderer();
+  }
+
+  getZoomConfig(): { maxVisibleBlocksX: number; minZoom: number } {
+    return { maxVisibleBlocksX: this.maxVisibleBlocksX, minZoom: this.minZoom };
+  }
+
+  panBy(dxPx: number, dyPx: number): void {
+    if (!Number.isFinite(dxPx) || !Number.isFinite(dyPx)) {
+      return;
+    }
+    this.userPanXPx += dxPx;
+    this.userPanYPx += dyPx;
+  }
+
+  setPan(px: { x?: number; y?: number }): void {
+    if (typeof px.x === "number" && Number.isFinite(px.x)) {
+      this.userPanXPx = px.x;
+    }
+    if (typeof px.y === "number" && Number.isFinite(px.y)) {
+      this.userPanYPx = px.y;
+    }
+  }
+
+  getPan(): { x: number; y: number } {
+    return { x: this.userPanXPx, y: this.userPanYPx };
+  }
+
   private async initImpl(mount: HTMLElement): Promise<void> {
+    performance.mark("menu-bg:init-start");
     const existingBackdrop = mount.querySelector(
       ":scope > .stratum-menu-backdrop",
     ) as HTMLDivElement | null;
@@ -389,6 +467,12 @@ export class MenuBackground {
     this.app = app;
 
     // -- Atlas + registry ---------------------------------------------------
+    if (this.deferHeavyInitMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, this.deferHeavyInitMs);
+      });
+    }
+    performance.mark("menu-bg:heavy-start");
     const atlas = new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
     const registry = new BlockRegistry();
     const base = import.meta.env.BASE_URL;
@@ -419,11 +503,12 @@ export class MenuBackground {
       registry.getByIdentifier("stratum:air").id,
     );
     this.chunkMap = chunkMap;
+    const fgShadowSampler = createWorldFgShadowSampler(chunkMap.asWorld());
 
     const dpr     = app.renderer.resolution;
     const screenW = app.renderer.width  / dpr;
     const screenH = app.renderer.height / dpr;
-    const zoom    = computeZoom(screenW);
+    const zoom    = computeZoom(screenW, this.getMaxVisibleBlocksX(), this.getMinZoom());
     this.zoom     = zoom;
 
     const worldContainer = new Container();
@@ -443,12 +528,23 @@ export class MenuBackground {
     this.parallaxStrip = parallaxStrip;
 
     const menuGenMap = new Map<string, Chunk>();
+    let buildWorkUnits = 0;
+    const maybeYield = async (): Promise<void> => {
+      buildWorkUnits += 1;
+      if (buildWorkUnits % 3 !== 0) {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    };
     for (let cy = CY_START; cy <= CY_END; cy++) {
       for (let cx = 0; cx < CHUNKS_X; cx++) {
         const coord = { cx, cy };
         const chunk = generator.generateChunkTerrainOnly(coord);
         menuGenMap.set(chunkKey(coord), chunk);
       }
+      await maybeYield();
     }
     generator.applySeaLevelFloodToChunkRegion(menuGenMap, {
       minCx: 0,
@@ -464,9 +560,11 @@ export class MenuBackground {
         generator.decorateChunkSurface(chunk, o.wx, o.wy);
         chunkMap.add(chunk);
       }
+      await maybeYield();
     }
 
     propagateSkyLight(chunkMap, registry);
+    await maybeYield();
 
     // -- Lighting pipeline --------------------------------------------------
     const albedoRT = RenderTexture.create({
@@ -508,7 +606,7 @@ export class MenuBackground {
     this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
 
     this.introSlideMaxPx = screenH * MENU_INTRO_SLIDE_FRAC;
-    this.parallaxSlideMaxPx = this.introSlideMaxPx * MENU_INTRO_PARALLAX_DEEPEN;
+    void MENU_INTRO_PARALLAX_DEEPEN;
 
     worldContainer.position.set(this.baseX, this.baseY);
 
@@ -518,6 +616,10 @@ export class MenuBackground {
     const revealStart = performance.now();
     this.slideRevealStartMs = revealStart;
     this.startTime = revealStart;
+
+    if (this.rafId === null) {
+      this.rafId = requestAnimationFrame((t) => this.animate(t));
+    }
 
     for (let cy = CY_START; cy <= CY_END; cy++) {
       for (let cx = 0; cx < CHUNKS_X; cx++) {
@@ -533,13 +635,21 @@ export class MenuBackground {
         const bgMesh = buildBackgroundMesh(chunk, registry, atlas);
         bgMesh.position.set(pos.x, pos.y);
         worldContainer.addChild(bgMesh);
-        const { mesh } = buildMesh(chunk, registry, atlas);
+        const fgShadowMesh = buildFgShadowMesh(chunk, fgShadowSampler);
+        fgShadowMesh.position.set(pos.x, pos.y);
+        worldContainer.addChild(fgShadowMesh);
+        const { mesh, waterMesh } = buildMesh(chunk, registry, atlas);
         mesh.position.set(pos.x, pos.y);
         worldContainer.addChild(mesh);
+        waterMesh.position.set(pos.x, pos.y);
+        worldContainer.addChild(waterMesh);
       }
+      await maybeYield();
     }
-
-    this.rafId = requestAnimationFrame((t) => this.animate(t));
+    performance.mark("menu-bg:heavy-finished");
+    performance.measure("menu-bg-heavy-init", "menu-bg:heavy-start", "menu-bg:heavy-finished");
+    performance.mark("menu-bg:init-end");
+    performance.measure("menu-bg-total-init", "menu-bg:init-start", "menu-bg:init-end");
   }
 
   /**
@@ -569,7 +679,7 @@ export class MenuBackground {
     const screenH = rh / dpr;
     composite.resize(screenW, screenH);
 
-    const zoom = computeZoom(screenW);
+    const zoom = computeZoom(screenW, this.getMaxVisibleBlocksX(), this.getMinZoom());
     this.zoom = zoom;
     worldContainer.scale.set(zoom);
 
@@ -596,7 +706,7 @@ export class MenuBackground {
     this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
 
     this.introSlideMaxPx = screenH * MENU_INTRO_SLIDE_FRAC;
-    this.parallaxSlideMaxPx = this.introSlideMaxPx * MENU_INTRO_PARALLAX_DEEPEN;
+    void MENU_INTRO_PARALLAX_DEEPEN;
 
     this.lastCenterCX = -9999;
     this.lastCenterCY = -9999;
@@ -645,19 +755,29 @@ export class MenuBackground {
     const chunkMap       = this.chunkMap;
 
     // -- Camera pan + intro slide-up --------------------------------------
-    const t = (now - this.startTime) / 1000;
-    const introT = Math.min(
-      1,
-      (now - this.slideRevealStartMs) / MENU_INTRO_SLIDE_MS,
-    );
-    const eased = easeOutCubic(introT);
-    const introDy = (1 - eased) * this.introSlideMaxPx;
-    const parallaxDy = (1 - eased) * this.parallaxSlideMaxPx;
+    const t = this.disableMotion ? 0 : (now - this.startTime) / 1000;
+    const introDy = (this.disableMotion || this.disableIntroSlide)
+      ? 0
+      : (() => {
+        const introT = Math.min(
+          1,
+          (now - this.slideRevealStartMs) / MENU_INTRO_SLIDE_MS,
+        );
+        const eased = easeOutCubic(introT);
+        return (1 - eased) * this.introSlideMaxPx;
+      })();
+    const parallaxDy = (this.disableMotion || this.disableIntroSlide)
+      ? 0
+      : (introDy * MENU_INTRO_PARALLAX_DEEPEN);
 
-    worldContainer.x = this.baseX + Math.sin(t * PAN_SPEED_X) * this.panRangeXPx;
+    worldContainer.x =
+      this.baseX +
+      this.userPanXPx +
+      (this.disableMotion ? 0 : Math.sin(t * PAN_SPEED_X) * this.panRangeXPx);
     worldContainer.y =
       this.baseY +
-      Math.sin(t * PAN_SPEED_Y) * PAN_RANGE_Y_PX +
+      this.userPanYPx +
+      (this.disableMotion ? 0 : Math.sin(t * PAN_SPEED_Y) * PAN_RANGE_Y_PX) +
       introDy;
 
     // -- Sky (CSS canvas) ---------------------------------------------------

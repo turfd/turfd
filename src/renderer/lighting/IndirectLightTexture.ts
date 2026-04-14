@@ -4,6 +4,35 @@ import type { World } from "../../world/World";
 import { getBlock } from "../../world/chunk/Chunk";
 import { OcclusionTexture } from "./OcclusionTexture";
 
+const REGION_CHUNKS = OcclusionTexture.REGION_BLOCKS / CHUNK_SIZE;
+const TOTAL_VIEWPORT_CHUNKS = REGION_CHUNKS * REGION_CHUNKS;
+
+/**
+ * Solid-cell indirect blending reads cardinal neighbors in scratch space. After a partial
+ * light update, edge cells in adjacent chunks still depend on the changed scratch — without
+ * widening pass 2, those outputs stay stale and show as vertical seams at chunk boundaries.
+ */
+function expandDirtyChunksWithCardinalNeighbors(dirty: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const key of dirty) {
+    out.add(key);
+    const comma = key.indexOf(",");
+    if (comma <= 0) {
+      continue;
+    }
+    const cx = Number.parseInt(key.slice(0, comma), 10);
+    const cy = Number.parseInt(key.slice(comma + 1), 10);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+      continue;
+    }
+    out.add(`${cx + 1},${cy}`);
+    out.add(`${cx - 1},${cy}`);
+    out.add(`${cx},${cy + 1}`);
+    out.add(`${cx},${cy - 1}`);
+  }
+  return out;
+}
+
 /** CPU RG light grid (sky, block) aligned with OcclusionTexture's region. */
 export class IndirectLightTexture {
   static readonly REGION_BLOCKS = OcclusionTexture.REGION_BLOCKS;
@@ -18,7 +47,8 @@ export class IndirectLightTexture {
 
   private _centerCX = 0;
   private _centerCY = 0;
-  private _forceDirty = true;
+  private readonly _dirtyChunks = new Set<string>();
+  private _allDirty = true;
   private _gpuUploadPending = true;
 
   constructor() {
@@ -37,24 +67,28 @@ export class IndirectLightTexture {
     this.texture.source.scaleMode = "linear";
   }
 
-  markDirty(): void {
-    this._forceDirty = true;
+  markDirty(cx: number, cy: number): void {
+    this._dirtyChunks.add(`${cx},${cy}`);
+  }
+
+  markAllDirty(): void {
+    this._allDirty = true;
   }
 
   rebuild(centerChunkCX: number, centerChunkCY: number, world: World): boolean {
-    if (
-      !this._forceDirty &&
-      centerChunkCX === this._centerCX &&
-      centerChunkCY === this._centerCY
-    ) {
+    const centerMoved =
+      centerChunkCX !== this._centerCX || centerChunkCY !== this._centerCY;
+    if (centerMoved) {
+      this._allDirty = true;
+    }
+    if (!this._allDirty && this._dirtyChunks.size === 0) {
       return false;
     }
-    this._forceDirty = false;
     this._centerCX = centerChunkCX;
     this._centerCY = centerChunkCY;
 
     const size = IndirectLightTexture.REGION_BLOCKS;
-    const regionChunks = OcclusionTexture.REGION_BLOCKS / CHUNK_SIZE;
+    const regionChunks = REGION_CHUNKS;
     const halfChunks = Math.floor(regionChunks / 2);
     const originChunkCX = centerChunkCX - halfChunks;
     const originChunkCY = centerChunkCY - halfChunks;
@@ -69,80 +103,134 @@ export class IndirectLightTexture {
     const scratchSky = this._scratchSky;
     const scratchBlock = this._scratchBlock;
 
-    for (let dcy = 0; dcy < regionChunks; dcy++) {
-      for (let dcx = 0; dcx < regionChunks; dcx++) {
-        const ccx = originChunkCX + dcx;
-        const ccy = originChunkCY + dcy;
-        const chunk = world.getChunk(ccx, ccy);
-        for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-          const row = dcy * CHUNK_SIZE + ly;
-          if (row < 0 || row >= size) continue;
-          for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-            const col = dcx * CHUNK_SIZE + lx;
-            if (col < 0 || col >= size) continue;
-            const flat = row * size + col;
-            if (chunk === undefined) {
-              scratchSky[flat] = SKY_LIGHT_MAX;
-              scratchBlock[flat] = 0;
-            } else {
-              const idxLocal = ly * CHUNK_SIZE + lx;
-              scratchSky[flat] = chunk.skyLight[idxLocal] ?? 0;
-              scratchBlock[flat] = chunk.blockLight[idxLocal] ?? 0;
-            }
-          }
+    const fullScan =
+      this._allDirty ||
+      this._dirtyChunks.size >= TOTAL_VIEWPORT_CHUNKS;
+
+    // Pass 1: fill scratch arrays with raw sky/block light values.
+    if (fullScan) {
+      for (let dcy = 0; dcy < regionChunks; dcy++) {
+        for (let dcx = 0; dcx < regionChunks; dcx++) {
+          this._fillScratchChunk(originChunkCX + dcx, originChunkCY + dcy, dcx, dcy, size, scratchSky, scratchBlock, world);
+        }
+      }
+    } else {
+      for (const key of this._dirtyChunks) {
+        const comma = key.indexOf(",");
+        const cx = Number.parseInt(key.slice(0, comma), 10);
+        const cy = Number.parseInt(key.slice(comma + 1), 10);
+        const dcx = cx - originChunkCX;
+        const dcy = cy - originChunkCY;
+        if (dcx >= 0 && dcx < regionChunks && dcy >= 0 && dcy < regionChunks) {
+          this._fillScratchChunk(cx, cy, dcx, dcy, size, scratchSky, scratchBlock, world);
         }
       }
     }
 
-    for (let dcy = 0; dcy < regionChunks; dcy++) {
-      for (let dcx = 0; dcx < regionChunks; dcx++) {
-        const ccx = originChunkCX + dcx;
-        const ccy = originChunkCY + dcy;
-        const chunk = world.getChunk(ccx, ccy);
-        for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-          const row = dcy * CHUNK_SIZE + ly;
-          if (row < 0 || row >= size) continue;
-          for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-            const col = dcx * CHUNK_SIZE + lx;
-            if (col < 0 || col >= size) continue;
-            const flat = row * size + col;
-            let skyNorm = 1;
-            let blockNorm = 0;
-            if (chunk !== undefined) {
-              const blockId = getBlock(chunk, lx, ly);
-              if (reg.isSolid(blockId)) {
-                const ownSky = scratchSky[flat] ?? 0;
-                const nL = col > 0 ? scratchSky[flat - 1]! : SKY_LIGHT_MAX;
-                const nR = col < size - 1 ? scratchSky[flat + 1]! : SKY_LIGHT_MAX;
-                const nU = row > 0 ? scratchSky[flat - size]! : SKY_LIGHT_MAX;
-                const nD = row < size - 1 ? scratchSky[flat + size]! : SKY_LIGHT_MAX;
-                const maxSky = Math.max(nL, nR, nU, nD);
-                const bL = col > 0 ? scratchBlock[flat - 1]! : 0;
-                const bR = col < size - 1 ? scratchBlock[flat + 1]! : 0;
-                const bU = row > 0 ? scratchBlock[flat - size]! : 0;
-                const bD = row < size - 1 ? scratchBlock[flat + size]! : 0;
-                const maxBlock = Math.max(bL, bR, bU, bD);
-                const blendedSky = Math.min(
-                  SKY_LIGHT_MAX,
-                  ownSky * 0.62 + maxSky * 0.38,
-                );
-                skyNorm = clamp01(blendedSky / SKY_LIGHT_MAX);
-                blockNorm = clamp01(maxBlock / BLOCK_LIGHT_MAX);
-              } else {
-                const idxLocal = ly * CHUNK_SIZE + lx;
-                skyNorm = clamp01((chunk.skyLight[idxLocal] ?? SKY_LIGHT_MAX) / SKY_LIGHT_MAX);
-                blockNorm = clamp01((chunk.blockLight[idxLocal] ?? 0) / BLOCK_LIGHT_MAX);
-              }
-            }
-            const idx = flat * 2;
-            this._data[idx + 0] = Math.round(skyNorm * 255);
-            this._data[idx + 1] = Math.round(blockNorm * 255);
-          }
+    // Pass 2: compute blended indirect light output.
+    const pass2ChunkKeys = fullScan
+      ? null
+      : expandDirtyChunksWithCardinalNeighbors(this._dirtyChunks);
+    if (fullScan) {
+      for (let dcy = 0; dcy < regionChunks; dcy++) {
+        for (let dcx = 0; dcx < regionChunks; dcx++) {
+          this._computeOutputChunk(originChunkCX + dcx, originChunkCY + dcy, dcx, dcy, size, reg, scratchSky, scratchBlock, clamp01, world);
+        }
+      }
+    } else if (pass2ChunkKeys !== null) {
+      for (const key of pass2ChunkKeys) {
+        const comma = key.indexOf(",");
+        const cx = Number.parseInt(key.slice(0, comma), 10);
+        const cy = Number.parseInt(key.slice(comma + 1), 10);
+        const dcx = cx - originChunkCX;
+        const dcy = cy - originChunkCY;
+        if (dcx >= 0 && dcx < regionChunks && dcy >= 0 && dcy < regionChunks) {
+          this._computeOutputChunk(cx, cy, dcx, dcy, size, reg, scratchSky, scratchBlock, clamp01, world);
         }
       }
     }
+
+    this._allDirty = false;
+    this._dirtyChunks.clear();
     this._gpuUploadPending = true;
     return true;
+  }
+
+  private _fillScratchChunk(
+    ccx: number, ccy: number, dcx: number, dcy: number,
+    size: number,
+    scratchSky: Uint8Array, scratchBlock: Uint8Array,
+    world: World,
+  ): void {
+    const chunk = world.getChunk(ccx, ccy);
+    for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+      const row = dcy * CHUNK_SIZE + ly;
+      if (row < 0 || row >= size) continue;
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const col = dcx * CHUNK_SIZE + lx;
+        if (col < 0 || col >= size) continue;
+        const flat = row * size + col;
+        if (chunk === undefined) {
+          scratchSky[flat] = SKY_LIGHT_MAX;
+          scratchBlock[flat] = 0;
+        } else {
+          const idxLocal = ly * CHUNK_SIZE + lx;
+          scratchSky[flat] = chunk.skyLight[idxLocal] ?? 0;
+          scratchBlock[flat] = chunk.blockLight[idxLocal] ?? 0;
+        }
+      }
+    }
+  }
+
+  private _computeOutputChunk(
+    ccx: number, ccy: number, dcx: number, dcy: number,
+    size: number,
+    reg: { isSolid(id: number): boolean },
+    scratchSky: Uint8Array, scratchBlock: Uint8Array,
+    clamp01: (v: number) => number,
+    world: World,
+  ): void {
+    const chunk = world.getChunk(ccx, ccy);
+    for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+      const row = dcy * CHUNK_SIZE + ly;
+      if (row < 0 || row >= size) continue;
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const col = dcx * CHUNK_SIZE + lx;
+        if (col < 0 || col >= size) continue;
+        const flat = row * size + col;
+        let skyNorm = 1;
+        let blockNorm = 0;
+        if (chunk !== undefined) {
+          const blockId = getBlock(chunk, lx, ly);
+          if (reg.isSolid(blockId)) {
+            const ownSky = scratchSky[flat] ?? 0;
+            const nL = col > 0 ? scratchSky[flat - 1]! : SKY_LIGHT_MAX;
+            const nR = col < size - 1 ? scratchSky[flat + 1]! : SKY_LIGHT_MAX;
+            const nU = row > 0 ? scratchSky[flat - size]! : SKY_LIGHT_MAX;
+            const nD = row < size - 1 ? scratchSky[flat + size]! : SKY_LIGHT_MAX;
+            const maxSky = Math.max(nL, nR, nU, nD);
+            const bL = col > 0 ? scratchBlock[flat - 1]! : 0;
+            const bR = col < size - 1 ? scratchBlock[flat + 1]! : 0;
+            const bU = row > 0 ? scratchBlock[flat - size]! : 0;
+            const bD = row < size - 1 ? scratchBlock[flat + size]! : 0;
+            const maxBlock = Math.max(bL, bR, bU, bD);
+            const blendedSky = Math.min(
+              SKY_LIGHT_MAX,
+              ownSky * 0.62 + maxSky * 0.38,
+            );
+            skyNorm = clamp01(blendedSky / SKY_LIGHT_MAX);
+            blockNorm = clamp01(maxBlock / BLOCK_LIGHT_MAX);
+          } else {
+            const idxLocal = ly * CHUNK_SIZE + lx;
+            skyNorm = clamp01((chunk.skyLight[idxLocal] ?? SKY_LIGHT_MAX) / SKY_LIGHT_MAX);
+            blockNorm = clamp01((chunk.blockLight[idxLocal] ?? 0) / BLOCK_LIGHT_MAX);
+          }
+        }
+        const idx = flat * 2;
+        this._data[idx + 0] = Math.round(skyNorm * 255);
+        this._data[idx + 1] = Math.round(blockNorm * 255);
+      }
+    }
   }
 
   upload(): void {

@@ -64,6 +64,7 @@ export class PeerJSAdapter implements INetworkAdapter {
 
   private _handshakeDisplayName = "Player";
   private _handshakeAccountId = "";
+  private _handshakeSkinId = "";
 
   private _clientAdmissionGate:
     | ((peerId: PeerId, displayName: string, accountId: string) => boolean)
@@ -73,10 +74,11 @@ export class PeerJSAdapter implements INetworkAdapter {
     this._bus = bus;
   }
 
-  setHandshakeProfile(displayName: string, accountId: string | null): void {
+  setHandshakeProfile(displayName: string, accountId: string | null, skinId?: string): void {
     const d = displayName.trim();
     this._handshakeDisplayName = d !== "" ? d : "Player";
     this._handshakeAccountId = accountId?.trim() ?? "";
+    this._handshakeSkinId = skinId?.trim() ?? "";
   }
 
   setClientAdmissionGate(
@@ -106,6 +108,7 @@ export class PeerJSAdapter implements INetworkAdapter {
       peerId: localId,
       displayName: this._handshakeDisplayName,
       accountId: this._handshakeAccountId,
+      skinId: this._handshakeSkinId,
     });
   }
 
@@ -289,6 +292,13 @@ export class PeerJSAdapter implements INetworkAdapter {
         msg.hotbarSlot,
         msg.heldItemId,
         msg.miningVisual,
+        msg.armorHelmetId ?? 0,
+        msg.armorChestId ?? 0,
+        msg.armorLeggingsId ?? 0,
+        msg.armorBootsId ?? 0,
+        msg.bowDrawQuantized ?? 0,
+        msg.aimDisplayX ?? 0,
+        msg.aimDisplayY ?? 0,
       );
       return this._playerStateScratch;
     }
@@ -378,6 +388,7 @@ export class PeerJSAdapter implements INetworkAdapter {
           peerId: conn.peer,
           displayName: payload.displayName,
           accountId: payload.accountId,
+          skinId: payload.skinId,
         });
         this._bus.emit({ type: "net:handshake-success", isHost: true });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });
@@ -461,6 +472,7 @@ export class PeerJSAdapter implements INetworkAdapter {
           peerId: remotePeerId,
           displayName: hostPayload.displayName,
           accountId: hostPayload.accountId,
+          skinId: hostPayload.skinId,
         });
         this._bus.emit({ type: "net:handshake-success", isHost: false });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });

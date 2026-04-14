@@ -11,15 +11,22 @@ import {
   BLOCK_SIZE,
   CAMERA_PLAYER_VERTICAL_OFFSET_PX,
   CHEST_ACCESS_RADIUS_BLOCKS,
+  CHUNK_SIZE,
   CRAFTING_TABLE_ACCESS_RADIUS_BLOCKS,
+  SIMULATION_DISTANCE_CHUNKS,
   FURNACE_ACCESS_RADIUS_BLOCKS,
+  STONECUTTER_ACCESS_RADIUS_BLOCKS,
   DAWN_LENGTH_MS,
   DAY_LENGTH_MS,
   DAYLIGHT_LENGTH_MS,
   DUSK_LENGTH_MS,
+  AUDIO_ENV_DETECT_INTERVAL_TICKS,
+  AUDIO_SPATIAL_LISTENER_UPDATE_INTERVAL_TICKS,
   FIXED_TIMESTEP_MS,
   FIXED_TIMESTEP_SEC,
   HOTBAR_SIZE,
+  ARMOR_SLOT_COUNT,
+  ARMOR_UI_SLOT_BASE,
   ITEM_PICKUP_SFX_MIN_INTERVAL_MS,
   ITEM_THROW_SPAWN_OFFSET_PX,
   ITEM_THROW_SPEED_PX,
@@ -29,6 +36,7 @@ import {
   REACH_BLOCKS,
   RECIPE_STATION_CRAFTING_TABLE,
   RECIPE_STATION_FURNACE,
+  RECIPE_STATION_STONECUTTER,
   TORCH_HELD_LIGHT_INTENSITY,
   TORCH_HELD_LIGHT_RADIUS_BLOCKS,
   VIEW_DISTANCE_CHUNKS,
@@ -37,13 +45,24 @@ import {
 import { EventBus } from "./EventBus";
 import { GameLoop } from "./GameLoop";
 import type { GameEvent } from "./types";
+import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import {
   CraftingSystem,
   type CraftingStationContext,
   type RecipeIngredientAvailability,
 } from "../entities/CraftingSystem";
 import { EntityManager } from "../entities/EntityManager";
-import { feetPxFromSurfaceBlockY } from "../entities/mobs/mobConstants";
+import {
+  feetPxFromSurfaceBlockY,
+  mobDeathTipOverTiltRad,
+  mobHitboxSizePx,
+  MOB_SPAWN_VIEW_MARGIN_SCREEN_PX,
+} from "../entities/mobs/mobConstants";
+import {
+  buildMobSpawnViewRectCenteredOnFeet,
+  buildMobSpawnViewRectFromCamera,
+  type MobSpawnViewRect,
+} from "../entities/mobs/spawnViewRect";
 import { MobManager } from "../entities/mobs/MobManager";
 import { MobType } from "../entities/mobs/mobTypes";
 import type { PlayerState } from "../entities/Player";
@@ -77,7 +96,8 @@ import {
   loadWorkshopRecipesIntoRegistry,
 } from "../mods/loadWorkshopContent";
 import type { CachedMod } from "../mods/workshopTypes";
-import type { IndexedDBStore, WorldMetadata, WorkshopModRef } from "../persistence/IndexedDBStore";
+import { IndexedDBStore } from "../persistence/IndexedDBStore";
+import type { WorldMetadata, WorkshopModRef } from "../persistence/IndexedDBStore";
 import { SaveGame } from "../persistence/SaveGame";
 import { resolveWorldWorkshopStacks } from "../persistence/worldWorkshopStacks";
 import { ChunkSyncManager } from "../network/ChunkSyncManager";
@@ -103,6 +123,7 @@ import { BlockBreakParticles } from "../renderer/BlockBreakParticles";
 import { LeafFallParticles } from "../renderer/LeafFallParticles";
 import { BreakOverlay } from "../renderer/BreakOverlay";
 import { ChunkRenderer } from "../renderer/chunk/ChunkRenderer";
+import type { FoliageWindInfluence } from "../renderer/chunk/TileDrawBatch";
 import { RenderPipeline } from "../renderer/RenderPipeline";
 import { ChatHostController } from "../network/ChatHostController";
 import { parseGiveCommandRest, resolveGiveItemKey } from "../network/giveCommand";
@@ -117,6 +138,7 @@ import { CursorStackUI } from "../ui/CursorStackUI";
 import { ChatOverlay } from "../ui/ChatOverlay";
 import { InventoryUI } from "../ui/InventoryUI";
 import { playShiftSlotFlyAnimation } from "../ui/shiftSlotFlyAnimation";
+import { DamageNumbersOverlay } from "../ui/DamageNumbersOverlay";
 import { NametagOverlay } from "../ui/NametagOverlay";
 import { UIShell } from "../ui/UIShell";
 import { runSleepTransition } from "../ui/screens/sleepTransition";
@@ -159,14 +181,17 @@ import { createEmptyFurnaceTileState } from "../world/furnace/FurnaceTileState";
 import { SmeltingRegistry } from "../world/SmeltingRegistry";
 import { registerSmeltingRecipesInRegistry } from "../world/smeltingAsCraftingRecipes";
 import {
+  ENTITY_STATE_FLAG_SLIME_JUMP_PRIMING,
+  ENTITY_STATE_FLAG_SLIME_ON_GROUND,
   MsgType,
+  PLAYER_SKIN_DATA_MAX_BYTES,
   type PlayerStateMsg,
   type PlayerStateRelayMsg,
 } from "../network/protocol/messages";
 import type { HeldTorchLighting } from "../renderer/lighting/LightingComposer";
 import type { ItemId } from "./itemDefinition";
 import type { RecipeDefinition } from "./recipe";
-import type { PlayerInventory } from "../items/PlayerInventory";
+import type { ArmorSlot, PlayerInventory } from "../items/PlayerInventory";
 import { isNearBlockOfId, isNearCraftingTableBlock } from "../world/craftingProximity";
 
 const PEERJS_CLOUD = {
@@ -209,6 +234,8 @@ export type GameOptions = {
   displayName?: string;
   /** Supabase `auth.users` id when signed in; guests omit. */
   accountId?: string | null;
+  /** Selected player skin id (e.g. `"explorer_bob"` or `"custom:uuid"`). */
+  skinId?: string;
   /** Optional workshop cache + download; omitted when Supabase is not configured. */
   modRepository?: IModRepository | null;
   /**
@@ -224,6 +251,8 @@ export type PlayerSavedState = {
   inventory?: import("../items/PlayerInventory").SerializedInventorySlot[];
   /** Omitted in older saves; defaults to full health. */
   health?: number;
+  /** Armor slots (helmet, chestplate, leggings, boots); absent in older saves. */
+  armor?: import("../items/PlayerInventory").SerializedInventorySlot[];
 };
 
 export type GameLoadProgress = {
@@ -256,16 +285,18 @@ export class Game {
 
   private readonly _displayName: string;
   private readonly _accountId: string | null;
+  private _localSkinId: string | null = null;
   private readonly _moderation = new WorldModerationState();
   private readonly _sessionRoster = new Map<
     string,
-    { displayName: string; accountId: string }
+    { displayName: string; accountId: string; skinId: string }
   >();
   private readonly _mutedPeerIds = new Set<string>();
   private readonly _opPeerIds = new Set<string>();
   private _chatHost: ChatHostController | null = null;
   private _chatOverlay: ChatOverlay | null = null;
   private _nametagOverlay: NametagOverlay | null = null;
+  private _damageNumbersOverlay: DamageNumbersOverlay | null = null;
   private _chatOpen = false;
   /** After init, announce joins/leaves in chat (avoids noise from roster replay). */
   private _chatRoomAnnounceEnabled = false;
@@ -312,6 +343,7 @@ export class Game {
   private readonly _remotePlayerMovementSfx = new RemotePlayerMovementSfx();
   private saveGame: SaveGame | null = null;
   private _blockInteractions: BlockInteractions | null = null;
+  private readonly _pendingBlockUpdates: { x: number; y: number; blockId: number; layer: number; cellMetadata: number }[] = [];
   private audio: AudioEngine | null = null;
   /** When false, {@link destroy} leaves {@link audio} running (shared with main-menu OST). */
   private _ownsAudioEngine = true;
@@ -340,6 +372,12 @@ export class Game {
     number,
     { gruntIn: number; stepPx: number; deathPlayed: boolean }
   >();
+  private readonly _duckAmbientSfxById = new Map<
+    number,
+    { quackIn: number; stepPx: number; deathPlayed: boolean }
+  >();
+  /** Throttle per-mob "hurt vocal" so rapid hits don't spam. */
+  private readonly _mobHurtSfxAtMs = new Map<number, number>();
   private cursorStackUI: CursorStackUI | null = null;
   private isInventoryOpen = false;
   private paused = false;
@@ -360,7 +398,14 @@ export class Game {
       this.bus.emit({ type: "window:resized" } satisfies GameEvent);
     }, BACKGROUND_RESIZE_DEBOUNCE_MS);
   };
-  private fixedAsyncChain = Promise.resolve();
+  /**
+   * Chunk streaming is slow (IndexedDB + lighting). Queueing one `streamChunksAroundPlayer`
+   * per fixed tick would backlog stale player coords and leave meshes unloaded near the camera.
+   */
+  private _chunkStreamInflight = false;
+  private _chunkStreamDirty = false;
+  private _chunkStreamBx = 0;
+  private _chunkStreamBy = 0;
   private stopResolve: (() => void) | null = null;
   private quitUnsub: (() => void) | null = null;
   private keyBindingsUnsub: (() => void) | null = null;
@@ -452,6 +497,13 @@ export class Game {
     hotbarSlot: 0,
     heldItemId: 0,
     miningVisual: false,
+    armorHelmetId: 0,
+    armorChestId: 0,
+    armorLeggingsId: 0,
+    armorBootsId: 0,
+    bowDrawQuantized: 0,
+    aimDisplayX: 0,
+    aimDisplayY: 0,
   };
 
   private readonly _recipeRegistry = new RecipeRegistry();
@@ -473,6 +525,7 @@ export class Game {
     const dn = options.displayName?.trim();
     this._displayName = dn !== undefined && dn !== "" ? dn : "Player";
     this._accountId = options.accountId ?? null;
+    this._localSkinId = options.skinId ?? null;
     this._modRepository = options.modRepository ?? null;
     this._sharedAudio = options.sharedAudio;
     this.bus = new EventBus();
@@ -480,7 +533,7 @@ export class Game {
       options.initialWorldTimeMs ?? DAY_LENGTH_MS * 0.15;
     this._worldTime = new WorldTime(initialTimeMs);
     this.adapter = new PeerJSAdapter(this.bus);
-    this.adapter.setHandshakeProfile(this._displayName, this._accountId);
+    this.adapter.setHandshakeProfile(this._displayName, this._accountId, this._localSkinId ?? undefined);
     this._chunkSync = new ChunkSyncManager(this.adapter);
     this._playerStateBroadcaster = new PlayerStateBroadcaster(this.adapter, () => {
       const em = this.entityManager;
@@ -498,6 +551,13 @@ export class Game {
       s.hotbarSlot = pose.hotbarSlot;
       s.heldItemId = pose.heldItemId;
       s.miningVisual = pose.miningVisual;
+      s.armorHelmetId = pose.armorHelmetId;
+      s.armorChestId = pose.armorChestId;
+      s.armorLeggingsId = pose.armorLeggingsId;
+      s.armorBootsId = pose.armorBootsId;
+      s.bowDrawQuantized = pose.bowDrawQuantized;
+      s.aimDisplayX = pose.aimDisplayX;
+      s.aimDisplayY = pose.aimDisplayY;
       return s;
     });
     this.loop = new GameLoop({
@@ -815,9 +875,6 @@ export class Game {
       initCentreBx,
       initCentreBy,
     );
-    for (const [cx, cy] of world.loadedChunkCoords()) {
-      world.recomputeChunkLight(cx, cy);
-    }
     this._flushPendingAuthoritativeChunks();
     this._flushPendingRemotePlayerPackets();
 
@@ -840,11 +897,26 @@ export class Game {
           });
         }
       });
+      world.setNetArrowReplicationHook((p) => {
+        if (this.adapter.state.status === "connected") {
+          this.adapter.broadcast({
+            type: MsgType.ARROW_SPAWN,
+            netArrowId: p.netArrowId,
+            x: p.x,
+            y: p.y,
+            vx: p.vx,
+            vy: p.vy,
+            damage: p.damage,
+            shooterFeetX: p.shooterFeetX,
+          });
+        }
+      });
     }
 
     this._blockInteractions = new BlockInteractions(world, registry, this.bus);
     this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
     this._blockInteractions.hydrateSugarCaneSchedulesInLoadedWorld();
+    this._blockInteractions.hydrateSaplingSchedulesInLoadedWorld();
 
     this.chunkRenderer = new ChunkRenderer(pipeline, registry, blockAtlas, world);
 
@@ -889,8 +961,17 @@ export class Game {
       itemAtlas,
     );
     entityManager.initVisual(pipeline);
+    await entityManager.initializeLocalPlayerSkin(this._localSkinId, {
+      resolveCustomSkinBlobUrl: async (uuid) => {
+        const row = await this.store.getCustomSkin(uuid);
+        if (row === undefined) {
+          return null;
+        }
+        return URL.createObjectURL(row.blob);
+      },
+    });
     this.entityManager = entityManager;
-    this._mobManager = new MobManager(world, lootResolver);
+    this._mobManager = new MobManager(world, lootResolver, this.bus);
     entityManager.setMobManager(this._mobManager);
     {
       const st = this.adapter.state;
@@ -966,10 +1047,18 @@ export class Game {
               ? MobType.Sheep
               : m.kind === "pig"
                 ? MobType.Pig
-                : MobType.Zombie,
+                : m.kind === "duck"
+                  ? MobType.Duck
+                : m.kind === "slime"
+                  ? MobType.Slime
+                  : MobType.Zombie,
           x: m.x,
           y: m.y,
-          ...(m.kind === "sheep" ? { woolColor: m.woolColor } : {}),
+          ...(m.kind === "sheep"
+            ? { woolColor: m.woolColor }
+            : m.kind === "slime"
+              ? { woolColor: m.slimeColor }
+              : {}),
           persistent: m.persistent,
         }));
       },
@@ -1024,12 +1113,17 @@ export class Game {
         peerId,
         displayName: entry.displayName,
         accountId: entry.accountId,
+        skinId: entry.skinId,
       } satisfies GameEvent);
     }
 
     const nametagOverlay = new NametagOverlay();
     nametagOverlay.init(this.mount);
     this._nametagOverlay = nametagOverlay;
+
+    const damageNumbersOverlay = new DamageNumbersOverlay(this.bus);
+    damageNumbersOverlay.init(this.mount);
+    this._damageNumbersOverlay = damageNumbersOverlay;
 
     this.networkUnsubs.push(
       this.bus.on("game:chat-submit", (e) => {
@@ -1098,6 +1192,62 @@ export class Game {
           hotbarSlot: ev.hotbarSlot,
           placesBlockId: ev.placesBlockId,
           aux: ev.aux,
+        });
+      }),
+    );
+
+    this.networkUnsubs.push(
+      this.bus.on("bow:fire-request", (ev) => {
+        if (ev.type !== "bow:fire-request") {
+          return;
+        }
+        const st = this.adapter.state;
+        if (st.status === "connected" && st.role === "client") {
+          return;
+        }
+        const w = this.world;
+        const em = this.entityManager;
+        if (w === null || em === null) {
+          return;
+        }
+        const pl = em.getPlayer().state.position;
+        const spawnY = pl.y + PLAYER_HEIGHT * 0.5;
+        const off = ITEM_THROW_SPAWN_OFFSET_PX + 4;
+        const sx = pl.x + ev.dirX * off;
+        const sy = spawnY - ev.dirY * off;
+        const dmg = Math.max(1, Math.floor(1 + ev.chargeNorm * 8));
+        w.spawnArrow(
+          sx,
+          sy,
+          ev.dirX * ev.speedPx,
+          ev.dirY * ev.speedPx,
+          dmg,
+          ev.shooterFeetX,
+        );
+      }),
+    );
+
+    this.networkUnsubs.push(
+      this.bus.on("bow:net-fire-request", (ev) => {
+        if (ev.type !== "bow:net-fire-request") {
+          return;
+        }
+        const st = this.adapter.state;
+        if (st.status !== "connected" || st.role !== "client") {
+          return;
+        }
+        const hid = st.lanHostPeerId;
+        if (hid === null) {
+          return;
+        }
+        this.adapter.send(hid as PeerId, {
+          type: MsgType.BOW_FIRE_REQUEST,
+          dirX: ev.dirX,
+          dirY: ev.dirY,
+          speedPx: ev.speedPx,
+          chargeNorm: ev.chargeNorm,
+          shooterFeetX: ev.shooterFeetX,
+          shooterFeetY: ev.shooterFeetY,
         });
       }),
     );
@@ -1182,6 +1332,7 @@ export class Game {
         getCategories: () => this._visibleCraftingCategories(),
         getNearCraftingTable: () => this._getCraftingStationContext().nearCraftingTable,
         getNearFurnace: () => this._getCraftingStationContext().nearFurnace,
+        getNearStonecutter: () => this._getCraftingStationContext().nearStonecutter,
         canCraftOneBatch: (recipe, inv) => this._canCraftOneBatchForPanel(recipe, inv),
         maxCraftableBatches: (recipe, inv) => this._maxCraftableBatchesForPanel(recipe, inv),
         recipeTouchesInventory: (recipe, inv) =>
@@ -1240,6 +1391,12 @@ export class Game {
     this.networkUnsubs.push(
       this.bus.on("crafting-table:open-request", (e) => {
         this._handleCraftingTableOpenRequest(e.wx, e.wy);
+      }),
+    );
+
+    this.networkUnsubs.push(
+      this.bus.on("stonecutter:open-request", (e) => {
+        this._handleStonecutterOpenRequest(e.wx, e.wy);
       }),
     );
 
@@ -1347,15 +1504,12 @@ export class Game {
       if (state.status !== "connected" || state.role !== "host") {
         return;
       }
-      this.adapter.broadcast({
-        type: MsgType.BLOCK_UPDATE,
+      this._pendingBlockUpdates.push({
         x: e.wx,
         y: e.wy,
         blockId: e.blockId,
         layer: e.layer === "bg" ? 1 : 0,
-        previousBlockId: e.previousBlockId,
-        cellMetadata:
-          e.layer === "bg" ? 0 : (e.cellMetadata ?? 0),
+        cellMetadata: e.layer === "bg" ? 0 : (e.cellMetadata ?? 0),
       });
     });
 
@@ -1394,6 +1548,7 @@ export class Game {
         playerSavedState.hotbarSlot,
         playerSavedState.inventory,
         playerSavedState.health,
+        playerSavedState.armor,
       );
     } else {
       player.spawnAt(0, this._computeWorldSpawnFeetY(world));
@@ -1582,6 +1737,8 @@ export class Game {
     this._chatOverlay = null;
     this._nametagOverlay?.destroy();
     this._nametagOverlay = null;
+    this._damageNumbersOverlay?.destroy();
+    this._damageNumbersOverlay = null;
     this._chatHost = null;
     this.uiShell?.destroy();
     this.uiShell = null;
@@ -1601,6 +1758,8 @@ export class Game {
     this._mobManager = null;
     this._sheepAmbientSfxById.clear();
     this._pigAmbientSfxById.clear();
+    this._duckAmbientSfxById.clear();
+    this._mobHurtSfxAtMs.clear();
     this.entityManager?.destroy();
     this.entityManager = null;
     this.input?.destroy();
@@ -1681,9 +1840,12 @@ export class Game {
   private _wireCoreNetworkEvents(): void {
     this.networkUnsubs.push(
       this.bus.on("net:handshake-success", () => {
-        // Otherwise `_hasLast` can match the current pose (e.g. after offline play) and no
-        // PLAYER_STATE is sent until the player moves — remotes never get an initial pose.
         this._playerStateBroadcaster.invalidateSnapshot();
+        this.audio?.onNetworkSessionReady();
+        // If local skin is custom, send the PNG bytes to connected peers.
+        if (this._localSkinId !== null && this._localSkinId.startsWith("custom:")) {
+          void this._sendLocalCustomSkinData();
+        }
       }),
     );
     this.networkUnsubs.push(
@@ -1866,8 +2028,10 @@ export class Game {
         ) {
           const rng = this.world.forkMobRng();
           const localId = this.adapter.getLocalPeerId();
+          const remoteAttacker =
+            localId !== null && e.peerId !== localId;
           let attackerFeetX = this.entityManager?.getPlayer().state.position.x ?? 0;
-          if (localId !== null && e.peerId !== localId) {
+          if (remoteAttacker) {
             const rp = this.world.getRemotePlayers().get(e.peerId);
             if (rp !== undefined) {
               attackerFeetX = rp.getAuthorityFeet().x;
@@ -1876,11 +2040,88 @@ export class Game {
           const heldItemId =
             msg.heldItemId !== undefined ? msg.heldItemId : 0;
           const dmg = this._meleeDamageFromHeldItemId(heldItemId);
-          const kb = this._meleeKnockbackFromHeldItemId(heldItemId);
-          const sprintKb = ((msg.attackFlags ?? 0) & 1) !== 0;
-          this._mobManager.damageMobFromHost(msg.entityId, rng, attackerFeetX, dmg, kb, {
-            sprintKnockback: sprintKb,
-          });
+          const hitResult = this._mobManager.damageMobFromHost(
+            msg.entityId,
+            rng,
+            attackerFeetX,
+            dmg,
+            {
+              style: "melee",
+              baseKnockback: this._meleeTerrariaKnockbackFromHeldItemId(heldItemId),
+            },
+            { emitDamageFx: !remoteAttacker },
+          );
+          if (hitResult.ok && hitResult.dealt > 0) {
+            this._playMobHurtVocalSfx(msg.entityId);
+          }
+          if (
+            remoteAttacker &&
+            hitResult.ok &&
+            hitResult.dealt > 0
+          ) {
+            const mob = this._mobManager.getById(msg.entityId);
+            if (mob !== undefined) {
+              const { h } = mobHitboxSizePx(mob.kind);
+              const jitter = (Math.random() - 0.5) * 16;
+              this.adapter.send(e.peerId as PeerId, {
+                type: MsgType.MOB_HIT_FEEDBACK,
+                entityId: msg.entityId,
+                damage: hitResult.dealt,
+                worldAnchorX: mob.x + jitter,
+                worldAnchorY: mob.y + h * 0.52,
+              });
+            }
+          }
+          return;
+        }
+        if (
+          msg.type === MsgType.BOW_FIRE_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host" &&
+          this.world !== null
+        ) {
+          const w = this.world;
+          const spawnY = msg.shooterFeetY + PLAYER_HEIGHT * 0.5;
+          const off = ITEM_THROW_SPAWN_OFFSET_PX + 4;
+          const sx = msg.shooterFeetX + msg.dirX * off;
+          const sy = spawnY - msg.dirY * off;
+          const dmg = Math.max(1, Math.floor(1 + msg.chargeNorm * 8));
+          w.spawnArrow(
+            sx,
+            sy,
+            msg.dirX * msg.speedPx,
+            msg.dirY * msg.speedPx,
+            dmg,
+            msg.shooterFeetX,
+          );
+          return;
+        }
+        if (msg.type === MsgType.MOB_HIT_FEEDBACK) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            if (msg.damage > 0) {
+              this.bus.emit({
+                type: "fx:damage-number",
+                worldAnchorX: msg.worldAnchorX,
+                worldAnchorY: msg.worldAnchorY,
+                damage: msg.damage,
+              } satisfies GameEvent);
+            }
+            this.entityManager?.bumpMobHealthBar(msg.entityId);
+          }
+          return;
+        }
+        if (msg.type === MsgType.ARROW_SPAWN && this.world !== null) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this.world.applyAuthoritativeArrowSpawn({
+              netArrowId: msg.netArrowId,
+              x: msg.x,
+              y: msg.y,
+              vx: msg.vx,
+              vy: msg.vy,
+              damage: msg.damage,
+              shooterFeetX: msg.shooterFeetX,
+            });
+          }
           return;
         }
         if (
@@ -2182,6 +2423,20 @@ export class Game {
           }
           return;
         }
+        if (msg.type === MsgType.BLOCK_UPDATE_BATCH && this.world !== null) {
+          for (const entry of msg.entries) {
+            if (entry.layer === 1) {
+              this.world.setBackgroundBlock(entry.x, entry.y, entry.blockId);
+              this.world.clearRemoteBreakMiningAtWorldCell(entry.x, entry.y, "bg");
+            } else {
+              this.world.setBlock(entry.x, entry.y, entry.blockId, {
+                cellMetadata: entry.cellMetadata,
+              });
+              this.world.clearRemoteBreakMiningAtWorldCell(entry.x, entry.y, "fg");
+            }
+          }
+          return;
+        }
         if (msg.type === MsgType.BLOCK_BREAK_PROGRESS && this.world !== null) {
           if (msg.mode === "implicit") {
             if (stNet.status === "connected" && stNet.role === "host") {
@@ -2239,6 +2494,13 @@ export class Game {
               msg.hotbarSlot,
               msg.heldItemId,
               msg.miningVisual,
+              msg.armorHelmetId ?? 0,
+              msg.armorChestId ?? 0,
+              msg.armorLeggingsId ?? 0,
+              msg.armorBootsId ?? 0,
+              msg.bowDrawQuantized ?? 0,
+              msg.aimDisplayX ?? 0,
+              msg.aimDisplayY ?? 0,
             );
           }
           return;
@@ -2262,6 +2524,13 @@ export class Game {
             msg.hotbarSlot,
             msg.heldItemId,
             msg.miningVisual,
+            msg.armorHelmetId ?? 0,
+            msg.armorChestId ?? 0,
+            msg.armorLeggingsId ?? 0,
+            msg.armorBootsId ?? 0,
+            msg.bowDrawQuantized ?? 0,
+            msg.aimDisplayX ?? 0,
+            msg.aimDisplayY ?? 0,
           );
           if (stNet.status === "connected" && stNet.role === "host") {
             const localId = this.adapter.getLocalPeerId();
@@ -2277,6 +2546,38 @@ export class Game {
                 hotbarSlot: msg.hotbarSlot,
                 heldItemId: msg.heldItemId,
                 miningVisual: msg.miningVisual,
+                armorHelmetId: msg.armorHelmetId ?? 0,
+                armorChestId: msg.armorChestId ?? 0,
+                armorLeggingsId: msg.armorLeggingsId ?? 0,
+                armorBootsId: msg.armorBootsId ?? 0,
+                bowDrawQuantized: msg.bowDrawQuantized ?? 0,
+                aimDisplayX: msg.aimDisplayX ?? 0,
+                aimDisplayY: msg.aimDisplayY ?? 0,
+              });
+            }
+          }
+          return;
+        }
+
+        if (msg.type === MsgType.PLAYER_SKIN_DATA) {
+          if (msg.skinPngBytes.length > PLAYER_SKIN_DATA_MAX_BYTES) {
+            return;
+          }
+          const subjectPeer = msg.subjectPeerId || e.peerId;
+          const blob = new Blob([msg.skinPngBytes], { type: "image/png" });
+          const blobUrl = URL.createObjectURL(blob);
+          const rosterEntry = this._sessionRoster.get(subjectPeer);
+          const skinId = rosterEntry?.skinId ?? `custom:${subjectPeer}`;
+          if (this.entityManager !== null) {
+            void this.entityManager.loadRemoteSkinTextures(subjectPeer, skinId, blobUrl);
+          }
+          if (stNet.status === "connected" && stNet.role === "host") {
+            const localId = this.adapter.getLocalPeerId();
+            if (localId !== null && e.peerId !== localId) {
+              this.adapter.broadcastExcept(e.peerId as PeerId, {
+                type: MsgType.PLAYER_SKIN_DATA,
+                subjectPeerId: subjectPeer,
+                skinPngBytes: msg.skinPngBytes,
               });
             }
           }
@@ -2289,7 +2590,18 @@ export class Game {
         this._sessionRoster.set(e.peerId, {
           displayName: e.displayName,
           accountId: e.accountId,
+          skinId: e.skinId,
         });
+
+        // Load remote peer's skin (built-in skins resolve immediately;
+        // custom skins wait for PLAYER_SKIN_DATA follow-up).
+        if (e.skinId !== "" && this.entityManager !== null) {
+          const localId = this.adapter.getLocalPeerId();
+          if (e.peerId !== localId) {
+            void this.entityManager.loadRemoteSkinTextures(e.peerId, e.skinId);
+          }
+        }
+
         const st = this.adapter.state;
         if (st.status === "connected" && st.role === "host") {
           if (this._moderation.isMuted(e.displayName, e.accountId)) {
@@ -2430,6 +2742,12 @@ export class Game {
           })();
           const world = this.world;
           if (world !== null) {
+            const hostEm = this.entityManager;
+            const hostPos = hostEm !== null
+              ? hostEm.getPlayer().state.position
+              : { x: 0, y: 0 };
+            const spawnCx = Math.floor(hostPos.x / BLOCK_SIZE / CHUNK_SIZE);
+            const spawnCy = Math.floor(hostPos.y / BLOCK_SIZE / CHUNK_SIZE);
             this._chunkSync.sendAllChunksTo(newPeer, (fn) => {
               for (const chunk of world.getChunkManager().getLoadedChunks()) {
                 fn({
@@ -2445,7 +2763,46 @@ export class Game {
                   chests: world.getChestEntitiesForChunk(chunk.coord.cx, chunk.coord.cy),
                 });
               }
-            });
+            }, spawnCx, spawnCy);
+            for (const [dropId, d] of world.getDroppedItems()) {
+              if (!dropId.startsWith("n") || dropId.length <= 1) {
+                continue;
+              }
+              const netId = Number.parseInt(dropId.slice(1), 10);
+              if (!Number.isFinite(netId)) {
+                continue;
+              }
+              this.adapter.send(newPeer, {
+                type: MsgType.DROP_SPAWN,
+                netId,
+                itemId: d.itemId,
+                count: d.count,
+                x: d.x,
+                y: d.y,
+                vx: d.vx,
+                vy: d.vy,
+                damage: d.damage,
+              });
+            }
+            for (const [arrowId, ar] of world.getArrows()) {
+              if (!arrowId.startsWith("a") || arrowId.length <= 1) {
+                continue;
+              }
+              const netArrowId = Number.parseInt(arrowId.slice(1), 10);
+              if (!Number.isFinite(netArrowId)) {
+                continue;
+              }
+              this.adapter.send(newPeer, {
+                type: MsgType.ARROW_SPAWN,
+                netArrowId,
+                x: ar.x,
+                y: ar.y,
+                vx: ar.vx,
+                vy: ar.vy,
+                damage: ar.damage,
+                shooterFeetX: ar.shooterFeetX,
+              });
+            }
           }
           this._playerStateBroadcaster.invalidateSnapshot();
           const localId = this.adapter.getLocalPeerId();
@@ -2464,6 +2821,13 @@ export class Game {
               hotbarSlot: pose.hotbarSlot,
               heldItemId: pose.heldItemId,
               miningVisual: pose.miningVisual,
+              armorHelmetId: pose.armorHelmetId,
+              armorChestId: pose.armorChestId,
+              armorLeggingsId: pose.armorLeggingsId,
+              armorBootsId: pose.armorBootsId,
+              bowDrawQuantized: pose.bowDrawQuantized,
+              aimDisplayX: pose.aimDisplayX,
+              aimDisplayY: pose.aimDisplayY,
             });
             for (const [pid, rp] of world.getRemotePlayers()) {
               if (pid === newPeer) {
@@ -2516,6 +2880,13 @@ export class Game {
           m.hotbarSlot,
           m.heldItemId,
           m.miningVisual,
+          m.armorHelmetId ?? 0,
+          m.armorChestId ?? 0,
+          m.armorLeggingsId ?? 0,
+          m.armorBootsId ?? 0,
+          m.bowDrawQuantized ?? 0,
+          m.aimDisplayX ?? 0,
+          m.aimDisplayY ?? 0,
         );
         continue;
       }
@@ -2530,6 +2901,13 @@ export class Game {
         m.hotbarSlot,
         m.heldItemId,
         m.miningVisual,
+        m.armorHelmetId ?? 0,
+        m.armorChestId ?? 0,
+        m.armorLeggingsId ?? 0,
+        m.armorBootsId ?? 0,
+        m.bowDrawQuantized ?? 0,
+        m.aimDisplayX ?? 0,
+        m.aimDisplayY ?? 0,
       );
       if (st.status === "connected" && st.role === "host") {
         const localId = this.adapter.getLocalPeerId();
@@ -2545,6 +2923,13 @@ export class Game {
             hotbarSlot: m.hotbarSlot,
             heldItemId: m.heldItemId,
             miningVisual: m.miningVisual,
+            armorHelmetId: m.armorHelmetId ?? 0,
+            armorChestId: m.armorChestId ?? 0,
+            armorLeggingsId: m.armorLeggingsId ?? 0,
+            armorBootsId: m.armorBootsId ?? 0,
+            bowDrawQuantized: m.bowDrawQuantized ?? 0,
+            aimDisplayX: m.aimDisplayX ?? 0,
+            aimDisplayY: m.aimDisplayY ?? 0,
           });
         }
       }
@@ -2656,6 +3041,7 @@ export class Game {
       this._sessionRoster.set(localId, {
         displayName: this._displayName,
         accountId: this._accountId ?? "",
+        skinId: this._localSkinId ?? "",
       });
     }
     this.adapter.setClientAdmissionGate((peerId, displayName, accountId) => {
@@ -2852,11 +3238,15 @@ export class Game {
     const id =
       parsed.entityKey === "pig"
         ? mm.spawnSummonedPigAt(x, y, rng)
+        : parsed.entityKey === "duck"
+          ? mm.spawnSummonedDuckAt(x, y, rng)
         : parsed.entityKey === "zombie"
           ? mm.spawnSummonedZombieAt(x, y, rng)
-          : parsed.woolColor !== undefined
-            ? mm.spawnSummonedSheepWithColorAt(x, y, parsed.woolColor, rng)
-            : mm.spawnSummonedSheepAt(x, y, rng);
+          : parsed.entityKey === "slime"
+            ? mm.spawnSummonedSlimeAt(x, y, rng, parsed.woolColor)
+            : parsed.woolColor !== undefined
+              ? mm.spawnSummonedSheepWithColorAt(x, y, parsed.woolColor, rng)
+              : mm.spawnSummonedSheepAt(x, y, rng);
     if (id === null) {
       this._giveFeedbackToIssuer(
         issuerPeerId,
@@ -3098,7 +3488,7 @@ export class Game {
         this.bus.emit({
           type: "ui:chat-line",
           kind: "system",
-          text: "Usage: /summon <sheep|stratum:sheep|pig|stratum:pig|zombie|stratum:zombie> [blockX] [woolColor]",
+          text: "Usage: /summon <sheep|pig|duck|zombie|slime> [blockX] [sheepWool | slime 0-3|green|yellow|blue|red]",
         } satisfies GameEvent);
         return;
       }
@@ -3154,17 +3544,47 @@ export class Game {
   }
 
   private _computeWorldSpawnFeetY(world: World): number {
-    const airId = world.getRegistry().getByIdentifier("stratum:air").id;
-    let surfaceY: number | null = null;
-    for (let wy = 0; wy < WORLD_Y_MAX; wy++) {
-      const solid = world.getBlock(0, wy);
-      const above = world.getBlock(0, wy + 1);
-      if (solid.solid && (above.id === airId || above.replaceable)) {
-        surfaceY = wy;
-        break;
+    const registry = world.getRegistry();
+    const airId = registry.getByIdentifier("stratum:air").id;
+    const waterBlock = registry.getByIdentifier("stratum:water");
+    const waterId = waterBlock?.id;
+
+    // Scan horizontally from center outward to find dry land
+    for (let absDx = 0; absDx < 200; absDx++) {
+      // Try positive then negative x (0, 1, -1, 2, -2, ...)
+      for (const sign of [1, -1]) {
+        if (absDx === 0 && sign === -1) continue;
+        const wx = absDx * sign;
+
+        // Find surface at this x
+        let surfaceY: number | null = null;
+        for (let wy = 0; wy < WORLD_Y_MAX; wy++) {
+          const solid = world.getBlock(wx, wy);
+          const above = world.getBlock(wx, wy + 1);
+          if (solid.solid && (above.id === airId || above.replaceable)) {
+            surfaceY = wy;
+            break;
+          }
+        }
+
+        if (surfaceY === null) continue;
+
+        // Check if spawn position (feet at surfaceY + 1) would be in water
+        const spawnY = surfaceY + 1;
+        if (waterId !== undefined) {
+          const spawnBlock = world.getBlock(wx, spawnY);
+          if (spawnBlock.id === waterId) {
+            continue; // Try next x position - avoid spawning in water
+          }
+        }
+
+        // Found dry land
+        return spawnY * BLOCK_SIZE;
       }
     }
-    return ((surfaceY ?? 1) + 1) * BLOCK_SIZE;
+
+    // Fallback: spawn at origin above surface if no dry land found in range
+    return 2 * BLOCK_SIZE;
   }
 
   private _respawnLocalPlayerAfterDeath(): void {
@@ -3248,22 +3668,24 @@ export class Game {
     if (net.status === "connected" && net.role === "client") {
       const hid = net.lanHostPeerId;
       if (hid !== null) {
-        const sprintHeld = input.isDown("sprint");
         this.adapter.send(hid as PeerId, {
           type: MsgType.ENTITY_HIT_REQUEST,
           entityId: tid,
           heldItemId,
-          attackFlags: sprintHeld ? 1 : 0,
         });
       }
       return;
     }
     const rng = w.forkMobRng();
     const dmg = this._meleeDamageFromHeldItemId(heldItemId);
-    const kb = this._meleeKnockbackFromHeldItemId(heldItemId);
-    mm.damageMobFromHost(tid, rng, px, dmg, kb, {
-      sprintKnockback: input.isDown("sprint"),
+    const hitR = mm.damageMobFromHost(tid, rng, px, dmg, {
+      style: "melee",
+      baseKnockback: this._meleeTerrariaKnockbackFromHeldItemId(heldItemId),
     });
+    if (hitR.ok && hitR.dealt > 0) {
+      this._playMobHurtVocalSfx(tid);
+      em.bumpMobHealthBar(tid);
+    }
   }
 
   private _meleeDamageFromHeldItemId(heldItemId: number): number {
@@ -3285,29 +3707,49 @@ export class Game {
       if (tier === 3) return 7; // diamond
       return 5;
     }
-    // Non-sword: keep light damage for tools.
+    // Axe scaling: make axes viable melee weapons, tiered by material.
+    if (def?.toolType === "axe" || key.includes("axe")) {
+      const tier = def?.toolTier;
+      if (tier === 0) return 5; // wood
+      if (tier === 1) return 6; // stone
+      if (tier === 2) return 7; // iron/gold
+      if (tier === 3) return 9; // diamond
+      return 6;
+    }
+    // Non-weapon tools keep light damage.
     return 1;
   }
 
-  private _meleeKnockbackFromHeldItemId(heldItemId: number): number {
+  /**
+   * Terraria weapon knockback stat (tooltip scale, wiki.gg/Knockback) before `StrikeNPC` resist/caps.
+   */
+  private _meleeTerrariaKnockbackFromHeldItemId(heldItemId: number): number {
     if (heldItemId === 0) {
-      return 52;
+      return 2.85;
     }
     const ir = this._itemRegistry;
     if (ir === null) {
-      return 52;
+      return 2.85;
     }
     const def = ir.getById(heldItemId as ItemId);
     const key = def?.key ?? "";
     if (key.includes("sword")) {
       const tier = def?.toolTier;
-      if (tier === 0) return 58;
-      if (tier === 1) return 64;
-      if (tier === 2) return 70;
-      if (tier === 3) return 76;
-      return 64;
+      if (tier === 0) {
+        return 5.2;
+      }
+      if (tier === 1) {
+        return 5.85;
+      }
+      if (tier === 2) {
+        return 6.5;
+      }
+      if (tier === 3) {
+        return 7.75;
+      }
+      return 5.85;
     }
-    return 48;
+    return 3.35;
   }
 
   private _tickLocalPlayerDeath(dtSec: number): void {
@@ -3379,6 +3821,48 @@ export class Game {
         listenerY: pl.y,
         sourceX: wx * BLOCK_SIZE + BLOCK_SIZE * 0.5,
         sourceY: wy * BLOCK_SIZE + BLOCK_SIZE * 0.5,
+      },
+    });
+  }
+
+  private _playMobHurtVocalSfx(mobId: number): void {
+    const mm = this._mobManager;
+    const em = this.entityManager;
+    const snd = this.audio;
+    if (mm === null || em === null || snd === null) {
+      return;
+    }
+    const mob = mm.getById(mobId);
+    if (mob === undefined) {
+      return;
+    }
+    const now = performance.now();
+    const last = this._mobHurtSfxAtMs.get(mobId) ?? -Infinity;
+    if (now - last < 220) {
+      return;
+    }
+    this._mobHurtSfxAtMs.set(mobId, now);
+
+    const pl = em.getPlayer().state.position;
+    // Prefer entity-specific "say" sounds (random variant), else fall back to generic hit.
+    const name =
+      mob.kind === "sheep"
+        ? "entity_sheep_idle"
+        : mob.kind === "pig"
+          ? "entity_pig_idle"
+          : mob.kind === "duck"
+            ? "entity_duck_hurt"
+          : "dmg_hit";
+    snd.playSfx(name, {
+      volume:
+        mob.kind === "zombie" ? 0.5 : mob.kind === "slime" ? 0.36 : 0.42,
+      pitchVariance:
+        mob.kind === "zombie" ? 22 : mob.kind === "slime" ? 55 : 85,
+      world: {
+        listenerX: pl.x,
+        listenerY: pl.y,
+        sourceX: mob.x,
+        sourceY: mob.y,
       },
     });
   }
@@ -3615,6 +4099,89 @@ export class Game {
     }
   }
 
+  private _tickDuckAmbientSfx(dtSec: number): void {
+    const mm = this._mobManager;
+    const em = this.entityManager;
+    const snd = this.audio;
+    if (mm === null || em === null || snd === null) {
+      return;
+    }
+    const pl = em.getPlayer();
+    if (pl.state.dead) {
+      return;
+    }
+    const lx = pl.state.position.x;
+    const ly = pl.state.position.y;
+    const views = mm.getPublicViews().filter((v) => v.type === MobType.Duck);
+    const alive = new Set<number>();
+    for (const v of views) {
+      alive.add(v.id);
+      let st = this._duckAmbientSfxById.get(v.id);
+      if (st === undefined) {
+        st = { quackIn: 2 + Math.random() * 4, stepPx: 0, deathPlayed: false };
+        this._duckAmbientSfxById.set(v.id, st);
+      }
+      if (v.deathAnimRemainSec > 0) {
+        if (!st.deathPlayed) {
+          st.deathPlayed = true;
+          snd.playSfx("entity_duck_death", {
+            volume: 0.44,
+            pitchVariance: 45,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+        st.stepPx = 0;
+        continue;
+      }
+      st.quackIn -= dtSec;
+      if (st.quackIn <= 0) {
+        st.quackIn = 4 + Math.random() * 6;
+        if (Math.random() < 0.5) {
+          snd.playSfx("entity_duck_idle", {
+            volume: 0.42,
+            pitchVariance: 85,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+      }
+      if (v.walking) {
+        st.stepPx += Math.abs(v.vx) * dtSec;
+        const span = 28;
+        if (st.stepPx >= span) {
+          const q = Math.floor(st.stepPx / span);
+          st.stepPx -= q * span;
+          snd.playSfx("entity_duck_step", {
+            volume: 0.34,
+            pitchVariance: 55,
+            world: {
+              listenerX: lx,
+              listenerY: ly,
+              sourceX: v.x,
+              sourceY: v.y,
+            },
+          });
+        }
+      } else {
+        st.stepPx = 0;
+      }
+    }
+    for (const id of [...this._duckAmbientSfxById.keys()]) {
+      if (!alive.has(id)) {
+        this._duckAmbientSfxById.delete(id);
+      }
+    }
+  }
+
   private _maybeBroadcastFurnaceSnapshotThrottled(wx: number, wy: number, nowMs: number): void {
     const key = `${wx},${wy}`;
     const last = this._furnaceNetSentAt.get(key) ?? 0;
@@ -3628,7 +4195,7 @@ export class Game {
     const w = this.world;
     const em = this.entityManager;
     if (w === null || em === null) {
-      return { nearCraftingTable: false, nearFurnace: false };
+      return { nearCraftingTable: false, nearFurnace: false, nearStonecutter: false };
     }
     const reg = w.getRegistry();
     const feet = em.getPlayer().state.position;
@@ -3647,7 +4214,17 @@ export class Game {
       const furnaceId = reg.getByIdentifier("stratum:furnace").id;
       nearFurnace = isNearBlockOfId(w, furnaceId, feet, FURNACE_ACCESS_RADIUS_BLOCKS);
     }
-    return { nearCraftingTable, nearFurnace };
+    let nearStonecutter = false;
+    if (reg.isRegistered("stratum:stonecutter")) {
+      const stonecutterId = reg.getByIdentifier("stratum:stonecutter").id;
+      nearStonecutter = isNearBlockOfId(
+        w,
+        stonecutterId,
+        feet,
+        STONECUTTER_ACCESS_RADIUS_BLOCKS,
+      );
+    }
+    return { nearCraftingTable, nearFurnace, nearStonecutter };
   }
 
   /** Recipes shown in the crafting UI (station-gated by proximity). */
@@ -3663,6 +4240,9 @@ export class Game {
       if (r.station === RECIPE_STATION_FURNACE) {
         return ctx.nearFurnace;
       }
+      if (r.station === RECIPE_STATION_STONECUTTER) {
+        return ctx.nearStonecutter;
+      }
       return false;
     });
   }
@@ -3672,11 +4252,17 @@ export class Game {
     for (const r of this._visibleRecipesForCrafting()) {
       set.add(r.category);
     }
-    const rest = [...set].filter((c) => c !== "Furnace").sort((a, b) => a.localeCompare(b));
+    const rest = [...set]
+      .filter((c) => c !== "Furnace" && c !== "Stonecutter")
+      .sort((a, b) => a.localeCompare(b));
+    const tail: string[] = [];
     if (set.has("Furnace")) {
-      return [...rest, "Furnace"];
+      tail.push("Furnace");
     }
-    return rest;
+    if (set.has("Stonecutter")) {
+      tail.push("Stonecutter");
+    }
+    return [...rest, ...tail];
   }
 
   private _nearestFurnaceCell(): { wx: number; wy: number } | null {
@@ -4349,6 +4935,19 @@ export class Game {
     return Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= R;
   }
 
+  private _stonecutterCellWithinReach(wx: number, wy: number): boolean {
+    const w = this.world;
+    const em = this.entityManager;
+    if (w === null || em === null) {
+      return false;
+    }
+    const feet = em.getPlayer().state.position;
+    const pcx = Math.floor(feet.x / BLOCK_SIZE);
+    const pcy = Math.floor(feet.y / BLOCK_SIZE);
+    const R = STONECUTTER_ACCESS_RADIUS_BLOCKS;
+    return Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= R;
+  }
+
   /** RMB crafting table: open inventory + recipe UI (leave inventory open if already up). */
   private _handleCraftingTableOpenRequest(wx: number, wy: number): void {
     const w = this.world;
@@ -4366,6 +4965,35 @@ export class Game {
       return;
     }
     if (!this._craftingTableCellWithinReach(wx, wy)) {
+      return;
+    }
+    this._lastFurnaceOpenSfxKey = null;
+    this._activeChestAnchor = null;
+    if (!this.isInventoryOpen) {
+      this.isInventoryOpen = true;
+      input.setWorldInputBlocked(true);
+    }
+    this._applyInventoryPanelsOpen(true);
+    this._craftingPanel?.update(em.getPlayer().inventory);
+  }
+
+  /** RMB stonecutter: same as crafting table (inventory + recipe UI). */
+  private _handleStonecutterOpenRequest(wx: number, wy: number): void {
+    const w = this.world;
+    const input = this.input;
+    const em = this.entityManager;
+    if (w === null || input === null || em === null) {
+      return;
+    }
+    const reg = w.getRegistry();
+    if (!reg.isRegistered("stratum:stonecutter")) {
+      return;
+    }
+    const id = reg.getByIdentifier("stratum:stonecutter").id;
+    if (w.getBlock(wx, wy).id !== id) {
+      return;
+    }
+    if (!this._stonecutterCellWithinReach(wx, wy)) {
       return;
     }
     this._lastFurnaceOpenSfxKey = null;
@@ -4817,6 +5445,12 @@ export class Game {
     slotIndex: number,
     fromEl: HTMLElement,
   ): void {
+    const isArmorSlot =
+      slotIndex >= ARMOR_UI_SLOT_BASE &&
+      slotIndex < ARMOR_UI_SLOT_BASE + ARMOR_SLOT_COUNT;
+    const armorSlot: ArmorSlot | null = isArmorSlot
+      ? ((slotIndex - ARMOR_UI_SLOT_BASE) as ArmorSlot)
+      : null;
     const net = this.adapter.state;
     if (net.status === "connected" && net.role === "client") {
       const em = this.entityManager;
@@ -4833,7 +5467,10 @@ export class Game {
       if (!this._chestWithinReach(anchor)) {
         return;
       }
-      const src = inv.getStack(slotIndex);
+      const src =
+        armorSlot !== null
+          ? inv.getArmorStack(armorSlot)
+          : inv.getStack(slotIndex);
       if (src === null || src.count <= 0) {
         return;
       }
@@ -4847,7 +5484,11 @@ export class Game {
       if (firstChestIndex === null) {
         return;
       }
-      inv.setStack(slotIndex, remainder);
+      if (armorSlot !== null) {
+        inv.setArmorStack(armorSlot, remainder);
+      } else {
+        inv.setStack(slotIndex, remainder);
+      }
       w.setChestTileAtAnchor(anchor.ax, anchor.ay, nextChest);
       this._chestPanel?.scrollChestSlotIntoView(firstChestIndex);
       const toEl = this._chestSlotDomElement(firstChestIndex);
@@ -4877,7 +5518,10 @@ export class Game {
 
     const anchor = this._activeChestAnchor;
     if (anchor !== null && this._chestWithinReach(anchor)) {
-      const chestIdx = this._quickMovePlayerSlotToChest(slotIndex);
+      const chestIdx = this._quickMovePlayerOrArmorSlotToChest(
+        slotIndex,
+        armorSlot,
+      );
       if (chestIdx !== null) {
         this._chestPanel?.scrollChestSlotIntoView(chestIdx);
         const toEl = this._chestSlotDomElement(chestIdx);
@@ -4886,9 +5530,18 @@ export class Game {
       }
     }
 
-    const invDest = inv.quickMoveFromSlot(slotIndex);
+    const invDest =
+      armorSlot !== null
+        ? inv.quickMoveFromArmorSlot(armorSlot)
+        : inv.quickMoveFromSlot(slotIndex);
     if (invDest !== null) {
-      const toEl = this.inventoryUI?.getOverlaySlotElement(invDest) ?? null;
+      const toEl =
+        invDest >= ARMOR_UI_SLOT_BASE &&
+        invDest < ARMOR_UI_SLOT_BASE + ARMOR_SLOT_COUNT
+          ? (this.inventoryUI?.getArmorSlotElement(
+              (invDest - ARMOR_UI_SLOT_BASE) as ArmorSlot,
+            ) ?? null)
+          : (this.inventoryUI?.getOverlaySlotElement(invDest) ?? null);
       playShiftSlotFlyAnimation(fromEl, toEl);
     }
   }
@@ -5018,7 +5671,10 @@ export class Game {
     this._broadcastChestSnapshotNow(anchor.ax, anchor.ay);
   }
 
-  private _quickMovePlayerSlotToChest(playerSlot: number): number | null {
+  private _quickMovePlayerOrArmorSlotToChest(
+    slotIndex: number,
+    armorSlot: ArmorSlot | null,
+  ): number | null {
     const anchor = this._activeChestAnchor;
     const w = this.world;
     const em = this.entityManager;
@@ -5033,7 +5689,10 @@ export class Game {
     if (inv.getCursorStack() !== null) {
       return null;
     }
-    const src = inv.getStack(playerSlot);
+    const src =
+      armorSlot !== null
+        ? inv.getArmorStack(armorSlot)
+        : inv.getStack(slotIndex);
     if (src === null || src.count <= 0) {
       return null;
     }
@@ -5047,7 +5706,11 @@ export class Game {
     if (firstChestIndex === null) {
       return null;
     }
-    inv.setStack(playerSlot, remainder);
+    if (armorSlot !== null) {
+      inv.setArmorStack(armorSlot, remainder);
+    } else {
+      inv.setStack(slotIndex, remainder);
+    }
     w.setChestTileAtAnchor(anchor.ax, anchor.ay, nextChest);
     this._broadcastChestSnapshotNow(anchor.ax, anchor.ay);
     return firstChestIndex;
@@ -5369,6 +6032,28 @@ export class Game {
       }
 
       this._worldTime.tick(FIXED_TIMESTEP_MS);
+
+      {
+        const snd = this.audio;
+        const w = this.world;
+        const em = this.entityManager;
+        if (snd !== null) {
+          snd.setWorldForSpatial(w);
+        }
+        if (snd !== null && em !== null) {
+          const pl = em.getPlayer().state.position;
+          if (tickIndex % AUDIO_SPATIAL_LISTENER_UPDATE_INTERVAL_TICKS === 0) {
+            snd.updateListenerPosition(pl.x, pl.y);
+          }
+          if (
+            w !== null &&
+            tickIndex % AUDIO_ENV_DETECT_INTERVAL_TICKS === 0
+          ) {
+            snd.updateEnvironment(w, pl.x, pl.y);
+          }
+        }
+      }
+
       const netStateForTime = this.adapter.state;
       const role =
         netStateForTime.status === "connected"
@@ -5476,11 +6161,23 @@ export class Game {
             blockId: bid,
             progress: plState.breakProgress,
           });
+          if (brk.layer === "fg") {
+            this.leafFallParticles?.syncLocalMiningBoost({
+              wx: brk.wx,
+              wy: brk.wy,
+              blockId: bid,
+              progress: plState.breakProgress,
+            });
+          } else {
+            this.leafFallParticles?.syncLocalMiningBoost(null);
+          }
         } else {
           this.blockBreakParticles?.syncLocalMiningBreak(null);
+          this.leafFallParticles?.syncLocalMiningBoost(null);
         }
       } else {
         this.blockBreakParticles?.syncLocalMiningBreak(null);
+        this.leafFallParticles?.syncLocalMiningBoost(null);
       }
 
       this._maybeBroadcastBlockBreakProgress(world, plState);
@@ -5513,9 +6210,65 @@ export class Game {
           this._tickFurnaceSmeltAmbient(dtSec);
           this._tickSheepAmbientSfx(dtSec);
           this._tickPigAmbientSfx(dtSec);
+          this._tickDuckAmbientSfx(dtSec);
         }
       }
       const dropNet = this.adapter.state;
+      {
+        const mm = this._mobManager;
+        if (role === "offline" || role === "host") {
+          const rng = world.forkMobRng();
+          world.updateArrows(
+            dtSec,
+            mm !== null
+              ? (ox, oy, nx, ny, damage, shooterFeetX) =>
+                  mm.tryArrowStrikeSegment(ox, oy, nx, ny, damage, shooterFeetX, rng)
+              : null,
+            mm !== null
+              ? (mobId) => {
+                  const m = mm.getById(mobId);
+                  if (m === undefined) {
+                    return undefined;
+                  }
+                  return {
+                    x: m.x,
+                    y: m.y,
+                    tiltRad: mobDeathTipOverTiltRad(
+                      m.kind,
+                      m.facingRight,
+                      m.deathAnimRemainSec,
+                    ),
+                    facingRight: m.facingRight,
+                  };
+                }
+              : undefined,
+            (sx, sy) => {
+              const snd = this.audio;
+              const em = this.entityManager;
+              if (snd === null || em === null) {
+                return;
+              }
+              const lp = em.getPlayer().state.position;
+              const listenY = lp.y + PLAYER_HEIGHT * 0.5;
+              snd.playSfx("bowhit", {
+                pitchVariance: 55,
+                world: {
+                  listenerX: lp.x,
+                  listenerY: listenY,
+                  sourceX: sx,
+                  sourceY: sy,
+                },
+              });
+            },
+            (mobId) => {
+              this.entityManager?.bumpMobHealthBar(mobId);
+            },
+          );
+        } else {
+          world.updateArrows(dtSec, null, undefined, undefined, undefined);
+        }
+      }
+
       world.updateDroppedItems(
         dtSec,
         {
@@ -5556,6 +6309,36 @@ export class Game {
           : undefined,
       );
 
+      if (
+        (role === "offline" || role === "host") &&
+        this.world !== null &&
+        entityManager !== null
+      ) {
+        const arrowItemId = entityManager.tryGetArrowItemId();
+        if (arrowItemId !== undefined) {
+          this.world.collectGroundStuckArrows(
+            {
+              x: pl.x,
+              y: pl.y + PLAYER_HEIGHT * 0.5,
+            },
+            entityManager.getPlayer().inventory,
+            arrowItemId,
+            () => {
+              const snd = this.audio;
+              if (snd === null) {
+                return;
+              }
+              const now = performance.now();
+              if (now - this._lastItemPickupSfxMs < ITEM_PICKUP_SFX_MIN_INTERVAL_MS) {
+                return;
+              }
+              this._lastItemPickupSfxMs = now;
+              snd.playSfx("item_pickup", { pitchVariance: 120 });
+            },
+          );
+        }
+      }
+
       if (role !== "client" && this.world !== null && this._mobManager !== null) {
         const rng = this.world.forkMobRng();
         const world = this.world;
@@ -5584,6 +6367,43 @@ export class Game {
             zombiePlayerTargets.push({ peerId: null, x: pl.x, y: pl.y });
           }
         }
+        let spawnViewRects: ReadonlyArray<MobSpawnViewRect> | undefined;
+        const pipeForSpawn = this.pipeline;
+        if (pipeForSpawn !== null) {
+          try {
+            const cam = pipeForSpawn.getCamera();
+            const { width: sw, height: sh } = pipeForSpawn.pixiApp.renderer.screen;
+            if (sw > 0 && sh > 0) {
+              const rects: MobSpawnViewRect[] = [
+                buildMobSpawnViewRectFromCamera(
+                  cam,
+                  sw,
+                  sh,
+                  MOB_SPAWN_VIEW_MARGIN_SCREEN_PX,
+                ),
+              ];
+              const z = cam.getZoom();
+              const localPeerForSpawn = this.adapter.getLocalPeerId();
+              for (const t of zombiePlayerTargets) {
+                if (t.peerId !== null && t.peerId !== localPeerForSpawn) {
+                  rects.push(
+                    buildMobSpawnViewRectCenteredOnFeet(
+                      t.x,
+                      t.y,
+                      sw,
+                      sh,
+                      z,
+                      MOB_SPAWN_VIEW_MARGIN_SCREEN_PX,
+                    ),
+                  );
+                }
+              }
+              spawnViewRects = rects;
+            }
+          } catch {
+            /* Pixi not ready */
+          }
+        }
         this._mobManager.tickHost(
           FIXED_TIMESTEP_SEC,
           rng,
@@ -5608,6 +6428,7 @@ export class Game {
               });
             }
           },
+          spawnViewRects,
         );
         const flush = this._mobManager.flushHostReplication();
         const netSt = this.adapter.state;
@@ -5645,6 +6466,14 @@ export class Game {
             if (v.burning) {
               flags |= 32;
             }
+            if (v.type === MobType.Slime) {
+              if (v.slimeOnGround) {
+                flags |= ENTITY_STATE_FLAG_SLIME_ON_GROUND;
+              }
+              if (v.slimeJumpPriming) {
+                flags |= ENTITY_STATE_FLAG_SLIME_JUMP_PRIMING;
+              }
+            }
             this.adapter.broadcast({
               type: MsgType.ENTITY_STATE,
               entityId: v.id,
@@ -5675,12 +6504,38 @@ export class Game {
       }
 
       if (role !== "client" && this._itemRegistry !== null) {
+        const tWater = import.meta.env.DEV ? chunkPerfNow() : 0;
         world.tickWaterSystems();
+        if (import.meta.env.DEV) {
+          chunkPerfLog("game:tickWaterSystems", chunkPerfNow() - tWater);
+        }
+        const simChunks = new Set<string>();
+        {
+          const localPx = entityManager.getPlayer().state.position.x;
+          const localPy = entityManager.getPlayer().state.position.y;
+          const lcx = Math.floor(localPx / BLOCK_SIZE / CHUNK_SIZE);
+          const lcy = Math.floor(localPy / BLOCK_SIZE / CHUNK_SIZE);
+          for (let dy = -SIMULATION_DISTANCE_CHUNKS; dy <= SIMULATION_DISTANCE_CHUNKS; dy++) {
+            for (let dx = -SIMULATION_DISTANCE_CHUNKS; dx <= SIMULATION_DISTANCE_CHUNKS; dx++) {
+              simChunks.add(`${lcx + dx},${lcy + dy}`);
+            }
+          }
+          for (const rp of world.getRemotePlayers().values()) {
+            const rcx = Math.floor(rp.x / BLOCK_SIZE / CHUNK_SIZE);
+            const rcy = Math.floor(rp.y / BLOCK_SIZE / CHUNK_SIZE);
+            for (let dy = -SIMULATION_DISTANCE_CHUNKS; dy <= SIMULATION_DISTANCE_CHUNKS; dy++) {
+              for (let dx = -SIMULATION_DISTANCE_CHUNKS; dx <= SIMULATION_DISTANCE_CHUNKS; dx++) {
+                simChunks.add(`${rcx + dx},${rcy + dy}`);
+              }
+            }
+          }
+        }
         const changed = world.tickFurnaces(
           FIXED_TIMESTEP_SEC,
           this._worldTime.ms,
           this._itemRegistry,
           this._smeltingRegistry,
+          simChunks,
         );
         const nowMs = performance.now();
         for (const key of changed) {
@@ -5696,25 +6551,42 @@ export class Game {
         }
       }
 
+      const tLightFlush = import.meta.env.DEV ? chunkPerfNow() : 0;
+      world.flushPendingLightRecomputes();
+      if (import.meta.env.DEV) {
+        chunkPerfLog("game:flushPendingLightRecomputes", chunkPerfNow() - tLightFlush);
+      }
+      world.flushPendingBlockChangedEvents();
+
+      if (this._pendingBlockUpdates.length > 0) {
+        const st = this.adapter.state;
+        if (st.status === "connected" && st.role === "host") {
+          if (this._pendingBlockUpdates.length === 1) {
+            const e = this._pendingBlockUpdates[0]!;
+            this.adapter.broadcast({
+              type: MsgType.BLOCK_UPDATE,
+              x: e.x,
+              y: e.y,
+              blockId: e.blockId,
+              layer: e.layer,
+              cellMetadata: e.cellMetadata,
+            });
+          } else {
+            this.adapter.broadcast({
+              type: MsgType.BLOCK_UPDATE_BATCH,
+              entries: this._pendingBlockUpdates,
+            });
+          }
+        }
+        this._pendingBlockUpdates.length = 0;
+      }
+
       input.postUpdate();
 
       const p = entityManager.getPlayer().state.position;
       const bx = Math.floor(p.x / BLOCK_SIZE);
       const by = Math.floor(p.y / BLOCK_SIZE);
-      this.fixedAsyncChain = this.fixedAsyncChain
-        .then(() =>
-          world.streamChunksAroundPlayer(bx, by).then(() => {
-            const st = this.adapter.state;
-            const authority =
-              st.status !== "connected" || st.role !== "client";
-            if (authority && this._blockInteractions !== null) {
-              this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
-            }
-          }),
-        )
-        .catch((err: unknown) => {
-          console.warn("[Game] streamChunksAroundPlayer failed", err);
-        });
+      this._requestChunkStreamAroundPlayer(world, bx, by);
     }
 
     this.bus.emit({
@@ -5723,6 +6595,37 @@ export class Game {
       dtSec,
       worldTimeMs: this._worldTime.ms,
     } satisfies GameEvent);
+  }
+
+  /** Coalesces per-tick chunk streaming so slow loads always target the latest player block. */
+  private _requestChunkStreamAroundPlayer(world: World, bx: number, by: number): void {
+    this._chunkStreamBx = bx;
+    this._chunkStreamBy = by;
+    if (this._chunkStreamInflight) {
+      this._chunkStreamDirty = true;
+      return;
+    }
+    this._chunkStreamInflight = true;
+    void this._runChunkStreamLoop(world);
+  }
+
+  private async _runChunkStreamLoop(world: World): Promise<void> {
+    try {
+      do {
+        this._chunkStreamDirty = false;
+        await world.streamChunksAroundPlayer(this._chunkStreamBx, this._chunkStreamBy);
+        const st = this.adapter.state;
+        const authority = st.status !== "connected" || st.role !== "client";
+        if (authority && this._blockInteractions !== null) {
+          this._blockInteractions.hydrateWheatSchedulesInLoadedWorld();
+          this._blockInteractions.hydrateSaplingSchedulesInLoadedWorld();
+        }
+      } while (this._chunkStreamDirty);
+    } catch (err: unknown) {
+      console.warn("[Game] streamChunksAroundPlayer failed", err);
+    } finally {
+      this._chunkStreamInflight = false;
+    }
   }
 
   private _maybeBroadcastBlockBreakProgress(
@@ -5831,10 +6734,41 @@ export class Game {
         centre === null
           ? cm.getLoadedChunks()
           : cm.getChunksWithinDistance(centre, VIEW_DISTANCE_CHUNKS);
+      const tSync = import.meta.env.DEV ? chunkPerfNow() : 0;
       this.chunkRenderer.syncChunks(visible);
+      if (import.meta.env.DEV) {
+        chunkPerfLog("game:chunkRendererSync", chunkPerfNow() - tSync);
+      }
       const tSec = now * 0.001;
-      this.chunkRenderer.updateFoliageWind(tSec);
+      let foliageWindBodies: FoliageWindInfluence[] | undefined;
+      if (this.entityManager !== null) {
+        const bodies: FoliageWindInfluence[] = [];
+        const s = this.entityManager.getPlayer().state;
+        if (!s.dead && !s.sleeping) {
+          const ix =
+            s.prevPosition.x + (s.position.x - s.prevPosition.x) * alpha;
+          const iy =
+            s.prevPosition.y + (s.position.y - s.prevPosition.y) * alpha;
+          bodies.push({ feetX: ix, feetY: iy, vx: s.velocity.x });
+        }
+        for (const rp of this.world.getRemotePlayers().values()) {
+          const d = rp.getDisplayPose(now);
+          bodies.push({ feetX: d.x, feetY: d.y, vx: d.vx });
+        }
+        if (bodies.length > 0) {
+          foliageWindBodies = bodies;
+        }
+      }
+      this.chunkRenderer.updateFoliageWind(tSec, foliageWindBodies);
       this.chunkRenderer.updateFurnaceFire(tSec);
+      if (this.entityManager !== null) {
+        this.chunkRenderer.updateWaterRipples(
+          tSec,
+          this.entityManager.collectWaterRippleBodies(alpha, now),
+        );
+      } else {
+        this.chunkRenderer.updateWaterRipples(tSec, undefined);
+      }
     }
 
     if (this.entityManager !== null && this.pipeline !== null) {
@@ -5860,6 +6794,7 @@ export class Game {
       this.entityManager !== null &&
       this.world !== null
     ) {
+      const tTags = import.meta.env.DEV ? chunkPerfNow() : 0;
       const s = this.entityManager.getPlayer().state;
       this._nametagOverlay.update(
         this.mount,
@@ -5878,6 +6813,17 @@ export class Game {
         this._sessionRoster,
         this.adapter.getLocalPeerId(),
       );
+      if (import.meta.env.DEV) {
+        chunkPerfLog("game:nametagOverlayUpdate", chunkPerfNow() - tTags);
+      }
+    }
+
+    if (this._damageNumbersOverlay !== null && this.pipeline !== null) {
+      this._damageNumbersOverlay.update(
+        this.pipeline.getCanvas(),
+        this.pipeline.getCamera(),
+        dtSec,
+      );
     }
 
     if (this.entityManager !== null && this.inventoryUI !== null) {
@@ -5886,6 +6832,7 @@ export class Game {
         pl.inventory,
         pl.state.hotbarSlot,
         pl.state.health,
+        pl.state.bowDrawSec,
       );
       this._craftingPanel?.update(pl.inventory);
       this._chestPanel?.update();
@@ -5960,5 +6907,37 @@ export class Game {
     }
     this.pipeline?.render(alpha);
     this.bus.emit({ type: "game:render", alpha } satisfies GameEvent);
+  }
+
+  /** Read custom skin bytes from IndexedDB and broadcast as PLAYER_SKIN_DATA. */
+  private async _sendLocalCustomSkinData(): Promise<void> {
+    const skinId = this._localSkinId;
+    if (skinId === null || !skinId.startsWith("custom:")) {
+      return;
+    }
+    const customId = skinId.slice("custom:".length);
+    try {
+      const tempStore = new IndexedDBStore();
+      await tempStore.openDB();
+      const record = await tempStore.getCustomSkin(customId);
+      if (record === undefined) {
+        return;
+      }
+      const bytes = new Uint8Array(await record.blob.arrayBuffer());
+      if (bytes.length > PLAYER_SKIN_DATA_MAX_BYTES) {
+        return;
+      }
+      const localId = this.adapter.getLocalPeerId();
+      if (localId === null) {
+        return;
+      }
+      this.adapter.broadcast({
+        type: MsgType.PLAYER_SKIN_DATA,
+        subjectPeerId: localId,
+        skinPngBytes: bytes,
+      });
+    } catch {
+      // Non-fatal; remote players will see the default skin.
+    }
   }
 }

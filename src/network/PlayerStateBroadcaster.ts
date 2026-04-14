@@ -13,6 +13,13 @@ type PlayerStateSnapshot = {
   hotbarSlot: number;
   heldItemId: number;
   miningVisual: boolean;
+  armorHelmetId: number;
+  armorChestId: number;
+  armorLeggingsId: number;
+  armorBootsId: number;
+  bowDrawQuantized: number;
+  aimDisplayX: number;
+  aimDisplayY: number;
 };
 
 /**
@@ -34,6 +41,13 @@ export class PlayerStateBroadcaster {
   private _lastHotbarSlot = 0;
   private _lastHeldItemId = 0;
   private _lastMiningVisual = false;
+  private _lastArmorHelmetId = 0;
+  private _lastArmorChestId = 0;
+  private _lastArmorLeggingsId = 0;
+  private _lastArmorBootsId = 0;
+  private _lastBowDrawQ = 0;
+  private _lastAimX = 0;
+  private _lastAimY = 0;
   private _active = false;
 
   constructor(adapter: INetworkAdapter, getState: StateProvider) {
@@ -86,7 +100,14 @@ export class PlayerStateBroadcaster {
       snap.facingRight === this._lastFacing &&
       snap.hotbarSlot === this._lastHotbarSlot &&
       snap.heldItemId === this._lastHeldItemId &&
-      snap.miningVisual === this._lastMiningVisual
+      snap.miningVisual === this._lastMiningVisual &&
+      snap.armorHelmetId === this._lastArmorHelmetId &&
+      snap.armorChestId === this._lastArmorChestId &&
+      snap.armorLeggingsId === this._lastArmorLeggingsId &&
+      snap.armorBootsId === this._lastArmorBootsId &&
+      snap.bowDrawQuantized === this._lastBowDrawQ &&
+      snap.aimDisplayX === this._lastAimX &&
+      snap.aimDisplayY === this._lastAimY
     ) {
       return;
     }
@@ -102,6 +123,13 @@ export class PlayerStateBroadcaster {
       hotbarSlot: snap.hotbarSlot,
       heldItemId: snap.heldItemId,
       miningVisual: snap.miningVisual,
+      armorHelmetId: snap.armorHelmetId,
+      armorChestId: snap.armorChestId,
+      armorLeggingsId: snap.armorLeggingsId,
+      armorBootsId: snap.armorBootsId,
+      bowDrawQuantized: snap.bowDrawQuantized,
+      aimDisplayX: snap.aimDisplayX,
+      aimDisplayY: snap.aimDisplayY,
     });
 
     this._hasLast = true;
@@ -114,5 +142,12 @@ export class PlayerStateBroadcaster {
     this._lastHotbarSlot = snap.hotbarSlot;
     this._lastHeldItemId = snap.heldItemId;
     this._lastMiningVisual = snap.miningVisual;
+    this._lastArmorHelmetId = snap.armorHelmetId;
+    this._lastArmorChestId = snap.armorChestId;
+    this._lastArmorLeggingsId = snap.armorLeggingsId;
+    this._lastArmorBootsId = snap.armorBootsId;
+    this._lastBowDrawQ = snap.bowDrawQuantized;
+    this._lastAimX = snap.aimDisplayX;
+    this._lastAimY = snap.aimDisplayY;
   }
 }

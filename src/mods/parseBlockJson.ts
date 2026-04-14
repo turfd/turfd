@@ -52,6 +52,13 @@ const stratumBlockComponentsSchema = z
     /** Furnace: burn time per block item (`burn_seconds` per consumed unit). */
     "stratum:fuel": z.object({ burn_seconds: z.number().positive() }).strict().optional(),
     "stratum:stair": z.boolean().optional(),
+    /**
+     * When true, skips auto-creating a block-item for this block.
+     * A standalone item JSON with an explicit `stratum:numeric_id` must be provided instead.
+     */
+    "stratum:no_block_item": z.boolean().optional(),
+    /** Multi-cell painting block placed on background walls. */
+    "stratum:is_painting": z.boolean().optional(),
     /** Stable save/wire id; must be dense 0..N-1 with air = 0 (`BlockRegistry.registerInOrder`). */
     "stratum:numeric_id": z.number().int().min(0).max(65535),
   })
@@ -106,6 +113,8 @@ export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
     tags: c["stratum:tags"],
     fuelBurnSeconds: c["stratum:fuel"]?.burn_seconds,
     ...(c["stratum:stair"] === true ? { isStair: true as const } : {}),
+    ...(c["stratum:no_block_item"] === true ? { noBlockItem: true as const } : {}),
+    ...(c["stratum:is_painting"] === true ? { isPainting: true as const } : {}),
     numericId: c["stratum:numeric_id"],
   };
 }

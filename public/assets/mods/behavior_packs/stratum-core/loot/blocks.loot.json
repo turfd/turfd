@@ -47,8 +47,10 @@
       ]
     },
     "stratum:gravel": {
+      "roll": "one_of",
       "entries": [
-        { "itemKey": "stratum:gravel", "countMin": 1, "countMax": 1, "chance": 1.0 }
+        { "itemKey": "stratum:flint", "countMin": 1, "countMax": 1, "chance": 0.1 },
+        { "itemKey": "stratum:gravel", "countMin": 1, "countMax": 1, "chance": 0.9 }
       ]
     },
     "stratum:glass": {
@@ -355,6 +357,41 @@
     "stratum:bed": {
       "entries": [
         { "itemKey": "stratum:bed", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:granite": {
+      "entries": [
+        { "itemKey": "stratum:granite", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:smooth_stone": {
+      "entries": [
+        { "itemKey": "stratum:smooth_stone", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:stone_bricks": {
+      "entries": [
+        { "itemKey": "stratum:stone_bricks", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:stone_brick_stairs": {
+      "entries": [
+        { "itemKey": "stratum:stone_brick_stairs", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:stonecutter": {
+      "entries": [
+        { "itemKey": "stratum:stonecutter", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:chiseled_stone_bricks": {
+      "entries": [
+        { "itemKey": "stratum:chiseled_stone_bricks", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
+    "stratum:painting": {
+      "entries": [
+        { "itemKey": "stratum:painting", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     }
   }

@@ -60,8 +60,8 @@ export class LightingComposer {
       if (!this._textures.has(key)) {
         this._textures.set(key, new LightTexture());
       }
-      this._occlusion?.markDirty();
-      this._indirect?.markDirty();
+      this._occlusion?.markDirty(e.chunkX, e.chunkY);
+      this._indirect?.markDirty(e.chunkX, e.chunkY);
     });
   }
 

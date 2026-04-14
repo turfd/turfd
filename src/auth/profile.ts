@@ -8,6 +8,8 @@ import {
 export interface ProfileRecord {
   readonly id: string;
   readonly username: string;
+  /** Selected skin id; `null` or `undefined` = default skin. */
+  readonly skinId?: string | null;
 }
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9_]+$/;

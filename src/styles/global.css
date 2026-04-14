@@ -31,6 +31,12 @@ body {
   display: block;
 }
 
+/* During startup intro, only show deterministic startup overlays/backdrop stack. */
+#app.stratum-startup-intro-active
+  > *:not(.stratum-menu-backdrop):not(.mm-root):not(.stratum-startup-intro-overlay):not(#stratum-startup-boot) {
+  visibility: hidden !important;
+}
+
 /*
  * During world load, hide everything except the loading overlay and the menu-style
  * Pixi background (same stack as the main menu — see MenuBackground).

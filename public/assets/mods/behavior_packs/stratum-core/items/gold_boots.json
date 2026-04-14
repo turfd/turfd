@@ -1,0 +1,17 @@
+﻿{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:gold_boots"
+    },
+    "components": {
+      "stratum:display_name": "Golden Boots",
+      "stratum:texture_key": "gold_boots",
+      "stratum:max_stack": 1,
+      "stratum:max_durability": 91,
+      "stratum:numeric_id": 144,
+      "stratum:tags": ["stratum:armor", "stratum:armor_boots"],
+      "stratum:inventory_tooltip": "Foot armor"
+    }
+  }
+}

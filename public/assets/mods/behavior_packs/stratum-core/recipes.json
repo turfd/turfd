@@ -68,6 +68,44 @@
       "output": { "itemId": "stratum:furnace", "count": 1 }
     },
     {
+      "id": "stratum:stonecutter_from_iron_and_stone",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:iron_ingot", "count": 1 },
+        { "itemId": "stratum:stone", "count": 3 }
+      ],
+      "output": { "itemId": "stratum:stonecutter", "count": 1 }
+    },
+    {
+      "id": "stratum:smooth_stone_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "tag": "stratum:stonecutter_cut_source", "count": 1 }],
+      "output": { "itemId": "stratum:smooth_stone", "count": 1 }
+    },
+    {
+      "id": "stratum:stone_bricks_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "tag": "stratum:stonecutter_cut_source", "count": 4 }],
+      "output": { "itemId": "stratum:stone_bricks", "count": 4 }
+    },
+    {
+      "id": "stratum:stone_brick_stairs_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "itemId": "stratum:stone_bricks", "count": 1 }],
+      "output": { "itemId": "stratum:stone_brick_stairs", "count": 1 }
+    },
+    {
+      "id": "stratum:chiseled_stone_bricks_at_stonecutter",
+      "category": "Stonecutter",
+      "station": "stratum:stonecutter",
+      "ingredients": [{ "itemId": "stratum:stone_bricks", "count": 1 }],
+      "output": { "itemId": "stratum:chiseled_stone_bricks", "count": 1 }
+    },
+    {
       "id": "stratum:chest_from_planks",
       "category": "Workbench",
       "station": "stratum:crafting_table",
@@ -417,6 +455,100 @@
         { "tag": "stratum:planks", "count": 4 }
       ],
       "output": { "itemId": "stratum:bed", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_helmet_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:iron_ingot", "count": 5 }],
+      "output": { "itemId": "stratum:iron_helmet", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_chestplate_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:iron_ingot", "count": 8 }],
+      "output": { "itemId": "stratum:iron_chestplate", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_leggings_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:iron_ingot", "count": 7 }],
+      "output": { "itemId": "stratum:iron_leggings", "count": 1 }
+    },
+    {
+      "id": "stratum:iron_boots_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:iron_ingot", "count": 4 }],
+      "output": { "itemId": "stratum:iron_boots", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_helmet_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:gold_ingot", "count": 5 }],
+      "output": { "itemId": "stratum:gold_helmet", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_chestplate_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:gold_ingot", "count": 8 }],
+      "output": { "itemId": "stratum:gold_chestplate", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_leggings_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:gold_ingot", "count": 7 }],
+      "output": { "itemId": "stratum:gold_leggings", "count": 1 }
+    },
+    {
+      "id": "stratum:gold_boots_from_ingots",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [{ "itemId": "stratum:gold_ingot", "count": 4 }],
+      "output": { "itemId": "stratum:gold_boots", "count": 1 }
+    },
+    {
+      "id": "stratum:string_from_wool",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [{ "tag": "stratum:wool", "count": 1 }],
+      "output": { "itemId": "stratum:string", "count": 4 }
+    },
+    {
+      "id": "stratum:bow_from_sticks_and_string",
+      "category": "Workbench",
+      "station": "stratum:crafting_table",
+      "ingredients": [
+        { "itemId": "stratum:stick", "count": 3 },
+        { "itemId": "stratum:string", "count": 3 }
+      ],
+      "output": { "itemId": "stratum:bow", "count": 1 }
+    },
+    {
+      "id": "stratum:arrow_from_feather_flint_and_stick",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [
+        { "itemId": "stratum:stick", "count": 1 },
+        { "itemId": "stratum:flint", "count": 1 },
+        { "itemId": "stratum:feather", "count": 1 }
+      ],
+      "output": { "itemId": "stratum:arrow", "count": 4 }
+    },
+    {
+      "id": "stratum:painting_from_paper_and_sticks",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [
+        { "itemId": "stratum:paper", "count": 1 },
+        { "itemId": "stratum:stick", "count": 2 }
+      ],
+      "output": { "itemId": "stratum:painting", "count": 1 }
     }
   ]
 }

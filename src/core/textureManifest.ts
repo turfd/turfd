@@ -9,6 +9,16 @@ export const STRATUM_CORE_TEXTURES_BASE =
 export const BLOCK_TEXTURE_MANIFEST_PATH = `${STRATUM_CORE_TEXTURES_BASE}block_texture_manifest.json`;
 export const ITEM_TEXTURE_MANIFEST_PATH = `${STRATUM_CORE_TEXTURES_BASE}item_texture_manifest.json`;
 
+/**
+ * Item-atlas / UI icon keys used at runtime but not any item's primary `textureName`
+ * (e.g. bow draw frames).
+ */
+export const EXTRA_ITEM_TEXTURE_KEYS = [
+  "bow_pulling_0",
+  "bow_pulling_1",
+  "bow_pulling_2",
+] as const;
+
 /** Absolute URL for a file under {@link STRATUM_CORE_TEXTURES_BASE} (e.g. `logo.png`, `GUI/pointer_line.png`). */
 export function stratumCoreTextureAssetUrl(relativeToTexturesRoot: string): string {
   const base = import.meta.env.BASE_URL;
@@ -58,6 +68,15 @@ export function resolveItemTextureRecord(
     }
     out[k] = p;
   }
+  for (const key of EXTRA_ITEM_TEXTURE_KEYS) {
+    if (out[key] !== undefined) {
+      continue;
+    }
+    const p = itemTextures[key] ?? blockTextures[key];
+    if (typeof p === "string" && p.length > 0) {
+      out[key] = p;
+    }
+  }
   return out;
 }
 
@@ -82,6 +101,15 @@ export async function fetchItemIconUrlMapForRegistry(
       );
     }
     out[k] = new URL(rel.replace(/^\/+/, ""), baseForResolve).href;
+  }
+  for (const key of EXTRA_ITEM_TEXTURE_KEYS) {
+    if (out[key] !== undefined) {
+      continue;
+    }
+    const rel = item[key] ?? block[key];
+    if (typeof rel === "string" && rel.length > 0) {
+      out[key] = new URL(rel.replace(/^\/+/, ""), baseForResolve).href;
+    }
   }
   return out;
 }

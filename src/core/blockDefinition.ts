@@ -86,4 +86,11 @@ export interface BlockDefinitionBase {
    * Copied to the auto-registered block item: furnace burn seconds per item (`stratum:fuel` in block JSON).
    */
   fuelBurnSeconds?: number;
+  /**
+   * When true, `registerBlockItems` skips auto-creating a block-item for this block.
+   * A standalone item with an explicit `stratum:numeric_id` must be provided instead.
+   */
+  noBlockItem?: true;
+  /** Painting block: multi-cell decoration placed on background walls. */
+  isPainting?: true;
 }

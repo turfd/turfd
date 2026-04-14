@@ -16,18 +16,31 @@ import {
   LEAF_FALL_INTERIOR_LEAF_FRACTION,
   LEAF_FALL_MAX_LIFETIME_SEC,
   LEAF_FALL_MAX_PARTICLES,
+  LEAF_FALL_MINING_PARTICLES_PER_PROGRESS,
+  LEAF_FALL_MINING_SAMPLE_TRIES,
   LEAF_FALL_SPAWN_CHANCE,
   LEAF_FALL_SPAWN_CHUNK_RADIUS,
   LEAF_FALL_SPAWN_TRIES_PER_TICK,
   LEAF_FALL_SWAY_AMP_PX,
   LEAF_FALL_SWAY_OMEGA,
+  WORLD_Y_MAX,
   WORLD_Y_MIN,
+  WORLDGEN_NO_COLLIDE,
 } from "../core/constants";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { World } from "../world/World";
+import { isTreeLogBlock } from "../world/breakTreeLogColumnCascade";
 import { worldToChunk } from "../world/chunk/ChunkCoord";
 import type { AtlasLoader } from "./AtlasLoader";
 import type { RenderPipeline } from "./RenderPipeline";
+import { ObjectPool } from "../utils/pool";
+
+const leafSpritePool = new ObjectPool<Sprite>(
+  () => new Sprite(),
+  (s) => { s.visible = false; s.removeFromParent(); },
+  0,
+  256,
+);
 
 const LEAF_SPECIES: readonly {
   identifier: string;
@@ -178,6 +191,13 @@ type LeafParticle = {
   spawnLeafRow: number;
 };
 
+export type LocalMiningLeafBoostSync = {
+  wx: number;
+  wy: number;
+  blockId: number;
+  progress: number;
+};
+
 export class LeafFallParticles {
   private readonly root: Container;
   private readonly particles: LeafParticle[] = [];
@@ -185,6 +205,11 @@ export class LeafFallParticles {
   private readonly leafIds: ReadonlySet<number>;
   private spawnSeq = 0;
   private ready = false;
+
+  private miningKey: string | null = null;
+  private miningLastProgress = 0;
+  private miningProgressCarry = 0;
+  private miningSpawnSeq = 0;
 
   constructor(
     private readonly worldSeed: number,
@@ -233,6 +258,88 @@ export class LeafFallParticles {
       this.bakedByBlockId.set(blockId, frames);
     }
     this.ready = true;
+  }
+
+  /**
+   * Extra falling-leaf sprites while the local player mines tree logs or leaf blocks
+   * (mirrors break-debris carry on {@link BlockBreakParticles#syncLocalMiningBreak}).
+   */
+  syncLocalMiningBoost(active: LocalMiningLeafBoostSync | null): void {
+    if (
+      !this.ready ||
+      active === null ||
+      active.progress <= 0 ||
+      active.blockId === this.airBlockId
+    ) {
+      this.miningKey = null;
+      this.miningLastProgress = 0;
+      this.miningProgressCarry = 0;
+      return;
+    }
+    if (
+      !this.leafIds.has(active.blockId) &&
+      !isTreeLogBlock(this.registry, active.blockId)
+    ) {
+      this.miningKey = null;
+      this.miningLastProgress = 0;
+      this.miningProgressCarry = 0;
+      return;
+    }
+
+    if (
+      (this.world.getMetadata(active.wx, active.wy) & WORLDGEN_NO_COLLIDE) ===
+      0
+    ) {
+      this.miningKey = null;
+      this.miningLastProgress = 0;
+      this.miningProgressCarry = 0;
+      return;
+    }
+
+    const key = `${active.wx},${active.wy},${active.blockId}`;
+    if (this.miningKey !== key) {
+      this.miningKey = key;
+      this.miningLastProgress = 0;
+      this.miningProgressCarry = 0;
+    }
+
+    const delta = active.progress - this.miningLastProgress;
+    this.miningLastProgress = active.progress;
+    if (delta <= 0) {
+      return;
+    }
+
+    this.miningProgressCarry +=
+      delta * LEAF_FALL_MINING_PARTICLES_PER_PROGRESS;
+    while (this.miningProgressCarry >= 1) {
+      if (this.particles.length >= LEAF_FALL_MAX_PARTICLES) {
+        break;
+      }
+      const rng = mulberry32(
+        mixSeed(
+          this.worldSeed,
+          active.wx,
+          active.wy,
+          active.blockId,
+          this.miningSpawnSeq++,
+          0x51d1e,
+        ),
+      );
+      const picked = this.miningPickLeafCell(
+        active.wx,
+        active.wy,
+        active.blockId,
+        rng,
+      );
+      if (picked === null) {
+        this.miningProgressCarry -= 1;
+        continue;
+      }
+      if (!this.spawnMiningLeafVisualAtCell(picked.lx, picked.ly, rng)) {
+        break;
+      }
+      this.miningProgressCarry -= 1;
+    }
   }
 
   update(dtSec: number, playerWorldX: number, playerFeetUpY: number): void {
@@ -349,11 +456,14 @@ export class LeafFallParticles {
       const worldX = wx * BLOCK_SIZE + rng() * BLOCK_SIZE;
       const pixiY = -feetY;
 
-      const sprite = new Sprite(tex);
+      const sprite = leafSpritePool.acquire();
+      sprite.texture = tex;
       sprite.anchor.set(0.5, 0.5);
       sprite.roundPixels = true;
-      sprite.position.set(worldX, pixiY);
+      sprite.visible = true;
       sprite.alpha = 1;
+      sprite.rotation = 0;
+      sprite.position.set(worldX, pixiY);
 
       this.root.addChild(sprite);
       this.particles.push({
@@ -373,6 +483,93 @@ export class LeafFallParticles {
       });
       spawned += 1;
     }
+  }
+
+  private miningPickLeafCell(
+    mwx: number,
+    mwy: number,
+    minedBlockId: number,
+    rng: () => number,
+  ): { lx: number; ly: number } | null {
+    const at = (x: number, y: number): { lx: number; ly: number } | null => {
+      if (y < WORLD_Y_MIN || y > WORLD_Y_MAX) {
+        return null;
+      }
+      const b = this.world.getBlock(x, y);
+      return this.leafIds.has(b.id) ? { lx: x, ly: y } : null;
+    };
+
+    if (this.leafIds.has(minedBlockId)) {
+      const c = at(mwx, mwy);
+      if (c !== null) {
+        return c;
+      }
+    }
+
+    for (let n = 0; n < LEAF_FALL_MINING_SAMPLE_TRIES; n++) {
+      const dx = Math.floor((rng() * 2 - 1) * 5);
+      const dy = Math.floor(rng() * 14) - 3;
+      const c = at(mwx + dx, mwy + dy);
+      if (c !== null) {
+        return c;
+      }
+    }
+    return null;
+  }
+
+  private spawnMiningLeafVisualAtCell(
+    lwx: number,
+    lwy: number,
+    rng: () => number,
+  ): boolean {
+    const here = this.world.getBlock(lwx, lwy);
+    if (!this.leafIds.has(here.id)) {
+      return false;
+    }
+    const frames = this.bakedByBlockId.get(here.id);
+    if (frames === undefined) {
+      return false;
+    }
+    if (this.particles.length >= LEAF_FALL_MAX_PARTICLES) {
+      return false;
+    }
+
+    const fi = Math.floor(rng() * LEAF_FALL_FRAME_COUNT);
+    const tex = frames[fi]!;
+    const wy = lwy;
+    const feetY =
+      wy * BLOCK_SIZE +
+      BLOCK_SIZE * 0.25 +
+      rng() * (BLOCK_SIZE * 0.65);
+    const worldX = lwx * BLOCK_SIZE + rng() * BLOCK_SIZE;
+    const pixiY = -feetY;
+
+    const sprite = leafSpritePool.acquire();
+    sprite.texture = tex;
+    sprite.anchor.set(0.5, 0.5);
+    sprite.roundPixels = true;
+    sprite.visible = true;
+    sprite.alpha = 1;
+    sprite.rotation = 0;
+    sprite.position.set(worldX, pixiY);
+
+    this.root.addChild(sprite);
+    this.particles.push({
+      sprite,
+      tex,
+      x: worldX,
+      y: pixiY,
+      vx: (rng() - 0.5) * 18,
+      vy: -rng() * 12,
+      swayT: rng() * 6.28,
+      swayOmega: LEAF_FALL_SWAY_OMEGA * (0.75 + rng() * 0.55),
+      swayPhase: rng() * 6.28,
+      swayAmp: LEAF_FALL_SWAY_AMP_PX * (0.55 + rng() * 0.65),
+      rotVel: (rng() - 0.5) * 1.35,
+      life: LEAF_FALL_MAX_LIFETIME_SEC,
+      spawnLeafRow: wy,
+    });
+    return true;
   }
 
   private chunksNear(pcx: number, pcy: number): [number, number][] {
@@ -418,15 +615,14 @@ export class LeafFallParticles {
 
   private recycleParticle(index: number): void {
     const p = this.particles[index]!;
-    this.root.removeChild(p.sprite);
-    p.sprite.destroy({ texture: false });
-    this.particles.splice(index, 1);
+    leafSpritePool.release(p.sprite);
+    this.particles[index] = this.particles[this.particles.length - 1]!;
+    this.particles.pop();
   }
 
   destroy(): void {
     for (const p of this.particles) {
-      this.root.removeChild(p.sprite);
-      p.sprite.destroy({ texture: false });
+      leafSpritePool.release(p.sprite);
     }
     this.particles.length = 0;
     for (const frames of this.bakedByBlockId.values()) {

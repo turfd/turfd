@@ -2,6 +2,7 @@
  * World-space nametags (M5x7) over local + remote players.
  */
 import { PLAYER_HEIGHT } from "../core/constants";
+import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import type { Camera } from "../renderer/Camera";
 import type { RemotePlayer } from "../world/entities/RemotePlayer";
 
@@ -38,6 +39,9 @@ type NametagView = {
 export class NametagOverlay {
   private layer: HTMLDivElement | null = null;
   private readonly tags = new Map<string, NametagView>();
+  private readonly staleIds = new Set<string>();
+  /** Even frames apply tag transforms; odd frames skip when position unchanged (cuts style/layout churn). */
+  private spatialPhase = 0;
   private observedCanvas: HTMLCanvasElement | null = null;
   private canvasResizeObserver: ResizeObserver | null = null;
   private canvasCssW = 1;
@@ -112,6 +116,7 @@ export class NametagOverlay {
     roster: ReadonlyMap<string, NametagRosterEntry>,
     localPeerId: string | null,
   ): void {
+    const t0 = import.meta.env.DEV ? chunkPerfNow() : 0;
     const layer = this.layer;
     if (layer === null) {
       return;
@@ -125,6 +130,9 @@ export class NametagOverlay {
     const ch = Math.max(1, canvas.height);
     const cssPerBufX = this.canvasCssW / cw;
     const cssPerBufY = this.canvasCssH / ch;
+
+    this.spatialPhase = (this.spatialPhase + 1) & 1;
+    const applySpatialThisFrame = this.spatialPhase === 0;
 
     const placeTag = (
       id: string,
@@ -156,9 +164,13 @@ export class NametagOverlay {
         view = { el, lastText: "", lastTransform: "" };
         this.tags.set(id, view);
       }
-      if (view.lastText !== text) {
+      const textChanged = view.lastText !== text;
+      if (textChanged) {
         view.lastText = text;
         view.el.textContent = text;
+      }
+      if (!textChanged && !applySpatialThisFrame) {
+        return;
       }
       const headY = -worldY - PLAYER_HEIGHT;
       const { x: sx, y: sy } = camera.worldToScreen(worldX, headY);
@@ -176,7 +188,11 @@ export class NametagOverlay {
     const localId = localPeerId ?? "__local__";
     placeTag(localId, local.displayName, lx, ly);
 
-    const stale = new Set(this.tags.keys());
+    const stale = this.staleIds;
+    stale.clear();
+    for (const id of this.tags.keys()) {
+      stale.add(id);
+    }
     stale.delete(localId);
 
     for (const [peerId, rp] of remotes) {
@@ -191,6 +207,13 @@ export class NametagOverlay {
       const view = this.tags.get(id);
       view?.el.remove();
       this.tags.delete(id);
+    }
+    stale.clear();
+    if (import.meta.env.DEV) {
+      chunkPerfLog("nametagOverlay:update", chunkPerfNow() - t0, {
+        tags: this.tags.size,
+        remotes: remotes.size,
+      });
     }
   }
 

@@ -31,6 +31,10 @@ export function withWaterFlowLevel(cellMetadata: number, flowLevel: number): num
 /** Pixels cropped from the top of the water sprite for this flow level (full block at 0). */
 export function waterFlowTopCropPx(flowLevel: number): number {
   const lv = Math.max(0, Math.min(WATER_MAX_FLOW, flowLevel));
+  // Keep near-source/downhill flow visually continuous (avoids striped bands on slopes).
+  if (lv <= 1) {
+    return 0;
+  }
   return Math.round((BLOCK_SIZE * lv) / WATER_MAX_FLOW);
 }
 

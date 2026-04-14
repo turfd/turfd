@@ -58,6 +58,46 @@ const DIRT_MACRO_CFG: PocketConfig = {
   shape: 806_083,
 };
 
+/** Stronger dirt/gravel pockets for back-walls (foreground still uses {@link getFill}). */
+const BACKDROP_GRAVEL_CFG: PocketConfig = {
+  spacing: 14,
+  peakChance: 0.058,
+  baseRadius: 2.15,
+  presence1: 807_003,
+  presence2: 807_701,
+  jitterX: 807_811,
+  jitterY: 807_919,
+  radiusVar: 807_977,
+  squash: 808_029,
+  shape: 808_083,
+};
+
+const BACKDROP_DIRT_CFG: PocketConfig = {
+  spacing: 9,
+  peakChance: 0.092,
+  baseRadius: 3.05,
+  presence1: 809_003,
+  presence2: 809_701,
+  jitterX: 809_811,
+  jitterY: 809_919,
+  radiusVar: 809_977,
+  squash: 810_029,
+  shape: 810_083,
+};
+
+const BACKDROP_DIRT_MACRO_CFG: PocketConfig = {
+  spacing: 22,
+  peakChance: 0.04,
+  baseRadius: 4.45,
+  presence1: 811_101,
+  presence2: 811_709,
+  jitterX: 811_811,
+  jitterY: 811_919,
+  radiusVar: 811_977,
+  squash: 812_029,
+  shape: 812_083,
+};
+
 export class SedimentPockets {
   private readonly ctx: GeneratorContext;
   private readonly dirtId: number;
@@ -77,6 +117,20 @@ export class SedimentPockets {
       return this.gravelId;
     }
     if (this.matchPocket(wx, wy, DIRT_MACRO_CFG) || this.matchPocket(wx, wy, DIRT_CFG)) {
+      return this.dirtId;
+    }
+    return this.stoneId;
+  }
+
+  /** Back-wall layer: more frequent dirt/gravel patches than {@link getFill} (separate seeds). */
+  getBackdropFill(wx: number, wy: number): number {
+    if (this.matchPocket(wx, wy, BACKDROP_GRAVEL_CFG)) {
+      return this.gravelId;
+    }
+    if (
+      this.matchPocket(wx, wy, BACKDROP_DIRT_MACRO_CFG) ||
+      this.matchPocket(wx, wy, BACKDROP_DIRT_CFG)
+    ) {
       return this.dirtId;
     }
     return this.stoneId;

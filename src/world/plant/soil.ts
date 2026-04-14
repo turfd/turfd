@@ -21,3 +21,8 @@ export function isSaplingIdentifier(identifier: string): boolean {
     identifier === "stratum:birch_sapling"
   );
 }
+
+/** Immature or mature wheat crop blocks (`wheat_stage_0` … `wheat_stage_7`). */
+export function isWheatCropIdentifier(identifier: string): boolean {
+  return /^stratum:wheat_stage_[0-7]$/.test(identifier);
+}

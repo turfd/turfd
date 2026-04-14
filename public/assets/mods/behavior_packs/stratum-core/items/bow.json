@@ -1,0 +1,14 @@
+﻿{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:bow"
+    },
+    "components": {
+      "stratum:display_name": "Bow",
+      "stratum:texture_key": "bow",
+      "stratum:max_stack": 1,
+      "stratum:numeric_id": 134
+    }
+  }
+}

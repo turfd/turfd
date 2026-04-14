@@ -69,15 +69,19 @@ export class SupabaseAuthProvider implements IAuthProvider {
     }
     const { data, error } = await this.client
       .from("profiles")
-      .select("id, username")
+      .select("id, username, skin_id")
       .eq("id", uid)
       .maybeSingle();
     if (error !== null || data === null) {
       this.profileCache = null;
       return;
     }
-    const row = data as { id: string; username: string };
-    this.profileCache = { id: row.id, username: row.username };
+    const row = data as { id: string; username: string; skin_id?: string | null };
+    this.profileCache = {
+      id: row.id,
+      username: row.username,
+      skinId: row.skin_id ?? null,
+    };
   }
 
   getSession(): AuthSession | null {

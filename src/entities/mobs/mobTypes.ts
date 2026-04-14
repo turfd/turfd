@@ -3,7 +3,9 @@ export enum MobType {
   None = 0,
   Sheep = 1,
   Pig = 2,
-  Zombie = 3,
+  Duck = 3,
+  Zombie = 4,
+  Slime = 5,
 }
 
 /** Authoritative sheep simulation state (host + offline). */
@@ -69,6 +71,32 @@ export type MobPigState = {
   despawnFarSec: number;
 };
 
+/** Authoritative duck simulation state (host + offline). */
+export type MobDuckState = {
+  readonly kind: "duck";
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  hurtRemainSec: number;
+  /** Seconds since last damage was applied (host-only). */
+  noDamageSec: number;
+  facingRight: boolean;
+  targetVx: number;
+  panicRemainSec: number;
+  panicFlipTimerSec: number;
+  wanderTimerSec: number;
+  onGround: boolean;
+  inWater: boolean;
+  hitKnockVx: number;
+  damageInvulnRemainSec: number;
+  deathAnimRemainSec: number;
+  persistent: boolean;
+  despawnFarSec: number;
+};
+
 /** Authoritative zombie simulation state (host + offline). */
 export type MobZombieState = {
   readonly kind: "zombie";
@@ -98,4 +126,44 @@ export type MobZombieState = {
   burnRemainSec: number;
   /** Accumulator for periodic sun-burn damage ticks. */
   burnDamageAccumSec: number;
+};
+
+/** Authoritative slime (host + offline): chases players, melee by color tier. */
+export type MobSlimeState = {
+  readonly kind: "slime";
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  hurtRemainSec: number;
+  noDamageSec: number;
+  /** 0 green, 1 yellow, 2 blue, 3 red — replicated as {@link MobPublicView.woolColor} for slimes. */
+  slimeColor: number;
+  facingRight: boolean;
+  targetVx: number;
+  panicRemainSec: number;
+  panicFlipTimerSec: number;
+  wanderTimerSec: number;
+  onGround: boolean;
+  inWater: boolean;
+  hitKnockVx: number;
+  damageInvulnRemainSec: number;
+  deathAnimRemainSec: number;
+  persistent: boolean;
+  despawnFarSec: number;
+  attackCooldownRemainSec: number;
+  /** Visual squash “attack” after dealing contact damage. */
+  attackSwingRemainSec: number;
+  /** True while the first three jump-sheet frames play on the ground before launch. */
+  slimeJumpPriming: boolean;
+  /** Seconds accumulated during the current priming window (host sim). */
+  slimeJumpPrimeElapsedSec: number;
+  /** Horizontal speed carried through the airborne arc (host sim). */
+  slimeAirHorizVx: number;
+  /** Jump direction locked when priming begins: -1 left, +1 right. */
+  slimeJumpDir: number;
+  /** Ground cooldown before the next hop can start (host sim). */
+  slimeJumpCooldownRemainSec: number;
 };

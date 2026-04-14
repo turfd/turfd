@@ -13,6 +13,7 @@ import { createChunk, type Chunk } from "../chunk/Chunk";
 import { GeneratorContext } from "./GeneratorContext";
 import { TerrainNoise, type ForestType } from "../../core/TerrainNoise";
 import { CaveGenerator } from "./CaveGenerator";
+import { GraniteVeins } from "./GraniteVeins";
 import { OreVeins } from "./OreVeins";
 import { SedimentPockets } from "./SedimentPockets";
 import { forEachDeciduousBushCell, forEachSpruceBushCell } from "./treeCanopy";
@@ -115,6 +116,7 @@ export class WorldGenerator {
   private readonly caves: CaveGenerator;
   private readonly ores: OreVeins;
   private readonly sediment: SedimentPockets;
+  private readonly granite: GraniteVeins;
   private readonly airId: number;
   private readonly grassId: number;
   private readonly dirtId: number;
@@ -145,6 +147,7 @@ export class WorldGenerator {
     this.caves = new CaveGenerator(root.fork(0xca_57));
     this.ores = new OreVeins(root.fork(0x0e5), registry);
     this.sediment = new SedimentPockets(root.fork(0x5ed1_000), registry);
+    this.granite = new GraniteVeins(root.fork(0x6a32), registry);
     this.airId = registry.getByIdentifier("stratum:air").id;
     this.grassId = registry.getByIdentifier("stratum:grass").id;
     this.dirtId = registry.getByIdentifier("stratum:dirt").id;
@@ -325,16 +328,12 @@ export class WorldGenerator {
     if (wy === WORLD_Y_MIN) {
       return this.stoneId;
     }
-    if (wy <= WORLD_Y_MIN + 5 && wy > WORLD_Y_MIN) {
-      if (this.ores.getOreAt(wx, wy, surfaceY) !== null) {
-        return this.stoneId;
-      }
-      return this.sediment.getFill(wx, wy);
+    const backdropOre = this.ores.getOreAt(wx, wy, surfaceY);
+    if (backdropOre !== null) {
+      return backdropOre;
     }
-    if (this.ores.getOreAt(wx, wy, surfaceY) !== null) {
-      return this.stoneId;
-    }
-    return this.sediment.getFill(wx, wy);
+    const backdropFill = this.sediment.getBackdropFill(wx, wy);
+    return this.granite.applyToStoneFill(wx, wy, surfaceY, backdropFill);
   }
 
   /** Grass-topped columns: short/tall grass and flowers in air above (after trees). */
@@ -599,8 +598,10 @@ export class WorldGenerator {
     nominalSurfaceY: number,
   ): number | null {
     const lx = wx - originWx;
+    // For out-of-bounds columns, assume terrain matches the noise height
+    // This allows trees near chunk edges to extend their canopies into neighboring chunks
     if (lx < 0 || lx >= CHUNK_SIZE) {
-      return null;
+      return nominalSurfaceY;
     }
     const chunkWyLo = originWy;
     const chunkWyHi = originWy + CHUNK_SIZE - 1;
@@ -953,7 +954,8 @@ export class WorldGenerator {
       if (ore !== null) {
         return ore;
       }
-      return this.sediment.getFill(wx, wy);
+      const fill = this.sediment.getFill(wx, wy);
+      return this.granite.applyToStoneFill(wx, wy, surfaceY, fill);
     }
     if (this.caves.isCave(wx, wy, surfaceY)) {
       return this.airId;
@@ -962,7 +964,8 @@ export class WorldGenerator {
     if (ore !== null) {
       return ore;
     }
-    return this.sediment.getFill(wx, wy);
+    const fill = this.sediment.getFill(wx, wy);
+    return this.granite.applyToStoneFill(wx, wy, surfaceY, fill);
   }
 
   /** Temperate: 1 grass + 4 dirt. Desert: 3–5 sand + 2–3 sandstone (per-column hash). */

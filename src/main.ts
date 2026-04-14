@@ -32,6 +32,7 @@ import { MainMenu } from "./ui/screens/MainMenu";
 import { MenuBackground } from "./ui/screens/MenuBackground";
 import { runGameEntryBlackTransition } from "./ui/screens/gameEntryTransition";
 import { WorldLoadingScreen } from "./ui/screens/WorldLoadingScreen";
+import { getSkipIntro } from "./ui/settings/uiPrefs";
 import "@fortawesome/fontawesome-free/css/fontawesome.min.css";
 import "@fortawesome/fontawesome-free/css/solid.min.css";
 import "./styles/global.css";
@@ -54,6 +55,49 @@ function loadingErrorMessage(err: unknown): string {
     return m;
   }
   return "An unknown error occurred while preparing the world.";
+}
+
+function mountStartupBootOverlay(): void {
+  if (document.getElementById("stratum-startup-boot") !== null) {
+    return;
+  }
+  const overlay = document.createElement("div");
+  overlay.id = "stratum-startup-boot";
+  overlay.style.cssText = [
+    "position:fixed",
+    "inset:0",
+    "z-index:20000",
+    "pointer-events:none",
+    "background:#000",
+    "display:flex",
+    "align-items:center",
+    "justify-content:center",
+  ].join(";");
+  const title = document.createElement("div");
+  title.textContent = "Stratum Studios Presents...";
+  title.style.cssText = [
+    "font-family:'BoldPixels','Courier New',monospace",
+    "font-size:clamp(18px, 2.3vw, 28px)",
+    "letter-spacing:0.06em",
+    "text-transform:uppercase",
+    "color:rgba(255,255,255,0.92)",
+    "text-shadow:0 2px 0 rgba(0,0,0,0.42), 0 0 10px rgba(0,0,0,0.2)",
+    "opacity:0",
+    "transition:opacity 420ms ease-out",
+    "white-space:nowrap",
+  ].join(";");
+  overlay.appendChild(title);
+  document.body.appendChild(overlay);
+  performance.mark("startup-boot-overlay-mounted");
+  requestAnimationFrame(() => {
+    title.style.opacity = "1";
+    performance.mark("startup-boot-overlay-visible");
+    performance.measure(
+      "startup-boot-overlay-appear",
+      "startup-boot-overlay-mounted",
+      "startup-boot-overlay-visible",
+    );
+  });
 }
 
 function wireWorkshopHandlers(
@@ -338,6 +382,156 @@ async function main(): Promise<void> {
   if (!mount) {
     throw new Error('Missing root element: expected <div id="app"></div>');
   }
+  mountStartupBootOverlay();
+
+  // ---------------------------------------------------------------------------
+  // Entry routes (no router dependency; use BASE_URL-aware pathname parsing)
+  // ---------------------------------------------------------------------------
+
+  const getEntrySlug = (): string => {
+    const base = import.meta.env.BASE_URL ?? "/";
+    const basePath = base.endsWith("/") ? base : `${base}/`;
+    let p = window.location.pathname;
+    if (p.startsWith(basePath)) {
+      p = p.slice(basePath.length);
+    } else if (p.startsWith(base)) {
+      p = p.slice(base.length);
+    }
+    p = p.replace(/^\/+/, "").replace(/\/+$/, "");
+    return p;
+  };
+
+  if (getEntrySlug() === "background") {
+    // Full-viewport, scroll-free render surface for capturing background art.
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
+    document.body.style.margin = "0";
+    document.body.style.overflow = "hidden";
+    mount.style.position = "fixed";
+    mount.style.inset = "0";
+    mount.style.overflow = "hidden";
+    mount.style.touchAction = "none";
+
+    mount.replaceChildren();
+    mountEarlyMenuBackdrop(mount);
+
+    const params = new URLSearchParams(window.location.search);
+    const blocksParam = params.get("blocks");
+    const zoomParam = params.get("zoom");
+    const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+    const initialBlocks = blocksParam !== null && blocksParam.trim() !== ""
+      ? clamp(Number.parseFloat(blocksParam), 8, 240)
+      : 60;
+    const initialMinZoom = zoomParam !== null && zoomParam.trim() !== ""
+      ? clamp(Number.parseFloat(zoomParam), 0.25, 8)
+      : 1;
+
+    const bg = new MenuBackground({
+      // More zoomed-out than the menu: show more blocks across the screen.
+      maxVisibleBlocksX: initialBlocks,
+      // Allow zoom to go a bit smaller on narrow viewports.
+      minZoom: initialMinZoom,
+      // Capture mode should be static.
+      disableMotion: true,
+    });
+    const onWheel = (e: WheelEvent): void => {
+      // Zoom control for capture mode:
+      // - wheel up: zoom in (fewer blocks visible)
+      // - wheel down: zoom out (more blocks visible)
+      e.preventDefault();
+      const { maxVisibleBlocksX } = bg.getZoomConfig();
+      const dir = e.deltaY > 0 ? 1 : -1;
+      const step = e.shiftKey ? 10 : 2;
+      bg.setZoomConfig({ maxVisibleBlocksX: clamp(maxVisibleBlocksX + dir * step, 8, 240) });
+    };
+    window.addEventListener("wheel", onWheel, { passive: false });
+    const onZoomKeys = (e: KeyboardEvent): void => {
+      // Quick keys: - / = also zoom.
+      if (e.key !== "-" && e.key !== "=" && e.key !== "+" && e.key !== "_") return;
+      e.preventDefault();
+      const { maxVisibleBlocksX } = bg.getZoomConfig();
+      const dir = e.key === "-" || e.key === "_" ? 1 : -1;
+      const step = e.shiftKey ? 10 : 2;
+      bg.setZoomConfig({ maxVisibleBlocksX: clamp(maxVisibleBlocksX + dir * step, 8, 240) });
+    };
+    window.addEventListener("keydown", onZoomKeys);
+
+    // Pan (drag) + nudge keys for framing captures.
+    let isDragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    const onPointerDown = (e: PointerEvent): void => {
+      if (e.button !== 0) return;
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+    };
+    const onPointerMove = (e: PointerEvent): void => {
+      if (!isDragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      bg.panBy(dx, dy);
+      e.preventDefault();
+    };
+    const onPointerUp = (e: PointerEvent): void => {
+      isDragging = false;
+      (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId);
+      e.preventDefault();
+    };
+    mount.addEventListener("pointerdown", onPointerDown, { passive: false });
+    mount.addEventListener("pointermove", onPointerMove, { passive: false });
+    mount.addEventListener("pointerup", onPointerUp, { passive: false });
+    mount.addEventListener("pointercancel", onPointerUp, { passive: false });
+
+    // Mouse fallback (some environments disable PointerEvents).
+    const onMouseDown = (e: MouseEvent): void => {
+      if (e.button !== 0) return;
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      e.preventDefault();
+    };
+    const onMouseMove = (e: MouseEvent): void => {
+      if (!isDragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      bg.panBy(dx, dy);
+      e.preventDefault();
+    };
+    const onMouseUp = (e: MouseEvent): void => {
+      if (!isDragging) return;
+      isDragging = false;
+      e.preventDefault();
+    };
+    mount.addEventListener("mousedown", onMouseDown, { passive: false });
+    window.addEventListener("mousemove", onMouseMove, { passive: false });
+    window.addEventListener("mouseup", onMouseUp, { passive: false });
+
+    const onPanKeys = (e: KeyboardEvent): void => {
+      const step = e.shiftKey ? 64 : 16;
+      switch (e.key) {
+        case "ArrowUp": bg.panBy(0, step); e.preventDefault(); break;
+        case "ArrowDown": bg.panBy(0, -step); e.preventDefault(); break;
+        case "ArrowLeft": bg.panBy(step, 0); e.preventDefault(); break;
+        case "ArrowRight": bg.panBy(-step, 0); e.preventDefault(); break;
+        case "PageDown": bg.panBy(0, -step * 4); e.preventDefault(); break;
+        case "PageUp": bg.panBy(0, step * 4); e.preventDefault(); break;
+        case "Home": bg.setPan({ x: 0, y: 0 }); e.preventDefault(); break;
+      }
+    };
+    window.addEventListener("keydown", onPanKeys);
+
+    // Important: do NOT immediately remove listeners.
+    // This route is meant to stay interactive for captures.
+    await bg.init(mount);
+    return;
+  }
 
   document.addEventListener(
     "contextmenu",
@@ -397,7 +591,9 @@ async function main(): Promise<void> {
     true,
   );
 
+  let playStartupIntro = !getSkipIntro();
   while (true) {
+    performance.mark("menu-cycle:start");
     mount.classList.remove("stratum-game-loading");
     mount.replaceChildren();
     mountEarlyMenuBackdrop(mount);
@@ -414,7 +610,11 @@ async function main(): Promise<void> {
       auth,
       workshopDeps,
       sharedAudio,
+      { playStartupIntro },
     );
+    performance.mark("menu-cycle:ready");
+    performance.measure("menu-cycle-ready", "menu-cycle:start", "menu-cycle:ready");
+    playStartupIntro = false;
     await menuBackground.initFinished;
     ost.stopAdvancingPlaylist();
     mount.classList.add("stratum-game-loading");
@@ -454,6 +654,7 @@ async function main(): Promise<void> {
           hotbarSlot: meta.hotbarSlot,
           inventory: meta.playerInventory,
           health: meta.playerHealth,
+          armor: meta.playerArmor,
         };
         initialWorldTimeMs = meta.worldTimeMs ?? 0;
         localStorage.setItem("stratum_worldUuid", worldUuid);
@@ -471,6 +672,7 @@ async function main(): Promise<void> {
           hotbarSlot: meta.hotbarSlot,
           inventory: meta.playerInventory,
           health: meta.playerHealth,
+          armor: meta.playerArmor,
         };
         initialWorldTimeMs = meta.worldTimeMs ?? 0;
         localStorage.setItem("stratum_worldUuid", worldUuid);
@@ -507,6 +709,7 @@ async function main(): Promise<void> {
       }
 
       const session = auth.getSession();
+      const playerSettings = await store.loadPlayerSettings();
       game = new Game({
         mount,
         seed,
@@ -520,6 +723,7 @@ async function main(): Promise<void> {
         signalRelay,
         displayName: auth.getDisplayLabel(),
         accountId: session?.userId ?? null,
+        skinId: playerSettings.selectedSkinId,
         modRepository,
         sharedAudio,
       });

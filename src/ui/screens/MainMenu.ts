@@ -8,6 +8,7 @@ import type { EventBus } from "../../core/EventBus";
 import { unixRandom01 } from "../../core/unixRandom";
 import type { ModRepository } from "../../mods/ModRepository";
 import { mountProfileScreen } from "./ProfileScreen";
+import { mountSkinScreen } from "./SkinScreen";
 import type {
   IndexedDBStore,
   WorldMetadata,
@@ -26,6 +27,7 @@ import { createWorldPackEditorController } from "../worldEditPacksUi";
 import { gunzipSync, gzipSync } from "fflate";
 import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
 import { MenuBackground } from "./MenuBackground";
+import { runMainMenuStartupIntro } from "./mainMenuStartupIntro";
 import { WorkshopScreen } from "./WorkshopScreen";
 
 export type MainMenuResult =
@@ -772,11 +774,19 @@ function injectStyles(base: string): void {
 
     /* ── Workshop (Stratum menu aesthetic; no native select styling) ───────── */
     .mm-workshop-root {
+      /* Workshop-only spacing tokens (pixel-perfect: whole px only) */
+      --ws-1: 4px;
+      --ws-2: 8px;
+      --ws-3: 12px;
+      --ws-4: 16px;
+      --ws-5: 24px;
+      --ws-6: 32px;
+
       flex: 1;
       min-height: 0;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: var(--ws-3);
       font-family: 'M5x7', monospace;
       color: var(--mm-ink);
       -webkit-font-smoothing: none;
@@ -787,7 +797,7 @@ function injectStyles(base: string): void {
     .mm-workshop-tabs {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: var(--ws-1);
     }
     .mm-workshop-tab {
       padding: 12px 16px;
@@ -843,7 +853,7 @@ function injectStyles(base: string): void {
       min-height: 0;
       overflow-y: auto;
       overflow-x: hidden;
-      padding-right: 4px;
+      padding-right: var(--ws-1);
     }
     .mm-workshop-body::-webkit-scrollbar {
       width: 4px;
@@ -870,37 +880,43 @@ function injectStyles(base: string): void {
       min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: var(--ws-2);
       min-height: 0;
     }
     .mm-workshop-filter-strip {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: var(--ws-2);
       flex-shrink: 0;
-      padding: 12px 14px;
+      padding: var(--ws-3) var(--ws-3);
       background: var(--mm-surface-deep);
       border: 1px solid var(--mm-border);
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
       transition: border-color 120ms ease;
     }
-    .mm-workshop-filter-strip-row {
+    .mm-workshop-controls-top {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 10px 12px;
+      gap: var(--ws-2) var(--ws-3);
+    }
+    .mm-workshop-controls-bottom {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--ws-2);
     }
     .mm-workshop-type-pills {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: var(--ws-1);
     }
     .mm-workshop-sort-pills {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 6px;
+      gap: var(--ws-1);
       margin-left: auto;
     }
     .mm-workshop-sort-pills::before {
@@ -985,13 +1001,15 @@ function injectStyles(base: string): void {
     .mm-workshop-search-wrap {
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 0 10px;
+      gap: var(--ws-2);
+      padding: 0 var(--ws-2);
       background: rgba(0, 0, 0, 0.22);
-      border: 1px solid var(--mm-border);
+      border: 1px solid var(--mm-border-strong);
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
       transition: border-color 120ms ease, background 120ms ease;
+      flex: 1;
+      min-width: min(320px, 100%);
     }
     .mm-workshop-search-wrap:focus-within {
       border-color: var(--mm-border-strong);
@@ -1038,7 +1056,7 @@ function injectStyles(base: string): void {
       display: flex;
       flex-direction: column;
       gap: 0;
-      padding-right: 2px;
+      padding-right: var(--ws-1);
     }
     .mm-workshop-grid-host::-webkit-scrollbar {
       width: 4px;
@@ -1050,7 +1068,114 @@ function injectStyles(base: string): void {
     .mm-workshop-list {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: var(--ws-2);
+    }
+
+    .mm-workshop-tile-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: var(--ws-3);
+      align-items: stretch;
+      /* Prevent grid tracks (and cards) from stretching vertically. */
+      align-content: start;
+    }
+    .mm-workshop-tile {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid var(--mm-border);
+      background: var(--mm-surface-deep);
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 140ms ease, background 140ms ease;
+      overflow: hidden;
+    }
+    .mm-workshop-tile:hover {
+      border-color: var(--mm-border-strong);
+      background: var(--mm-surface-raised);
+    }
+    .mm-workshop-tile:focus {
+      outline: none;
+    }
+    .mm-workshop-tile:focus-visible {
+      outline: 2px solid rgba(46, 204, 113, 0.65);
+      outline-offset: 2px;
+    }
+    .mm-workshop-tile-media {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #1c1c1e;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-workshop-tile-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    .mm-workshop-tile-body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--ws-1);
+      padding: var(--ws-3);
+      min-height: 0;
+    }
+    .mm-workshop-tile-title {
+      font-family: 'BoldPixels', monospace;
+      font-size: 15px;
+      line-height: 1.25;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--mm-ink);
+      margin: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mm-workshop-tile-author {
+      margin: 0;
+      font-size: calc(16px + var(--mm-m5-nudge));
+      line-height: 1.35;
+      color: var(--mm-ink-mid);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mm-workshop-tile-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--ws-1) var(--ws-2);
+      align-items: center;
+      margin-top: var(--ws-1);
+    }
+    .mm-workshop-tile-meta-line {
+      font-family: 'M5x7', monospace;
+      font-size: calc(14px + var(--mm-m5-nudge));
+      line-height: 1.35;
+      color: var(--mm-ink-mid);
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mm-workshop-tile-actions {
+      margin-top: var(--ws-2);
+      display: flex;
+      gap: var(--ws-2);
+      align-items: center;
+    }
+    .mm-workshop-tile-install {
+      width: 100%;
+      min-width: 0;
+      padding: 10px 16px !important;
+      font-size: 13px !important;
+      min-height: 42px !important;
+      transition: opacity 120ms ease, border-color 120ms ease, background 120ms ease;
     }
     .mm-workshop-rowcard {
       display: flex;
@@ -1202,13 +1327,21 @@ function injectStyles(base: string): void {
       flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      margin-top: 12px;
-      padding: 12px 14px;
+      gap: var(--ws-2);
+      margin-top: auto;
+      padding: var(--ws-3) var(--ws-3);
       border-top: 1px solid var(--mm-border);
       background: rgba(0, 0, 0, 0.12);
       border-radius: 0 0 var(--mm-radius-sm) var(--mm-radius-sm);
       flex-shrink: 0;
+    }
+    .mm-workshop-pager-indicator {
+      font-family: 'BoldPixels', monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--mm-ink-soft);
+      padding: 0 var(--ws-1);
     }
     .mm-workshop-pager-btn {
       min-width: 7rem;
@@ -1252,6 +1385,12 @@ function injectStyles(base: string): void {
       .mm-workshop-detail-side {
         order: -1;
       }
+      .mm-workshop-detail-hero {
+        grid-template-columns: 1fr;
+      }
+      .mm-workshop-detail-hero-cover {
+        aspect-ratio: 16 / 9;
+      }
       .mm-workshop-detail-banner-inner {
         flex-direction: column;
         align-items: flex-start;
@@ -1284,6 +1423,72 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-detail-back {
       flex-shrink: 0;
+    }
+
+    /* Detail hero (side-by-side: cover + info) */
+    .mm-workshop-detail-hero {
+      display: grid;
+      grid-template-columns: minmax(160px, 260px) minmax(0, 1fr);
+      gap: var(--ws-4);
+      align-items: stretch;
+      padding: var(--ws-4);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid var(--mm-border);
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.18));
+    }
+    .mm-workshop-detail-hero-cover {
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      overflow: hidden;
+      background: #1c1c1e;
+      border: 1px solid var(--mm-border);
+      aspect-ratio: 16 / 11;
+    }
+    .mm-workshop-detail-hero-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    .mm-workshop-detail-hero-ph {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'BoldPixels', monospace;
+      font-size: 34px;
+      line-height: 1;
+      color: rgba(46, 204, 113, 0.55);
+      background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.2));
+    }
+    .mm-workshop-detail-hero-ph::before {
+      content: "◇";
+      opacity: 0.85;
+    }
+    .mm-workshop-detail-hero-info {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: var(--ws-2);
+      padding: 2px 0;
+    }
+    .mm-workshop-detail-hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--ws-1) var(--ws-2);
+      align-items: center;
+      margin-top: var(--ws-1);
+    }
+    .mm-workshop-detail-hero-stat {
+      font-family: 'M5x7', monospace;
+      font-size: calc(14px + var(--mm-m5-nudge));
+      line-height: 1.3;
+      color: var(--mm-ink-mid);
     }
     .mm-workshop-detail-banner {
       position: relative;
@@ -1487,6 +1692,28 @@ function injectStyles(base: string): void {
       color: var(--mm-ink-mid);
       max-width: none;
       white-space: pre-wrap;
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
+
+    .mm-workshop-detail-about-card {
+      padding: var(--ws-3) var(--ws-3) var(--ws-4);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      border: 1px solid var(--mm-border);
+      background: rgba(0, 0, 0, 0.12);
+    }
+    .mm-workshop-detail-about-card .mm-workshop-detail-section-title {
+      margin-bottom: var(--ws-2);
+    }
+
+    .mm-workshop-comment-compose .mm-field {
+      margin-bottom: var(--ws-2);
+    }
+    .mm-workshop-comment-compose textarea {
+      resize: none;
+      overflow: hidden;
+      min-height: 64px;
     }
     .mm-workshop-detail-actions {
       display: flex;
@@ -2931,14 +3158,14 @@ function injectStyles(base: string): void {
 // ---------------------------------------------------------------------------
 
 const WHATS_NEW_HTML = `
-  Alpha 0.3.1 adds new mobs (zombie, sheep, pig), sugarcane + sugar/paper, bed spawns, world export/import (and Workshop world sharing), /summon, plus Workshop templates + developer mode.
+  The combat update. Armor, bows, new mobs, and spatial audio that makes the world feel a lot bigger.
 `.trim();
 
 // ---------------------------------------------------------------------------
 // MainMenu
 // ---------------------------------------------------------------------------
 
-type NavTab = "solo" | "online" | "workshop" | "settings" | "profile";
+type NavTab = "solo" | "online" | "workshop" | "settings" | "skins" | "profile";
 
 export type MainMenuWorkshopDeps = {
   bus: EventBus;
@@ -2952,12 +3179,16 @@ export class MainMenu {
     auth: IAuthProvider,
     workshop?: MainMenuWorkshopDeps,
     sharedAudio?: AudioEngine,
+    opts: { playStartupIntro?: boolean } = {},
   ): Promise<MainMenuExit> {
     const base = import.meta.env.BASE_URL;
     injectStyles(base);
 
-    // Start background world initialisation in parallel with DOM build
-    const bg = new MenuBackground();
+    // On cold startup, let the cinematic intro have headroom before heavy menu world work.
+    const bg = new MenuBackground({
+      disableIntroSlide: opts.playStartupIntro === true,
+      deferHeavyInitMs: opts.playStartupIntro === true ? 1100 : 0,
+    });
     const bgPromise = bg.init(mount).catch((err: unknown) => {
       console.warn("[MainMenu] Background world failed to load:", err);
     });
@@ -3012,6 +3243,7 @@ export class MainMenu {
       const navBtns = new Map<NavTab, HTMLButtonElement>();
 
       let profileUnmount: (() => void) | null = null;
+      let skinUnmount: (() => void) | null = null;
       let workshopUnmount: (() => void) | null = null;
       let settingsPanelAbort: AbortController | null = null;
 
@@ -3024,6 +3256,13 @@ export class MainMenu {
         if (profileUnmount !== null) {
           profileUnmount();
           profileUnmount = null;
+        }
+      }
+
+      function disposeSkin(): void {
+        if (skinUnmount !== null) {
+          skinUnmount();
+          skinUnmount = null;
         }
       }
 
@@ -3046,6 +3285,7 @@ export class MainMenu {
           ? [{ id: "workshop" as const, label: "Workshop" }]
           : []),
         { id: "settings", label: "Settings" },
+        { id: "skins", label: "Skins", sub: "Wardrobe" },
         { id: "profile", label: "Profile", sub: "Account" },
       ];
 
@@ -3265,6 +3505,7 @@ export class MainMenu {
       function renderHome(): void {
         abortSettingsPanel();
         disposeProfile();
+        disposeSkin();
         disposeWorkshop();
         content.replaceChildren();
         content.classList.add("mm-content-home");
@@ -3287,7 +3528,7 @@ export class MainMenu {
 
         const wnHeading = document.createElement("p");
         wnHeading.className = "mm-home-changelog-title";
-        wnHeading.textContent = "Stratum · Alpha 0.3";
+        wnHeading.textContent = "Stratum · Alpha 0.4";
         wnCopy.appendChild(wnHeading);
 
         const wnBody = document.createElement("div");
@@ -3315,6 +3556,7 @@ export class MainMenu {
         else if (tab === "online") renderOnline();
         else if (tab === "workshop") renderWorkshop();
         else if (tab === "settings") await renderSettings();
+        else if (tab === "skins") renderSkins();
         else if (tab === "profile") renderProfile();
       }
 
@@ -3324,6 +3566,7 @@ export class MainMenu {
         }
         abortSettingsPanel();
         disposeProfile();
+        disposeSkin();
         disposeWorkshop();
         content.replaceChildren();
         closeModal();
@@ -3343,9 +3586,20 @@ export class MainMenu {
         workshopUnmount = screen.mount(content);
       }
 
+      function renderSkins(): void {
+        abortSettingsPanel();
+        disposeWorkshop();
+        disposeProfile();
+        disposeSkin();
+        content.replaceChildren();
+        closeModal();
+        skinUnmount = mountSkinScreen(content, auth);
+      }
+
       function renderProfile(): void {
         abortSettingsPanel();
         disposeWorkshop();
+        disposeSkin();
         disposeProfile();
         content.replaceChildren();
         closeModal();
@@ -3355,6 +3609,7 @@ export class MainMenu {
       function renderSolo(): void {
         abortSettingsPanel();
         disposeWorkshop();
+        disposeSkin();
         disposeProfile();
         content.replaceChildren();
         closeModal();
@@ -4125,6 +4380,7 @@ export class MainMenu {
       function renderOnline(): void {
         abortSettingsPanel();
         disposeWorkshop();
+        disposeSkin();
         disposeProfile();
         content.replaceChildren();
         closeModal();
@@ -4607,6 +4863,7 @@ export class MainMenu {
       async function renderSettings(): Promise<void> {
         abortSettingsPanel();
         disposeWorkshop();
+        disposeSkin();
         disposeProfile();
         content.replaceChildren();
         closeModal();
@@ -4630,6 +4887,7 @@ export class MainMenu {
         clearOnlinePoll();
         abortSettingsPanel();
         disposeWorkshop();
+        disposeSkin();
         disposeProfile();
         root.remove();
         void bgPromise; // ensure promise is observed (suppress unhandled rejection lint)
@@ -4647,6 +4905,18 @@ export class MainMenu {
       mount.appendChild(root);
 
       renderHome();
+      if (opts.playStartupIntro === true) {
+        void runMainMenuStartupIntro({
+          mount,
+          menuRoot: root,
+          menuLogoEl: brandLogo,
+        }).catch((err: unknown) => {
+          console.warn("[MainMenu] Startup intro failed:", err);
+          root.style.opacity = "1";
+          root.style.pointerEvents = "";
+          brandLogo.style.opacity = "1";
+        });
+      }
     });
   }
 }

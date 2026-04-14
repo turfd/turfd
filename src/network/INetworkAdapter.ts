@@ -89,8 +89,8 @@ export interface INetworkAdapter {
    */
   onPeerDisconnected(handler: (peerId: PeerId) => void): void;
 
-  /** Display name + Supabase user id sent in wire handshake (host + client). */
-  setHandshakeProfile(displayName: string, accountId: string | null): void;
+  /** Display name + Supabase user id + skin id sent in wire handshake (host + client). */
+  setHandshakeProfile(displayName: string, accountId: string | null, skinId?: string): void;
 
   /**
    * Host only: if set, called before a joining client is admitted after their handshake.

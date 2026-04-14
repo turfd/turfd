@@ -131,6 +131,25 @@
   transform: translateY(0);
 }
 
+/* Groups hearts + armor HUD and sits above the hotbar strip (shared horizontal center). */
+#inventory-ui-root .inv-hotbar-chrome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-hud-status-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
 #inventory-ui-root .inv-hearts-row {
   display: flex;
   flex-direction: row;
@@ -140,6 +159,54 @@
   gap: 7px;
   min-height: 22px;
   pointer-events: none;
+}
+
+#inventory-ui-root .inv-armor-hud-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 22px;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-armor-hud-row.inv-armor-hud-row--hidden {
+  display: none;
+}
+
+/* Same geometry as hearts: left-clipped `fa-shield` for full / half / empty. */
+#inventory-ui-root .inv-shield-slot {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+#inventory-ui-root .inv-shield {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  translate: 0 -50%;
+  margin: 0;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: auto;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
+}
+
+#inventory-ui-root .inv-shield--empty {
+  color: rgba(46, 46, 50, 0.98);
+}
+
+#inventory-ui-root .inv-shield--full {
+  color: #5c9ead;
 }
 
 #inventory-ui-root .inv-heart-slot {
@@ -171,7 +238,8 @@
 }
 
 #inventory-ui-root .inv-heart--empty {
-  color: rgba(90, 90, 96, 0.95);
+  /* Darker empty heart so missing HP reads at-a-glance. */
+  color: rgba(46, 46, 50, 0.98);
 }
 
 #inventory-ui-root .inv-heart-clip {
@@ -200,6 +268,7 @@
   flex-direction: row;
   gap: var(--inv-grid-gap, 8px);
   align-items: center;
+  justify-content: center;
 }
 
 /* Hotbar slots accept hover for native tooltips; gaps remain click-through. */
@@ -221,8 +290,10 @@
 }
 
 #inventory-ui-root .inv-slot.inv-slot--selected {
-  border-color: rgba(255, 255, 255, 0.45);
-  box-shadow: 0 0 0 1px rgba(242, 242, 247, 0.25);
+  border-color: rgba(255, 255, 255, 0.62);
+  box-shadow:
+    0 0 0 2px rgba(242, 242, 247, 0.26),
+    0 0 0 1px rgba(0, 0, 0, 0.35) inset;
 }
 
 #inventory-ui-root .inv-slot-icon {
@@ -831,7 +902,7 @@
 /* Appended to document.body (fixed layer); not nested under #inventory-ui-root */
 .inv-craft-tooltip {
   position: fixed;
-  z-index: 20000;
+  z-index: 1050;
   max-width: 280px;
   padding: 8px 10px;
   font-family: "M5x7", monospace;
@@ -849,6 +920,50 @@
 .inv-craft-tooltip.inv-craft-tooltip--hidden {
   opacity: 0;
   visibility: hidden;
+}
+
+/* Chest tooltip — appended to document.body */
+.inv-chest-tooltip {
+  position: fixed;
+  z-index: 1050;
+  max-width: min(20rem, 85vw);
+  padding: 6px 11px;
+  box-sizing: border-box;
+  font-family: "M5x7", monospace;
+  font-size: 26px;
+  line-height: 1.25;
+  letter-spacing: 0.03em;
+  color: #f2f2f7;
+  background: rgba(28, 28, 30, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  corner-shape: squircle;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.1s ease,
+    visibility 0.1s ease;
+  white-space: normal;
+}
+
+.inv-chest-tooltip.inv-item-tooltip--visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.inv-chest-tooltip .inv-item-tooltip__name {
+  display: block;
+}
+
+.inv-chest-tooltip .inv-item-tooltip__detail {
+  display: block;
+  margin-top: 5px;
+  font-size: calc(20px + var(--mm-m5-nudge, 4px));
+  line-height: 1.35;
+  color: #aeaeb2;
+  letter-spacing: 0.02em;
 }
 
 .inv-craft-tooltip-heading {
@@ -939,10 +1054,43 @@
   margin-bottom: 0.75rem;
 }
 
+#inventory-ui-root .inv-armor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(20, 20, 22, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  corner-shape: squircle;
+  min-width: 82px;
+}
+
+#inventory-ui-root .inv-armor-panel .inv-panel-title {
+  font-size: 14px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+#inventory-ui-root .inv-grid--armor .inv-slot {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
 #inventory-ui-root .inv-grid {
   display: grid;
   grid-template-columns: repeat(9, var(--inv-slot-px, 58px));
   gap: var(--inv-grid-gap, 8px);
+}
+
+/* Must follow `.inv-grid` so the 9-column grid rule does not flatten armor into a row. */
+#inventory-ui-root .inv-grid.inv-grid--armor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  width: auto;
 }
 
 #inventory-ui-root .inv-grid--main {

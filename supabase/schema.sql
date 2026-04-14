@@ -121,6 +121,7 @@ create or replace function public.stratum_room_session_is_directory_live(
 returns boolean
 language sql
 stable
+set search_path = public, pg_catalog
 as $$
   select p_expires_at > now()
     and p_updated_at > now() - interval '3 minutes';
@@ -189,6 +190,12 @@ grant execute on function public.lookup_room_host_peer(text) to authenticated;
 
 -- Optional: schedule in Supabase (Database → Cron) to prune stale rows, e.g.:
 -- delete from public.stratum_room_sessions where expires_at < now();
+
+-- ---------------------------------------------------------------------------
+-- Migration: profiles.skin_id column (no-op if already present)
+-- ---------------------------------------------------------------------------
+alter table public.profiles
+  add column if not exists skin_id text null;
 
 -- ---------------------------------------------------------------------------
 -- Migration: room directory columns (no-op if already present)
@@ -1201,7 +1208,10 @@ create policy "mods_objects_select_public"
   on storage.objects
   for select
   to public
-  using (bucket_id = 'mods');
+  using (
+    bucket_id = 'mods'
+    and (storage.foldername(name))[1] in ('zips', 'covers')
+  );
 
 drop policy if exists "mods_objects_insert_authenticated" on storage.objects;
 create policy "mods_objects_insert_authenticated"
@@ -1224,3 +1234,59 @@ create policy "mods_objects_delete_authenticated"
   for delete
   to authenticated
   using (bucket_id = 'mods');
+
+-- ---------------------------------------------------------------------------
+-- Security hardening: fix mutable function search_path warnings.
+-- This applies to both current and legacy function names if they exist.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  fn record;
+begin
+  -- Harden public functions that can be flagged by Supabase Advisor.
+  for fn in
+    select
+      n.nspname as schema_name,
+      p.proname as function_name,
+      pg_get_function_identity_arguments(p.oid) as arg_types
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and (
+        p.proname like 'set_turf\_%\_updated_at' escape '\'
+        or p.proname in (
+          'set_profiles_updated_at',
+          'stratum_room_session_is_directory_live',
+          'set_stratum_room_sessions_updated_at',
+          'set_stratum_mods_updated_at'
+        )
+      )
+  loop
+    execute format(
+      'alter function %I.%I(%s) set search_path = public, pg_catalog',
+      fn.schema_name,
+      fn.function_name,
+      fn.arg_types
+    );
+  end loop;
+
+  -- Harden storage helper function flagged by Advisor on some projects.
+  for fn in
+    select
+      n.nspname as schema_name,
+      p.proname as function_name,
+      pg_get_function_identity_arguments(p.oid) as arg_types
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'storage'
+      and p.proname = 'match'
+  loop
+    execute format(
+      'alter function %I.%I(%s) set search_path = storage, pg_catalog',
+      fn.schema_name,
+      fn.function_name,
+      fn.arg_types
+    );
+  end loop;
+end
+$$;

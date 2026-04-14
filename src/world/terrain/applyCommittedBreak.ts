@@ -6,8 +6,20 @@ import type { ItemRegistry } from "../../items/ItemRegistry";
 import type { BlockRegistry } from "../blocks/BlockRegistry";
 import { canHarvestDrops } from "../../core/mining";
 import type { World } from "../World";
-import { WORLD_Y_MAX, WORLD_Y_MIN } from "../../core/constants";
+import {
+  WORLD_Y_MAX,
+  WORLD_Y_MIN,
+  WORLDGEN_NO_COLLIDE,
+} from "../../core/constants";
 import { bedHeadPlusXFromMeta } from "../bed/bedMetadata";
+import {
+  breakTreeLogsAboveColumn,
+  isTreeLogBlock,
+} from "../breakTreeLogColumnCascade";
+import {
+  PAINTING_VARIANTS,
+  decodePaintingMeta,
+} from "../painting/paintingData";
 
 export type BreakTargetLayer = "fg" | "bg";
 
@@ -46,6 +58,10 @@ export function applyCommittedBreakOnWorld(
   if (def.id === airId || def.hardness === 999) {
     return false;
   }
+
+  const wildTreeLogColumn =
+    isTreeLogBlock(registry, def.id) &&
+    (world.getMetadata(wx, wy) & WORLDGEN_NO_COLLIDE) !== 0;
 
   const dropsLoot = canHarvestDrops(def, heldItemDef);
 
@@ -130,6 +146,23 @@ export function applyCommittedBreakOnWorld(
     return true;
   }
 
+  if (def.isPainting === true) {
+    const pmeta = world.getMetadata(wx, wy);
+    const decoded = decodePaintingMeta(pmeta);
+    const pv = PAINTING_VARIANTS[decoded.variantIndex]!;
+    const anchorX = wx - decoded.offsetX;
+    const anchorY = wy - decoded.offsetY;
+    if (dropsLoot) {
+      world.spawnLootForBrokenBlock(def.id, anchorX, anchorY);
+    }
+    for (let oy = 0; oy < pv.height; oy++) {
+      for (let ox = 0; ox < pv.width; ox++) {
+        world.setBlock(anchorX + ox, anchorY + oy, 0);
+      }
+    }
+    return true;
+  }
+
   if (def.identifier === "stratum:furnace") {
     world.spawnFurnaceItemDropsAt(wx, wy);
   }
@@ -140,6 +173,9 @@ export function applyCommittedBreakOnWorld(
       world.spawnLootForBrokenBlock(def.id, wx, wy);
     }
     world.setBlock(wx, wy, 0);
+  }
+  if (wildTreeLogColumn) {
+    breakTreeLogsAboveColumn(world, registry, wx, wy, airId, heldItemDef);
   }
   return true;
 }

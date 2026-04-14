@@ -18,6 +18,7 @@ import {
 } from "./waterMetadata";
 
 const CHUNK_COORD_PACK_BIAS = 32768;
+const WATER_DOWNWARD_FLOW_LEVEL = 1;
 
 function packChunkCoordKey(cx: number, cy: number): number {
   return ((cx + CHUNK_COORD_PACK_BIAS) << 16) | (cy + CHUNK_COORD_PACK_BIAS);
@@ -117,6 +118,39 @@ function markNextActiveAroundWorldCell(
   nextActive.add(packChunkCoordKey(cx, cy + 1));
 }
 
+function getFlowLevelAt(world: World, waterId: number, wx: number, wy: number): number | null {
+  const chunk = world.getChunkAt(wx, wy);
+  if (chunk === undefined) {
+    return null;
+  }
+  const idx = chunkLocalIndexForWorldCell(chunk, wx, wy);
+  if (chunk.blocks[idx] !== waterId) {
+    return null;
+  }
+  return getWaterFlowLevel(chunk.metadata[idx]!);
+}
+
+function hasHorizontalFeeder(
+  world: World,
+  waterId: number,
+  wx: number,
+  wy: number,
+  level: number,
+): boolean {
+  if (level <= 0) {
+    return true;
+  }
+  const left = getFlowLevelAt(world, waterId, wx - 1, wy);
+  if (left !== null && left < level) {
+    return true;
+  }
+  const right = getFlowLevelAt(world, waterId, wx + 1, wy);
+  if (right !== null && right < level) {
+    return true;
+  }
+  return false;
+}
+
 function prepareCellForWaterSpread(
   world: World,
   wx: number,
@@ -188,7 +222,13 @@ function prepareCellForWaterSpread(
 }
 
 /**
- * One pass: try down (source below), then horizontal spread with increasing flow level.
+ * One pass:
+ * 1) remove unfed flowing water (retreat),
+ * 2) try down (flowing below),
+ * 3) horizontal spread with increasing flow level.
+ *
+ * Important: downward spread must never create new sources. Only explicit placements
+ * (bucket/worldgen) should produce flow level 0 source blocks.
  */
 export function tickWaterFlow(
   world: World,
@@ -205,6 +245,17 @@ export function tickWaterFlow(
         const wx = ox + cells[i]!;
         const wy = oy + cells[i + 1]!;
         const level = cells[i + 2]!;
+        if (level > 0) {
+          const fedFromAbove = getFlowLevelAt(world, waterId, wx, wy + 1) !== null;
+          const fedFromSide = hasHorizontalFeeder(world, waterId, wx, wy, level);
+          if (!fedFromAbove && !fedFromSide) {
+            if (world.setBlockWithoutPlantCascadeForWater(wx, wy, airId)) {
+              markNextActiveAroundWorldCell(nextActive, wx, wy);
+            }
+            continue;
+          }
+        }
+        let hasDownwardPath = false;
         const belowY = wy - 1;
         if (belowY >= WORLD_Y_MIN) {
           if (prepareCellForWaterSpread(world, wx, belowY, airId, waterId)) {
@@ -214,22 +265,24 @@ export function tickWaterFlow(
                 ? airId
                 : belowChunk.blocks[chunkLocalIndexForWorldCell(belowChunk, wx, belowY)]!;
             if (belowId === airId) {
+              hasDownwardPath = true;
               if (
                 world.setBlock(wx, belowY, waterId, {
-                  cellMetadata: withWaterFlowLevel(0, 0),
+                  cellMetadata: withWaterFlowLevel(0, WATER_DOWNWARD_FLOW_LEVEL),
                 })
               ) {
                 markNextActiveAroundWorldCell(nextActive, wx, belowY);
               }
             } else if (belowId === waterId) {
+              hasDownwardPath = true;
               if (belowChunk !== undefined) {
                 const m =
                   belowChunk.metadata[chunkLocalIndexForWorldCell(belowChunk, wx, belowY)]!;
                 const cur = getWaterFlowLevel(m);
                 if (
-                  cur > 0 &&
+                  cur !== WATER_DOWNWARD_FLOW_LEVEL &&
                   world.setBlock(wx, belowY, waterId, {
-                    cellMetadata: withWaterFlowLevel(m, 0),
+                    cellMetadata: withWaterFlowLevel(m, WATER_DOWNWARD_FLOW_LEVEL),
                   })
                 ) {
                   markNextActiveAroundWorldCell(nextActive, wx, belowY);
@@ -237,6 +290,12 @@ export function tickWaterFlow(
               }
             }
           }
+        }
+
+        // Minecraft-style preference: if water can continue falling, do not fan out sideways
+        // from this cell yet. This prevents giant "shelf" flows from hillside placements.
+        if (hasDownwardPath) {
+          continue;
         }
 
         if (level >= WATER_MAX_FLOW) {
@@ -283,47 +342,10 @@ export function tickWaterFlow(
   return nextActive;
 }
 
-/**
- * After a water cell is removed or replaced (break, bucket, building over water): strip all
- * *flowing* water in loaded chunks, then re-run spread from remaining sources only.
- * Matches Minecraft-style behavior where removing the source drains dependent flowing water.
- */
+/** After topology changes, reactivate all chunks that still contain water for gradual settle/retreat. */
 export function resimulateWaterFromSources(
   world: World,
-  airId: number,
   waterId: number,
-): void {
-  world.pushBulkForegroundWrites();
-  try {
-    for (const chunk of world.iterLoadedChunks()) {
-      const ox = chunk.coord.cx * CHUNK_SIZE;
-      const oy = chunk.coord.cy * CHUNK_SIZE;
-      const blocks = chunk.blocks;
-      const metadata = chunk.metadata;
-      for (let ly = 0, rowStart = 0; ly < CHUNK_SIZE; ly++, rowStart += CHUNK_SIZE) {
-        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-          const idx = rowStart + lx;
-          const id = blocks[idx]!;
-          if (id !== waterId) {
-            continue;
-          }
-          const meta = metadata[idx]!;
-          if (getWaterFlowLevel(meta) === 0) {
-            continue;
-          }
-          const wx = ox + lx;
-          const wy = oy + ly;
-          world.setBlockWithoutPlantCascadeForWater(wx, wy, airId);
-        }
-      }
-    }
-
-    let active = collectChunksWithWater(world, waterId);
-    const spreadPasses = WATER_MAX_FLOW * 3 + 6;
-    for (let i = 0; i < spreadPasses && active.size > 0; i++) {
-      active = tickWaterFlow(world, airId, waterId, active);
-    }
-  } finally {
-    world.popBulkForegroundWrites();
-  }
+): Set<number> {
+  return collectChunksWithWater(world, waterId);
 }

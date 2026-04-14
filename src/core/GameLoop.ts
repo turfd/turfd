@@ -1,4 +1,10 @@
-import { FIXED_TIMESTEP_MS, FIXED_TIMESTEP_SEC, MAX_FRAME_MS } from "./constants";
+import {
+  FIXED_TIMESTEP_MS,
+  FIXED_TIMESTEP_SEC,
+  MAX_FIXED_STEPS_PER_FRAME,
+  MAX_FRAME_MS,
+} from "./constants";
+import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 
 export type GameLoopHooks = {
   /** Called once per fixed tick (60 Hz). */
@@ -54,10 +60,25 @@ export class GameLoop {
     this.lastFrameTimeMs = timeMs;
     this.accumulatorMs += deltaMs;
 
-    while (this.accumulatorMs >= FIXED_TIMESTEP_MS) {
+    const tFixed = import.meta.env.DEV ? chunkPerfNow() : 0;
+    let fixedSteps = 0;
+    while (
+      this.accumulatorMs >= FIXED_TIMESTEP_MS &&
+      fixedSteps < MAX_FIXED_STEPS_PER_FRAME
+    ) {
       this.hooks.onFixedUpdate(FIXED_TIMESTEP_SEC);
       this.tickIndex += 1;
       this.accumulatorMs -= FIXED_TIMESTEP_MS;
+      fixedSteps += 1;
+    }
+    if (
+      import.meta.env.DEV &&
+      (fixedSteps > 1 || this.accumulatorMs >= FIXED_TIMESTEP_MS)
+    ) {
+      chunkPerfLog("gameLoop:fixedBurst", chunkPerfNow() - tFixed, {
+        fixedSteps,
+        backlogMs: this.accumulatorMs,
+      });
     }
 
     const alpha = this.accumulatorMs / FIXED_TIMESTEP_MS;

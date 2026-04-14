@@ -658,6 +658,10 @@ export class WorkshopScreen {
       b.on("mod:install-error", (e) => {
         this.installingModIds.delete(e.modId);
         this.syncWorkshopModUi(e.modId);
+        const msg = (e as { modId: string; message?: string }).message;
+        if (this.subView === "detail" && this.detailModId === e.modId) {
+          this.showWorkshopActionFeedback(msg ?? "Install failed.");
+        }
       }),
     );
     this.unsubs.push(
@@ -715,9 +719,13 @@ export class WorkshopScreen {
     const main = el("div", "mm-workshop-main");
 
     const filterStrip = el("div", "mm-workshop-filter-strip");
-    const stripRow = el("div", "mm-workshop-filter-strip-row");
-    stripRow.setAttribute("role", "group");
-    stripRow.setAttribute("aria-label", "Type and sort");
+    const controlsTop = el("div", "mm-workshop-controls-top");
+    controlsTop.setAttribute("role", "group");
+    controlsTop.setAttribute("aria-label", "Search and sort");
+
+    const controlsBottom = el("div", "mm-workshop-controls-bottom");
+    controlsBottom.setAttribute("role", "group");
+    controlsBottom.setAttribute("aria-label", "Type filter");
 
     const typePills = el("div", "mm-workshop-type-pills");
     const typeDefs: { v: ModTypeFilter; l: string }[] = [
@@ -740,7 +748,7 @@ export class WorkshopScreen {
       });
       typePills.appendChild(pb);
     }
-    stripRow.appendChild(typePills);
+    controlsBottom.appendChild(typePills);
 
     const sortPills = el("div", "mm-workshop-sort-pills");
     sortPills.setAttribute("aria-label", "Sort");
@@ -763,8 +771,6 @@ export class WorkshopScreen {
       });
       sortPills.appendChild(sb);
     }
-    stripRow.appendChild(sortPills);
-    filterStrip.appendChild(stripRow);
 
     const searchWrap = el("div", "mm-workshop-search-wrap");
     const searchIcon = el("span", "mm-workshop-search-icon");
@@ -787,7 +793,10 @@ export class WorkshopScreen {
     });
     searchWrap.appendChild(searchIcon);
     searchWrap.appendChild(search);
-    filterStrip.appendChild(searchWrap);
+    controlsTop.appendChild(searchWrap);
+    controlsTop.appendChild(sortPills);
+    filterStrip.appendChild(controlsTop);
+    filterStrip.appendChild(controlsBottom);
     main.appendChild(filterStrip);
 
     const listStatus = el("p", "mm-workshop-list-status");
@@ -840,11 +849,11 @@ export class WorkshopScreen {
         "No mods match your filters. Try different search terms or content type.";
       host.appendChild(empty);
     } else {
-      const list = el("div", "mm-workshop-list");
+      const grid = el("div", "mm-workshop-tile-grid");
       for (const m of records) {
-        list.appendChild(this.modRowCard(m));
+        grid.appendChild(this.modTileCard(m));
       }
-      host.appendChild(list);
+      host.appendChild(grid);
       for (const m of records) {
         this.syncWorkshopModUi(m.modId);
       }
@@ -865,56 +874,59 @@ export class WorkshopScreen {
     next.addEventListener("click", () => {
       this.requestList(this.listOffset + MOD_PAGE_SIZE);
     });
+    const page = Math.floor(this.listOffset / MOD_PAGE_SIZE) + 1;
+    const pageLabel = el("div", "mm-workshop-pager-indicator");
+    pageLabel.textContent = `Page ${page}`;
     pager.appendChild(prev);
+    pager.appendChild(pageLabel);
     pager.appendChild(next);
     host.appendChild(pager);
   }
 
-  private modRowCard(m: ModListEntry): HTMLElement {
-    const row = el("article", "mm-workshop-rowcard");
-    row.tabIndex = 0;
-    row.setAttribute("role", "link");
-    row.setAttribute("aria-label", `${m.name} by ${m.authorName}`);
+  private modTileCard(m: ModListEntry): HTMLElement {
+    const card = el("article", "mm-workshop-tile");
+    // Tab order guardrail: focus hits the card first, then its CTA button.
+    card.tabIndex = 0;
+    card.setAttribute("role", "link");
+    card.setAttribute("aria-label", `${m.name} by ${m.authorName}`);
 
     const openDetail = (): void => {
       this.detailRecordId = m.id;
       this.deps.bus.emit({ type: "workshop:open-detail", recordId: m.id } satisfies GameEvent);
     };
-    row.addEventListener("click", (ev) => {
+    card.addEventListener("click", (ev) => {
       if ((ev.target as HTMLElement).closest("button")) {
         return;
       }
       openDetail();
     });
-    row.addEventListener("keydown", (ev) => {
+    card.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === " ") {
         ev.preventDefault();
         openDetail();
       }
     });
 
-    const iconWrap = el("div", "mm-workshop-rowcard-icon");
-    const img = el("img", "mm-workshop-rowcard-img") as HTMLImageElement;
+    const media = el("div", "mm-workshop-tile-media");
+    const img = el("img", "mm-workshop-tile-img") as HTMLImageElement;
     img.loading = "lazy";
     img.alt = "";
     if (m.coverPath.length > 0) {
       img.src = this.deps.getModPublicUrl(m.coverPath);
     }
-    iconWrap.appendChild(img);
+    media.appendChild(img);
+    card.appendChild(media);
 
-    const mid = el("div", "mm-workshop-rowcard-main");
-    const titleRow = el("div", "mm-workshop-rowcard-title-row");
-    const title = el("h3", "mm-workshop-rowcard-title");
+    const body = el("div", "mm-workshop-tile-body");
+    const title = el("h3", "mm-workshop-tile-title");
     title.textContent = m.name;
-    titleRow.appendChild(title);
-    mid.appendChild(titleRow);
+    body.appendChild(title);
 
-    const author = el("p", "mm-workshop-rowcard-author");
-    author.textContent =
-      m.authorName.length > 0 ? `by ${m.authorName}` : "by unknown";
-    mid.appendChild(author);
+    const author = el("p", "mm-workshop-tile-author");
+    author.textContent = m.authorName.length > 0 ? `by ${m.authorName}` : "by unknown";
+    body.appendChild(author);
 
-    const tags = el("div", "mm-workshop-rowcard-tags");
+    const metaRow = el("div", "mm-workshop-tile-meta");
     const badge = el("span", `mm-workshop-badge mm-workshop-badge-${m.modType}`);
     badge.textContent =
       m.modType === "behavior_pack"
@@ -922,17 +934,14 @@ export class WorkshopScreen {
         : m.modType === "resource_pack"
           ? "Resource"
           : m.modType;
-    tags.appendChild(badge);
-    mid.appendChild(tags);
+    metaRow.appendChild(badge);
+    const meta = el("span", "mm-workshop-tile-meta-line");
+    meta.textContent = formatWorkshopListMetaLine(m);
+    metaRow.appendChild(meta);
+    body.appendChild(metaRow);
 
-    const aside = el("div", "mm-workshop-rowcard-aside");
-    const meta = el("p", "mm-workshop-rowcard-meta");
-    const metaText = formatWorkshopListMetaLine(m);
-    meta.textContent = metaText;
-    meta.title = metaText;
-    aside.appendChild(meta);
-
-    const install = el("button", "mm-btn mm-workshop-rowcard-install") as HTMLButtonElement;
+    const actions = el("div", "mm-workshop-tile-actions");
+    const install = el("button", "mm-btn mm-workshop-tile-install") as HTMLButtonElement;
     install.type = "button";
     this.applyInstallButtonShell(install, m.modId);
     install.addEventListener("click", (ev) => {
@@ -948,18 +957,16 @@ export class WorkshopScreen {
       } satisfies GameEvent);
     });
     if (m.modType === "world") {
-      // Override label for worlds; they don't "install" into the mod library.
       const label = install.querySelector<HTMLElement>(".mm-workshop-btn-label");
       if (label !== null) {
         label.textContent = "Import";
       }
     }
-    aside.appendChild(install);
+    actions.appendChild(install);
+    body.appendChild(actions);
 
-    row.appendChild(iconWrap);
-    row.appendChild(mid);
-    row.appendChild(aside);
-    return row;
+    card.appendChild(body);
+    return card;
   }
 
   private renderDetail(
@@ -994,63 +1001,63 @@ export class WorkshopScreen {
     page.appendChild(toolbar);
 
     const coverUrl = m.coverPath.length > 0 ? this.deps.getModPublicUrl(m.coverPath) : "";
-    const banner = el("section", "mm-workshop-detail-banner");
+    const hero = el("section", "mm-workshop-detail-hero");
+    const heroCover = el("div", "mm-workshop-detail-hero-cover");
     if (coverUrl.length > 0) {
-      banner.classList.add("mm-workshop-detail-banner--has-cover");
-      banner.style.backgroundImage = `url("${coverUrl}")`;
-    }
-    const scrim = el("div", "mm-workshop-detail-banner-scrim");
-    const bannerInner = el("div", "mm-workshop-detail-banner-inner");
-    const iconWrap = el("div", "mm-workshop-detail-banner-icon");
-    if (coverUrl.length > 0) {
-      const iconImg = el("img", "mm-workshop-detail-banner-icon-img") as HTMLImageElement;
-      iconImg.alt = "";
-      iconImg.src = coverUrl;
-      iconWrap.appendChild(iconImg);
+      const heroImg = el("img", "mm-workshop-detail-hero-img") as HTMLImageElement;
+      heroImg.alt = "";
+      heroImg.src = coverUrl;
+      heroCover.appendChild(heroImg);
     } else {
-      const ph = el("div", "mm-workshop-detail-banner-icon-ph");
+      const ph = el("div", "mm-workshop-detail-hero-ph");
       ph.setAttribute("aria-hidden", "true");
-      iconWrap.appendChild(ph);
+      heroCover.appendChild(ph);
     }
 
-    const bannerText = el("div", "mm-workshop-detail-banner-text");
+    const heroInfo = el("div", "mm-workshop-detail-hero-info");
     const h = el("h2", "mm-workshop-detail-name");
     h.textContent = m.name;
     const author = el("p", "mm-workshop-detail-author");
-    author.textContent =
-      m.authorName.length > 0 ? `by ${m.authorName}` : "by unknown";
-    const bannerMeta = el("div", "mm-workshop-detail-banner-meta");
+    author.textContent = m.authorName.length > 0 ? `by ${m.authorName}` : "by unknown";
+    const meta = el("div", "mm-workshop-detail-hero-meta");
     const typeBadge = el("span", `mm-workshop-badge mm-workshop-badge-${m.modType}`);
     typeBadge.textContent = workshopModTypeBadgeLabel(m.modType);
-    bannerMeta.appendChild(typeBadge);
+    meta.appendChild(typeBadge);
     const rcBanner = m.ratingCount;
-    const rateSummary = el("span", "mm-workshop-detail-banner-stat");
+    const rateSummary = el("span", "mm-workshop-detail-hero-stat");
     rateSummary.textContent =
       rcBanner > 0
         ? `★ ${m.avgRating.toFixed(1)} · ${rcBanner} rating${rcBanner === 1 ? "" : "s"}`
         : "No ratings yet";
-    bannerMeta.appendChild(rateSummary);
-    const dlSummary = el("span", "mm-workshop-detail-banner-stat");
+    meta.appendChild(rateSummary);
+    const dlSummary = el("span", "mm-workshop-detail-hero-stat");
     dlSummary.textContent = `${formatWorkshopDownloadCount(m.downloadCount)} downloads`;
-    bannerMeta.appendChild(dlSummary);
-    bannerText.appendChild(h);
-    bannerText.appendChild(author);
-    bannerText.appendChild(bannerMeta);
-    bannerInner.appendChild(iconWrap);
-    bannerInner.appendChild(bannerText);
-    banner.appendChild(scrim);
-    banner.appendChild(bannerInner);
-    page.appendChild(banner);
+    meta.appendChild(dlSummary);
+    const whenRel = formatWorkshopRelativeTime(m.createdAt);
+    if (whenRel.length > 0) {
+      const upd = el("span", "mm-workshop-detail-hero-stat");
+      upd.textContent = whenRel;
+      meta.appendChild(upd);
+    }
+    heroInfo.appendChild(h);
+    heroInfo.appendChild(author);
+    heroInfo.appendChild(meta);
+
+    hero.appendChild(heroCover);
+    hero.appendChild(heroInfo);
+    page.appendChild(hero);
 
     const columns = el("div", "mm-workshop-detail-columns");
     const mainCol = el("div", "mm-workshop-detail-main");
 
+    const aboutCard = el("section", "mm-workshop-detail-about-card");
     const aboutTitle = el("h3", "mm-workshop-detail-section-title");
     aboutTitle.textContent = "About";
     const desc = el("p", "mm-workshop-detail-desc");
     desc.textContent = m.description;
-    mainCol.appendChild(aboutTitle);
-    mainCol.appendChild(desc);
+    aboutCard.appendChild(aboutTitle);
+    aboutCard.appendChild(desc);
+    mainCol.appendChild(aboutCard);
 
     const comSection = el("section", "mm-workshop-detail-comments-section");
     const comHead = el("h3", "mm-workshop-detail-section-title");
@@ -1072,8 +1079,15 @@ export class WorkshopScreen {
     if (uid !== null) {
       const compose = el("div", "mm-workshop-comment-compose");
       const ta = el("textarea") as HTMLTextAreaElement;
-      ta.rows = 3;
+      ta.rows = 2;
       ta.placeholder = "Write a comment…";
+      const autoGrow = (): void => {
+        ta.style.height = "auto";
+        ta.style.height = `${Math.max(0, ta.scrollHeight)}px`;
+      };
+      ta.addEventListener("input", autoGrow);
+      // Initial sizing (once attached).
+      window.setTimeout(autoGrow, 0);
       compose.appendChild(this.makeField("Add comment", ta));
       const post = el("button", "mm-btn") as HTMLButtonElement;
       post.type = "button";
@@ -1156,9 +1170,9 @@ export class WorkshopScreen {
     addMetaRow("Version", `v${m.version}`);
     addMetaRow("Size", formatWorkshopFileSize(m.fileSize));
     addMetaRow("Downloads", formatWorkshopDownloadCount(m.downloadCount));
-    const when = formatWorkshopRelativeTime(m.createdAt);
-    if (when.length > 0) {
-      addMetaRow("Updated", when);
+    const whenMeta = formatWorkshopRelativeTime(m.createdAt);
+    if (whenMeta.length > 0) {
+      addMetaRow("Updated", whenMeta);
     }
     addMetaRow("Pack id", m.modId);
     sideCard.appendChild(metaList);
