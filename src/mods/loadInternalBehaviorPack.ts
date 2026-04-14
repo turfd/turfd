@@ -67,7 +67,8 @@ export function registerParsedItemsInOrder(
   for (const def of sorted) {
     if (def.numericId !== expected) {
       throw new Error(
-        `Item '${def.identifier}': stratum:numeric_id is ${def.numericId}, expected ${expected} (must extend contiguously after block-items).`,
+        `Item '${def.identifier}': stratum:numeric_id is ${def.numericId}, expected ${expected} (must extend contiguously after block-items). ` +
+          `If expected is too low, the behavior pack manifest may be missing newer blocks (e.g. bed_head, granite) or the deploy is stale.`,
       );
     }
     let placesBlockId: number | undefined;

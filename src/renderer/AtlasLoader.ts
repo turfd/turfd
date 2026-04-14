@@ -55,7 +55,9 @@ async function discoverAltVariants(raw: Record<string, string>): Promise<Record<
             });
             if (!res.ok) break;
             const ct = (res.headers.get("content-type") ?? "").toLowerCase();
-            if (ct.length > 0 && !ct.startsWith("image/")) break;
+            // Require a real image/* type. Empty or non-image 200s (common with SPA / proxy
+            // fallbacks) must not register alts or we 404 when packing the atlas.
+            if (!ct.startsWith("image/")) break;
             expanded[altName] = altPath;
           } catch {
             break;
