@@ -11,6 +11,7 @@ import type {
 import {
   BinarySerializer,
   WIRE_PROTOCOL_VERSION,
+  isWireVersionCompatible,
   type DecodedWirePayload,
 } from "./protocol/BinarySerializer";
 import type { NetworkMessage } from "./protocol/messages";
@@ -359,7 +360,7 @@ export class PeerJSAdapter implements INetworkAdapter {
           return;
         }
         const payload = decoded.payload as HandshakeWirePayload;
-        if (payload.version !== WIRE_PROTOCOL_VERSION) {
+        if (!isWireVersionCompatible(payload.version)) {
           this._bus.emit({ type: "net:error", message: PROTOCOL_MISMATCH_MSG });
           conn.close();
           return;
@@ -462,7 +463,7 @@ export class PeerJSAdapter implements INetworkAdapter {
           return;
         }
         const payload = decoded.payload;
-        if (payload.version !== WIRE_PROTOCOL_VERSION) {
+        if (!isWireVersionCompatible(payload.version)) {
           this._bus.emit({ type: "net:error", message: PROTOCOL_MISMATCH_MSG });
           conn.close();
           fail(new Error(PROTOCOL_MISMATCH_MSG));

@@ -53,8 +53,21 @@ const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 /** Trailing per-cell metadata (`Uint8` × cells) after furnace/chest tails; v10+. */
 const CHUNK_METADATA_MAGIC = 0x54_41_44_4d; // 'TADM' LE — per-cell flags (e.g. WORLDGEN_NO_COLLIDE)
 
-/** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 17;
+/** Wire protocol version carried in handshake (this build). */
+export const WIRE_PROTOCOL_VERSION = 20;
+/**
+ * Oldest wire version this build still speaks. Bump when the binary layout breaks;
+ * keep in sync with {@link WIRE_PROTOCOL_VERSION} when you drop old clients.
+ * Handshake v17+ added `localGuestUuid`; v16 peers remain compatible.
+ */
+export const MIN_WIRE_PROTOCOL_VERSION = 16;
+
+export function isWireVersionCompatible(peerVersion: number): boolean {
+  return (
+    peerVersion >= MIN_WIRE_PROTOCOL_VERSION &&
+    peerVersion <= WIRE_PROTOCOL_VERSION
+  );
+}
 
 /** Max UTF-8 bytes for handshake display name (profile + guest labels). */
 export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;
