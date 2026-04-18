@@ -3,9 +3,11 @@
  */
 import type { IAuthProvider } from "./auth/IAuthProvider";
 import { createAuthProvider } from "./auth/createAuthProvider";
+import { getOrCreateLocalGuestIdentity } from "./auth/localGuestIdentity";
 import { loadLocalSecretsFile } from "./config/secretsLoader";
 import { EventBus } from "./core/EventBus";
 import { unixRandom01 } from "./core/unixRandom";
+import { DEFAULT_SKIN_ID } from "./core/constants";
 import {
   Game,
   type MultiplayerHostFromMenuSpec,
@@ -755,6 +757,14 @@ async function main(): Promise<void> {
 
       const session = auth.getSession();
       const playerSettings = await store.loadPlayerSettings();
+      let skinId = playerSettings.selectedSkinId;
+      if (
+        session === null &&
+        typeof skinId === "string" &&
+        skinId.startsWith("custom:")
+      ) {
+        skinId = DEFAULT_SKIN_ID;
+      }
       game = new Game({
         mount,
         seed,
@@ -768,7 +778,9 @@ async function main(): Promise<void> {
         signalRelay,
         displayName: auth.getDisplayLabel(),
         accountId: session?.userId ?? null,
-        skinId: playerSettings.selectedSkinId,
+        localGuestUuid:
+          session === null ? getOrCreateLocalGuestIdentity().uuid : null,
+        skinId,
         modRepository,
         sharedAudio,
       });

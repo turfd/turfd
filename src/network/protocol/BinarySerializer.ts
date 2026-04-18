@@ -54,7 +54,7 @@ const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 const CHUNK_METADATA_MAGIC = 0x54_41_44_4d; // 'TADM' LE — per-cell flags (e.g. WORLDGEN_NO_COLLIDE)
 
 /** Wire protocol version carried in handshake; must match across peers. */
-export const WIRE_PROTOCOL_VERSION = 16;
+export const WIRE_PROTOCOL_VERSION = 17;
 
 /** Max UTF-8 bytes for handshake display name (profile + guest labels). */
 export const HANDSHAKE_DISPLAY_NAME_MAX_BYTES = 128;
@@ -65,6 +65,9 @@ export const HANDSHAKE_ACCOUNT_ID_MAX_BYTES = 64;
 /** Max UTF-8 bytes for skin id on the wire (e.g. `"explorer_bob"` or `"custom:uuid"`). */
 export const HANDSHAKE_SKIN_ID_MAX_BYTES = 128;
 
+/** Max UTF-8 bytes for persisted local anonymous id (standard UUID string). */
+export const HANDSHAKE_LOCAL_GUEST_UUID_MAX_BYTES = 36;
+
 export type HandshakeWirePayload = {
   version: number;
   peerId: string;
@@ -74,6 +77,11 @@ export type HandshakeWirePayload = {
   accountId: string;
   /** Selected skin id; empty string = default skin. */
   skinId: string;
+  /**
+   * Persisted local anonymous UUID when `accountId` is empty; empty when signed in
+   * or legacy peer (v16 and older).
+   */
+  localGuestUuid: string;
 };
 
 export type WorldSyncWirePayload = {
@@ -116,7 +124,7 @@ export type DecodedWirePayload =
 
 export class BinarySerializer {
   /**
-   * Encodes handshake: [type][u32 ver][u32 peerLen][peer][u16 dnLen][displayName][u16 accLen][accountId].
+   * Encodes handshake: [type][u32 ver][u32 peerLen][peer][u16 dnLen][displayName][u16 accLen][accountId][u16 skinLen][skinId][u16 localLen][localGuestUuid].
    */
   public static serializeHandshake(
     msg: HandshakeWirePayload,
@@ -134,6 +142,10 @@ export class BinarySerializer {
     if (skinBytes.length > HANDSHAKE_SKIN_ID_MAX_BYTES) {
       skinBytes = skinBytes.slice(0, HANDSHAKE_SKIN_ID_MAX_BYTES);
     }
+    let localBytes = textEnc.encode(msg.localGuestUuid ?? "");
+    if (localBytes.length > HANDSHAKE_LOCAL_GUEST_UUID_MAX_BYTES) {
+      localBytes = localBytes.slice(0, HANDSHAKE_LOCAL_GUEST_UUID_MAX_BYTES);
+    }
     const total =
       1 +
       4 +
@@ -144,7 +156,9 @@ export class BinarySerializer {
       2 +
       accBytes.length +
       2 +
-      skinBytes.length;
+      skinBytes.length +
+      2 +
+      localBytes.length;
     const buffer = new ArrayBuffer(total);
     const view = new DataView(buffer);
     let o = 0;
@@ -167,6 +181,10 @@ export class BinarySerializer {
     view.setUint16(o, skinBytes.length, LE);
     o += 2;
     new Uint8Array(buffer, o, skinBytes.length).set(skinBytes);
+    o += skinBytes.length;
+    view.setUint16(o, localBytes.length, LE);
+    o += 2;
+    new Uint8Array(buffer, o, localBytes.length).set(localBytes);
     return buffer;
   }
 
@@ -187,23 +205,51 @@ export class BinarySerializer {
     let o = 9 + peerIdLen;
     const peerId = textDec.decode(new Uint8Array(buffer, 9, peerIdLen));
     if (o + 2 > buffer.byteLength) {
-      return { version, peerId, displayName: "", accountId: "", skinId: "" };
+      return {
+        version,
+        peerId,
+        displayName: "",
+        accountId: "",
+        skinId: "",
+        localGuestUuid: "",
+      };
     }
     const dnLen = view.getUint16(o, LE);
     o += 2;
     if (o + dnLen > buffer.byteLength) {
-      return { version, peerId, displayName: "", accountId: "", skinId: "" };
+      return {
+        version,
+        peerId,
+        displayName: "",
+        accountId: "",
+        skinId: "",
+        localGuestUuid: "",
+      };
     }
     const displayName =
       dnLen > 0 ? textDec.decode(new Uint8Array(buffer, o, dnLen)) : "";
     o += dnLen;
     if (o + 2 > buffer.byteLength) {
-      return { version, peerId, displayName: displayName || "Player", accountId: "", skinId: "" };
+      return {
+        version,
+        peerId,
+        displayName: displayName || "Player",
+        accountId: "",
+        skinId: "",
+        localGuestUuid: "",
+      };
     }
     const accLen = view.getUint16(o, LE);
     o += 2;
     if (o + accLen > buffer.byteLength) {
-      return { version, peerId, displayName: displayName || "Player", accountId: "", skinId: "" };
+      return {
+        version,
+        peerId,
+        displayName: displayName || "Player",
+        accountId: "",
+        skinId: "",
+        localGuestUuid: "",
+      };
     }
     const accountId =
       accLen > 0 ? textDec.decode(new Uint8Array(buffer, o, accLen)) : "";
@@ -215,20 +261,41 @@ export class BinarySerializer {
         displayName: displayName.trim() !== "" ? displayName : "Player",
         accountId,
         skinId: "",
+        localGuestUuid: "",
       };
     }
     const skinLen = view.getUint16(o, LE);
     o += 2;
-    const skinId =
-      skinLen > 0 && o + skinLen <= buffer.byteLength
-        ? textDec.decode(new Uint8Array(buffer, o, skinLen))
-        : "";
+    let skinId = "";
+    if (skinLen > 0) {
+      if (o + skinLen > buffer.byteLength) {
+        return {
+          version,
+          peerId,
+          displayName: displayName.trim() !== "" ? displayName : "Player",
+          accountId,
+          skinId: "",
+          localGuestUuid: "",
+        };
+      }
+      skinId = textDec.decode(new Uint8Array(buffer, o, skinLen));
+      o += skinLen;
+    }
+    let localGuestUuid = "";
+    if (o + 2 <= buffer.byteLength) {
+      const localLen = view.getUint16(o, LE);
+      o += 2;
+      if (localLen > 0 && o + localLen <= buffer.byteLength) {
+        localGuestUuid = textDec.decode(new Uint8Array(buffer, o, localLen));
+      }
+    }
     return {
       version,
       peerId,
       displayName: displayName.trim() !== "" ? displayName : "Player",
       accountId,
       skinId,
+      localGuestUuid,
     };
   }
 

@@ -278,13 +278,13 @@ function animateWalkPreview(canvas: HTMLCanvasElement, img: HTMLImageElement): (
 }
 
 /**
- * Mount the Skins tab into `container`. `auth` is unused today but kept for parity / future cloud sync.
+ * Mount the Skins tab into `container`. Custom uploads require a signed-in session.
  */
 export function mountSkinScreen(
   container: HTMLElement,
-  _auth: IAuthProvider,
+  auth: IAuthProvider,
 ): () => void {
-  void _auth;
+  const allowCustom = auth.getSession() !== null;
   injectStyles();
 
   const root = document.createElement("div");
@@ -328,7 +328,9 @@ export function mountSkinScreen(
   btnCustom.className = "stratum-skins-cat";
   btnCustom.textContent = "My skins";
   catCol.appendChild(btnDefault);
-  catCol.appendChild(btnCustom);
+  if (allowCustom) {
+    catCol.appendChild(btnCustom);
+  }
 
   const center = document.createElement("section");
   center.className = "stratum-skins-center";
@@ -362,8 +364,9 @@ export function mountSkinScreen(
   deleteBtn.style.display = "none";
   const hint = document.createElement("p");
   hint.className = "skin-preview-hint";
-  hint.textContent =
-    "Your choice is saved on this device. It applies the next time you open or join a world.";
+  hint.textContent = allowCustom
+    ? "Your choice is saved on this device. It applies the next time you open or join a world."
+    : "Sign in to upload custom skins and sync them to multiplayer. Built-in skins work offline and while signed out.";
   previewCol.appendChild(previewHeading);
   previewCol.appendChild(canvasWrap);
   previewCol.appendChild(previewName);
@@ -384,6 +387,14 @@ export function mountSkinScreen(
   title.textContent = "Skins";
 
   root.appendChild(title);
+  if (!allowCustom) {
+    const guestNote = document.createElement("p");
+    guestNote.className = "mm-note";
+    guestNote.style.marginTop = "0";
+    guestNote.textContent =
+      "Sign in to upload custom skins and show them to other players. You can use built-in skins while signed out.";
+    root.appendChild(guestNote);
+  }
   root.appendChild(inner);
   root.appendChild(feedback);
 
@@ -435,8 +446,9 @@ export function mountSkinScreen(
     grid.replaceChildren();
     const builtinsFiltered = builtins;
     const customsFiltered = customs;
+    const cat: SkinCategory = allowCustom ? category : "default";
 
-    if (category === "default") {
+    if (cat === "default") {
       gridTitle.textContent = `Default skins (${builtinsFiltered.length})`;
       for (const entry of builtinsFiltered) {
         grid.appendChild(makeSkinCard(entry));
@@ -545,13 +557,18 @@ export function mountSkinScreen(
     setCategory("default");
     void refresh();
   });
-  btnCustom.addEventListener("click", () => {
-    setCategory("custom");
-    void refresh();
-  });
+  if (allowCustom) {
+    btnCustom.addEventListener("click", () => {
+      setCategory("custom");
+      void refresh();
+    });
+  }
 
   selectBtn.addEventListener("click", () => {
     if (previewEntry === null) {
+      return;
+    }
+    if (!allowCustom && previewEntry.ref.kind === "custom") {
       return;
     }
     void (async () => {
@@ -595,7 +612,10 @@ export function mountSkinScreen(
     if (s.selectedSkinId !== undefined && s.selectedSkinId.length > 0) {
       selectedSkinId = s.selectedSkinId;
     }
-    if (selectedSkinId.startsWith("custom:")) {
+    if (!allowCustom && selectedSkinId.startsWith("custom:")) {
+      await saveSkinSelection(DEFAULT_SKIN_ID);
+    }
+    if (allowCustom && selectedSkinId.startsWith("custom:")) {
       setCategory("custom");
     }
     setFeedback("", "clear");

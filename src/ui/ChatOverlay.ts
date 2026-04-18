@@ -2,6 +2,7 @@
  * In-game chat: peek log (auto-fade), compose mode (T), command hints, tab completion.
  */
 import type { EventBus } from "../core/EventBus";
+import type { SessionRosterEntry } from "../network/ChatHostController";
 import type { GameEvent } from "../core/types";
 import { resolveRosterPeer } from "../network/ChatHostController";
 
@@ -208,7 +209,7 @@ export class ChatOverlay {
   private readonly lines: { kind: "player" | "system"; text: string; label?: string }[] =
     [];
   private localDisplayName = "Player";
-  private readonly roster = new Map<string, { displayName: string; accountId: string }>();
+  private readonly roster = new Map<string, SessionRosterEntry>();
   private cmdTabPool: string[] = [];
   private cmdTabIdx = 0;
   private cmdTabKey = "";
@@ -443,6 +444,7 @@ export class ChatOverlay {
         this.roster.set(e.peerId, {
           displayName: e.displayName,
           accountId: e.accountId,
+          localGuestUuid: e.localGuestUuid,
         });
       }),
     );

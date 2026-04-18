@@ -108,6 +108,8 @@ export interface HandshakeMessage {
   accountId: string;
   /** Selected skin id; empty string = default skin. */
   skinId: string;
+  /** Persisted local anonymous UUID when unsigned; empty when signed in. */
+  localGuestUuid: string;
 }
 
 export type ChunkDataMsg = {
@@ -724,6 +726,7 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         displayName: msg.displayName,
         accountId: msg.accountId,
         skinId: msg.skinId,
+        localGuestUuid: msg.localGuestUuid,
       });
 
     case MessageType.CHUNK_DATA: {
@@ -1309,6 +1312,7 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         displayName: p.displayName,
         accountId: p.accountId,
         skinId: p.skinId,
+        localGuestUuid: p.localGuestUuid,
       };
     }
 

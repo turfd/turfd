@@ -1,32 +1,18 @@
-/** Offline guest auth: no Supabase; stable session display label from crypto. */
+/** Offline guest auth: no Supabase; persistent local gamertag + UUID. */
 
+import { getOrCreateLocalGuestIdentity } from "./localGuestIdentity";
 import type { AuthSession, IAuthProvider } from "./IAuthProvider";
 import type { ProfileRecord } from "./profile";
 
-function makeGuestLabel(): string {
-  const bytes = new Uint8Array(2);
-  crypto.getRandomValues(bytes);
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
-    "",
-  );
-  return `Guest_${hex.toUpperCase()}`;
-}
-
 export class NullAuthProvider implements IAuthProvider {
   readonly isConfigured = false;
-
-  private readonly guestLabel: string;
-
-  constructor() {
-    this.guestLabel = makeGuestLabel();
-  }
 
   getSession(): AuthSession | null {
     return null;
   }
 
   getDisplayLabel(): string {
-    return this.guestLabel;
+    return getOrCreateLocalGuestIdentity().displayName;
   }
 
   signIn(): Promise<{ ok: true } | { ok: false; error: string }> {

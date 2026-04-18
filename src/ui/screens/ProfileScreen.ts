@@ -132,7 +132,7 @@ export function mountProfileScreen(
       p.textContent =
         "Playing as " +
         auth.getDisplayLabel() +
-        ". Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable accounts and online room relay.";
+        ". You can't change this name until you sign in or create an account. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable accounts and online room relay.";
       inner.appendChild(p);
       return;
     }
@@ -202,6 +202,14 @@ export function mountProfileScreen(
       });
       return;
     }
+
+    const guestTag = document.createElement("p");
+    guestTag.className = "mm-note";
+    guestTag.textContent =
+      "Playing as " +
+      auth.getDisplayLabel() +
+      ". You can't change this name until you sign in or create an account.";
+    inner.appendChild(guestTag);
 
     const muted = document.createElement("p");
     muted.className = "mm-note";

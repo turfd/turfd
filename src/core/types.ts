@@ -101,6 +101,8 @@ export type GameEvent =
       displayName: string;
       accountId: string;
       skinId: string;
+      /** Persisted local anonymous id when peer is not signed in; empty otherwise. */
+      localGuestUuid: string;
     }
   | { type: "net:peer-left"; peerId: string }
   | { type: "net:handshake-success"; isHost: boolean }

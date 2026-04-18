@@ -235,6 +235,8 @@ export type GameOptions = {
   displayName?: string;
   /** Supabase `auth.users` id when signed in; guests omit. */
   accountId?: string | null;
+  /** Persisted local anonymous UUID when not signed in; omit when signed in. */
+  localGuestUuid?: string | null;
   /** Selected player skin id (e.g. `"explorer_bob"` or `"custom:uuid"`). */
   skinId?: string;
   /** Optional workshop cache + download; omitted when Supabase is not configured. */
@@ -286,11 +288,12 @@ export class Game {
 
   private readonly _displayName: string;
   private readonly _accountId: string | null;
+  private readonly _localGuestUuid: string | null;
   private _localSkinId: string | null = null;
   private readonly _moderation = new WorldModerationState();
   private readonly _sessionRoster = new Map<
     string,
-    { displayName: string; accountId: string; skinId: string }
+    { displayName: string; accountId: string; skinId: string; localGuestUuid: string }
   >();
   private readonly _mutedPeerIds = new Set<string>();
   private readonly _opPeerIds = new Set<string>();
@@ -527,6 +530,9 @@ export class Game {
     const dn = options.displayName?.trim();
     this._displayName = dn !== undefined && dn !== "" ? dn : "Player";
     this._accountId = options.accountId ?? null;
+    const lg = options.localGuestUuid?.trim();
+    this._localGuestUuid =
+      lg !== undefined && lg !== "" ? lg : null;
     this._localSkinId = options.skinId ?? null;
     this._modRepository = options.modRepository ?? null;
     this._sharedAudio = options.sharedAudio;
@@ -535,7 +541,12 @@ export class Game {
       options.initialWorldTimeMs ?? DAY_LENGTH_MS * 0.15;
     this._worldTime = new WorldTime(initialTimeMs);
     this.adapter = new PeerJSAdapter(this.bus);
-    this.adapter.setHandshakeProfile(this._displayName, this._accountId, this._localSkinId ?? undefined);
+    this.adapter.setHandshakeProfile(
+      this._displayName,
+      this._accountId,
+      this._localSkinId ?? undefined,
+      this._localGuestUuid,
+    );
     this._chunkSync = new ChunkSyncManager(this.adapter);
     this._playerStateBroadcaster = new PlayerStateBroadcaster(this.adapter, () => {
       const em = this.entityManager;
@@ -1117,6 +1128,7 @@ export class Game {
         displayName: entry.displayName,
         accountId: entry.accountId,
         skinId: entry.skinId,
+        localGuestUuid: entry.localGuestUuid,
       } satisfies GameEvent);
     }
 
@@ -2386,7 +2398,11 @@ export class Game {
           const stand = this._bedStandFeetFromCells(bedCells);
           const roster = this._sessionRoster.get(e.peerId);
           if (roster !== undefined) {
-            const key = multiplayerPersistKey(roster.accountId, roster.displayName);
+            const key = multiplayerPersistKey(
+              roster.accountId,
+              roster.displayName,
+              roster.localGuestUuid,
+            );
             this._multiplayerSpawnPoints.set(key, { x: stand.x, y: stand.y });
             void this.saveGame?.save();
           }
@@ -2594,6 +2610,7 @@ export class Game {
           displayName: e.displayName,
           accountId: e.accountId,
           skinId: e.skinId,
+          localGuestUuid: e.localGuestUuid,
         });
 
         // Load remote peer's skin (built-in skins resolve immediately;
@@ -2669,6 +2686,7 @@ export class Game {
             const key = multiplayerPersistKey(
               rosterEntry.accountId,
               rosterEntry.displayName,
+              rosterEntry.localGuestUuid,
             );
             this._multiplayerLogoutSpawns.set(key, {
               x: feet.x,
@@ -2730,6 +2748,7 @@ export class Game {
               const key = multiplayerPersistKey(
                 rosterJoin.accountId,
                 rosterJoin.displayName,
+                rosterJoin.localGuestUuid,
               );
               const sp =
                 meta.multiplayerSpawnPoints?.[key] ??
@@ -3045,6 +3064,7 @@ export class Game {
         displayName: this._displayName,
         accountId: this._accountId ?? "",
         skinId: this._localSkinId ?? "",
+        localGuestUuid: this._localGuestUuid ?? "",
       });
     }
     this.adapter.setClientAdmissionGate((peerId, displayName, accountId) => {

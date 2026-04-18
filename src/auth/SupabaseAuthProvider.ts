@@ -1,6 +1,7 @@
 /** Supabase email/password auth and profiles table access. */
 
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
+import { getOrCreateLocalGuestIdentity } from "./localGuestIdentity";
 import type { AuthSession, IAuthProvider } from "./IAuthProvider";
 import type { ProfileRecord } from "./profile";
 import { validateUsername } from "./profile";
@@ -90,7 +91,7 @@ export class SupabaseAuthProvider implements IAuthProvider {
 
   getDisplayLabel(): string {
     if (this.session === null) {
-      return "Not signed in";
+      return getOrCreateLocalGuestIdentity().displayName;
     }
     if (this.profileCache !== null) {
       return this.profileCache.username;

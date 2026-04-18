@@ -14,6 +14,8 @@ import { MessageType, type NetworkMessage } from "./protocol/messages";
 export type SessionRosterEntry = {
   displayName: string;
   accountId: string;
+  /** Empty when signed in or legacy peer. */
+  localGuestUuid: string;
 };
 
 function splitCommand(line: string): { cmd: string; rest: string } {

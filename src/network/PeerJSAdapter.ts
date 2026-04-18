@@ -65,6 +65,7 @@ export class PeerJSAdapter implements INetworkAdapter {
   private _handshakeDisplayName = "Player";
   private _handshakeAccountId = "";
   private _handshakeSkinId = "";
+  private _handshakeLocalGuestUuid = "";
 
   private _clientAdmissionGate:
     | ((peerId: PeerId, displayName: string, accountId: string) => boolean)
@@ -74,11 +75,17 @@ export class PeerJSAdapter implements INetworkAdapter {
     this._bus = bus;
   }
 
-  setHandshakeProfile(displayName: string, accountId: string | null, skinId?: string): void {
+  setHandshakeProfile(
+    displayName: string,
+    accountId: string | null,
+    skinId?: string,
+    localGuestUuid?: string | null,
+  ): void {
     const d = displayName.trim();
     this._handshakeDisplayName = d !== "" ? d : "Player";
     this._handshakeAccountId = accountId?.trim() ?? "";
     this._handshakeSkinId = skinId?.trim() ?? "";
+    this._handshakeLocalGuestUuid = localGuestUuid?.trim() ?? "";
   }
 
   setClientAdmissionGate(
@@ -109,6 +116,7 @@ export class PeerJSAdapter implements INetworkAdapter {
       displayName: this._handshakeDisplayName,
       accountId: this._handshakeAccountId,
       skinId: this._handshakeSkinId,
+      localGuestUuid: this._handshakeLocalGuestUuid,
     });
   }
 
@@ -389,6 +397,7 @@ export class PeerJSAdapter implements INetworkAdapter {
           displayName: payload.displayName,
           accountId: payload.accountId,
           skinId: payload.skinId,
+          localGuestUuid: payload.localGuestUuid,
         });
         this._bus.emit({ type: "net:handshake-success", isHost: true });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });
@@ -473,6 +482,7 @@ export class PeerJSAdapter implements INetworkAdapter {
           displayName: hostPayload.displayName,
           accountId: hostPayload.accountId,
           skinId: hostPayload.skinId,
+          localGuestUuid: hostPayload.localGuestUuid,
         });
         this._bus.emit({ type: "net:handshake-success", isHost: false });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });
