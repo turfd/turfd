@@ -259,6 +259,7 @@ function writeWorldBlock(
   ch.blocks[idx] = id;
   ch.metadata[idx] = meta;
   ch.dirty = true;
+  ch.renderDirty = true;
 }
 
 function writeWorldBackground(
@@ -278,6 +279,7 @@ function writeWorldBackground(
   const idx = localIndex(lx, ly);
   ch.background[idx] = bg;
   ch.dirty = true;
+  ch.renderDirty = true;
 }
 
 function hasVisitedNeighbor4World(

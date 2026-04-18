@@ -6,6 +6,7 @@ import {
   Assets,
   Container,
   Graphics,
+  Point,
   Rectangle,
   Sprite,
   Texture,
@@ -142,6 +143,8 @@ import {
   REACH_BLOCKS,
   BOW_MAX_DRAW_SEC,
   DEFAULT_SKIN_ID,
+  TORCH_FLAME_TIP_PX_X,
+  TORCH_FLAME_TIP_PX_Y,
 } from "../core/constants";
 import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 import type { SkinTextureSet } from "../skins/skinTypes";
@@ -1029,6 +1032,7 @@ function drawMobHealthBar(
 
 export class EntityManager {
   private readonly world: World;
+  private readonly _torchBlockId: number;
   private readonly input: InputManager;
   private readonly player: Player;
   private readonly airId: number;
@@ -1120,6 +1124,10 @@ export class EntityManager {
   private goldArmorLeggingsFrames: Texture[] | null = null;
   private goldArmorBootsFrames: Texture[] | null = null;
   private localArmorSprites: (Sprite | null)[] = [null, null, null, null];
+  /** Local player: flame tip in composite world-block coords; null if not holding torch item. */
+  private _heldTorchLightWorldBlock: [number, number] | null = null;
+  private readonly _heldTorchTipGlobal = new Point();
+  private readonly _heldTorchTipLocal = new Point();
 
   constructor(
     world: World,
@@ -1132,6 +1140,7 @@ export class EntityManager {
   ) {
     this.world = world;
     this.input = input;
+    this._torchBlockId = world.getRegistry().getByIdentifier("stratum:torch").id;
     this.player = new Player(registry, bus, audio, itemRegistry);
     this.airId = registry.getByIdentifier("stratum:air").id;
     this.itemRegistry = itemRegistry;
@@ -1142,6 +1151,8 @@ export class EntityManager {
   initVisual(pipeline: RenderPipeline): void {
     const root = new Container();
     root.sortableChildren = true;
+    // Draw above mobs/remotes (their roots use zIndex -2) so torch bloom masks the visible sprite.
+    root.zIndex = 100;
     // Sprite extends past the 14×28 hitbox; don’t let world cull clip the edges while mining.
     root.cullable = false;
     root.cullableChildren = false;
@@ -1169,6 +1180,11 @@ export class EntityManager {
     void this.loadArmorTextures();
 
     // Remote players are added lazily in syncPlayerGraphic when their state appears in World.
+  }
+
+  /** Root container for the local player in {@link RenderPipeline.layerEntities} (bloom mask, etc.). */
+  getPlayerGraphic(): Container | null {
+    return this.playerGraphic;
   }
 
   private releaseArmorOverlayTextures(material: "iron" | "gold"): void {
@@ -1603,6 +1619,7 @@ export class EntityManager {
         if (held !== null) {
           if (s.sleeping) {
             held.visible = false;
+            this._heldTorchLightWorldBlock = null;
           } else {
           const slot =
             ((s.hotbarSlot % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
@@ -2413,6 +2430,7 @@ export class EntityManager {
     if (tex === null || tex === Texture.EMPTY) {
       held.visible = false;
       held.rotation = 0;
+      this._heldTorchLightWorldBlock = null;
       return;
     }
     held.texture = tex;
@@ -2513,6 +2531,35 @@ export class EntityManager {
     held.zIndex = -1;
     anim.zIndex = 0;
     held.visible = true;
+
+    const placeId = this.itemRegistry.getById(heldItemId as ItemId)?.placesBlockId ?? 0;
+    if (heldPlaceableBlock && placeId === this._torchBlockId) {
+      this.refreshHeldTorchLightWorldBlock(held);
+    } else {
+      this._heldTorchLightWorldBlock = null;
+    }
+  }
+
+  /**
+   * Flame tip in composite shader space (`worldPos.x = px/16`, `worldPos.y = -py/16`).
+   * Updated when the local held item is the torch block item.
+   */
+  getHeldTorchLightWorldBlock(): [number, number] | null {
+    return this._heldTorchLightWorldBlock;
+  }
+
+  private refreshHeldTorchLightWorldBlock(held: Sprite): void {
+    const fr = held.texture.frame;
+    const fw = fr.width;
+    const fh = fr.height;
+    const lx =
+      TORCH_FLAME_TIP_PX_X - PLAYER_HELD_ITEM_ANCHOR_X * fw;
+    const ly =
+      TORCH_FLAME_TIP_PX_Y - PLAYER_HELD_ITEM_ANCHOR_Y * fh;
+    this._heldTorchTipLocal.set(lx, ly);
+    held.toGlobal(this._heldTorchTipLocal, this._heldTorchTipGlobal);
+    const g = this._heldTorchTipGlobal;
+    this._heldTorchLightWorldBlock = [g.x / BLOCK_SIZE, -g.y / BLOCK_SIZE];
   }
 
   /**

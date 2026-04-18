@@ -96,6 +96,9 @@ export class NametagOverlay {
   }
 
   /**
+   * Nametag positions are driven only from this render-tick path (`Game.render`); do not attach
+   * `placeTag` / `update` to DOM pointer events — once per frame is sufficient.
+   *
    * @param alpha Interpolation factor for local player.
    * @param nowMs Wall time for remote `RemotePlayer.getDisplayPose`.
    */

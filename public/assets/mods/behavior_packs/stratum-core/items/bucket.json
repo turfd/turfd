@@ -1,4 +1,4 @@
-﻿{
+{
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
@@ -8,7 +8,7 @@
       "stratum:display_name": "Bucket",
       "stratum:texture_key": "bucket",
       "stratum:max_stack": 1,
-      "stratum:numeric_id": 90
+      "stratum:numeric_id": 93
     }
   }
 }

@@ -1,6 +1,13 @@
 /** Pixel size of one block edge on screen (atlas texel scale). */
 export const BLOCK_SIZE = 16;
 
+/**
+ * Minimum camera zoom is chosen so at least this many blocks fit along the **shorter** viewport
+ * edge (logical px). Keeps tile size consistent *relative to screen* across resolutions and
+ * aspect ratios (ultrawide, portrait, etc.). See {@link Camera.getEffectiveZoom}.
+ */
+export const MAX_VISIBLE_BLOCKS_ON_MIN_AXIS = 20;
+
 /** Horizontal world-pixel offset that maps to full stereo pan for spatial SFX. */
 export const AUDIO_SFX_PAN_REF_PX = 420;
 
@@ -480,8 +487,26 @@ export const FIXED_TIMESTEP_MS = 1000 / FIXED_HZ;
 export const MAX_FRAME_MS = 250;
 /** Prevent one RAF frame from running unbounded fixed-step catch-up work. */
 export const MAX_FIXED_STEPS_PER_FRAME = 4;
-/** Max deferred chunk light recomputes processed per fixed tick. */
-export const LIGHT_RECOMPUTE_BUDGET_PER_TICK = 10;
+/**
+ * Wall-clock budget (ms) for one synchronous drain of the deferred light queue
+ * (`World.flushPendingLightRecomputes` and each slice of streaming settle).
+ */
+export const LIGHT_RECOMPUTE_BUDGET_MS = 4;
+/**
+ * For a single-cell block change, light invalidation enqueues at most the home chunk plus
+ * immediate cardinal chunk neighbours (edge-crossing), i.e. radius 1 in chunk grid — see
+ * {@link World.setBlock} enqueue logic.
+ */
+export const LIGHT_PROPAGATION_NEIGHBOUR_RADIUS = 1;
+
+/** Bloom mask RT is dirtied when the camera centre moves by more than this many tiles (block units). */
+export const BLOOM_CAMERA_MOVE_THRESHOLD_TILES = 1;
+
+/** Max chunk mesh updates (existing meshes) per frame; excess `renderDirty` work rolls to the next frame. */
+export const CHUNK_SYNC_MAX_PER_FRAME = 8;
+
+/** Min interval between render-path `InputManager.updateMouseWorldPos` calls (~60 Hz). */
+export const POINTER_MOVE_THROTTLE_MS = 16;
 
 /** Minimum interval between footstep SFX while walking (seconds). */
 export const STEP_INTERVAL = 0.35;
@@ -506,6 +531,29 @@ export const TORCH_HELD_LIGHT_RADIUS_BLOCKS = 14;
 
 /** Peak brightness multiplier for held torch (before clamp). */
 export const TORCH_HELD_LIGHT_INTENSITY = 0.55;
+
+/**
+ * Placed emitters (torches, etc.) sent to the composite shader per frame.
+ * Each slot is one `vec4` uniform; WebGL typically allows ~224 fragment uniform **vectors**
+ * total, so this array plus all other composite uniforms must stay under that cap (256 failed
+ * to link: INVALID_OPERATION / program not valid).
+ */
+export const MAX_PLACED_TORCHES = 128;
+
+/** Ray-march radius (blocks) for placed torch directional lighting — matches BFS emission range. */
+export const PLACED_TORCH_RADIUS_BLOCKS = 14;
+
+/**
+ * Torch flame in the 16×16 tile: center of the visible ~2×6 flame (pixels from the cell’s
+ * top-left). Lighting/bloom use this so effects align with art instead of the block’s corner.
+ */
+export const TORCH_FLAME_TIP_PX_X = 7.5;
+export const TORCH_FLAME_TIP_PX_Y = 2.5;
+/** Offset from integer block (wx, wy) to flame center in world block units (composite pass). */
+export const TORCH_FLAME_TIP_OFFSET_X_BLOCKS = TORCH_FLAME_TIP_PX_X / BLOCK_SIZE;
+/** `wy` increases upward; tip sits near the top of the cell. */
+export const TORCH_FLAME_TIP_OFFSET_Y_BLOCKS =
+  (BLOCK_SIZE - TORCH_FLAME_TIP_PX_Y) / BLOCK_SIZE;
 
 /**
  * Full day/night cycle in real time (20 minutes).
@@ -775,6 +823,12 @@ export const PLAYER_WATER_SWIM_HOLD_UP_ACCEL = 520;
 
 /** Most negative vy (fastest upward swim) while holding jump in water. */
 export const PLAYER_WATER_SWIM_HOLD_MAX_UP_SPEED = -118;
+
+/** Constant upward speed while climbing a ladder (hold jump / W / up; world Y up). */
+export const PLAYER_LADDER_CLIMB_VY = -115;
+
+/** Max downward speed on a ladder when not holding climb (slow slide). */
+export const PLAYER_LADDER_MAX_DESCEND_VY = 90;
 
 /** Fall damage multiplier when landing with exactly one block of water above solid support. */
 export const PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT = 0.45;

@@ -1,4 +1,4 @@
-﻿{
+{
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
@@ -8,7 +8,7 @@
       "stratum:display_name": "Tall Grass",
       "stratum:texture_key": "tall_grass",
       "stratum:places_block": "stratum:tall_grass_bottom",
-      "stratum:numeric_id": 109
+      "stratum:numeric_id": 112
     }
   }
 }

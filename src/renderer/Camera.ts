@@ -1,5 +1,5 @@
 import { Container } from "pixi.js";
-import { BLOCK_SIZE } from "../core/constants";
+import { BLOCK_SIZE, MAX_VISIBLE_BLOCKS_ON_MIN_AXIS } from "../core/constants";
 
 export type CameraOptions = {
   /** Lerp responsiveness (higher = snappier). */
@@ -16,8 +16,6 @@ const defaultCameraOptions: CameraOptions = {
   maxZoom: 4,
   initialZoom: 2,
 };
-const MAX_VISIBLE_BLOCKS_X = 20;
-
 /**
  * World-space root: all world layers are children of this container.
  * Position/scale implement centered view with lerp follow and zoom.
@@ -123,8 +121,10 @@ export class Camera {
   }
 
   private getEffectiveZoom(): number {
-    const zoomForWidthLimit = this.screenW / (MAX_VISIBLE_BLOCKS_X * BLOCK_SIZE);
-    let z = Math.max(this.options.minZoom, this.zoomLevel, zoomForWidthLimit);
+    const minDim = Math.min(this.screenW, this.screenH);
+    const zoomForSizeFloor =
+      minDim / (MAX_VISIBLE_BLOCKS_ON_MIN_AXIS * BLOCK_SIZE);
+    let z = Math.max(this.options.minZoom, this.zoomLevel, zoomForSizeFloor);
     z = Math.min(this.options.maxZoom, z);
     // Snap zoom so each block is an integer number of physical pixels wide; keeps chunk/tile edges on the pixel grid.
     const pixelsPerBlock = BLOCK_SIZE * z;

@@ -13,6 +13,7 @@ import type { GameEvent } from "../../core/types";
 import type { CachedMod } from "../../mods/workshopTypes";
 import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
 import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
+import { blurFocusContainedBy } from "../blurOverlayFocus";
 import { mountSettingsPanel } from "../settings/mountSettingsPanel";
 
 const U_DAWN_END = DAWN_LENGTH_MS / DAY_LENGTH_MS;
@@ -582,6 +583,9 @@ export class PauseMenu {
       return;
     }
     this.isOpen = open;
+    if (!open) {
+      blurFocusContainedBy(el);
+    }
     el.classList.toggle("pm-overlay--open", open);
     el.setAttribute("aria-hidden", open ? "false" : "true");
     if (open) {

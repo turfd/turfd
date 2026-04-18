@@ -119,6 +119,7 @@
     "painting_dungeon": "assets/mods/resource_packs/stratum-core/textures/painting/dungeon.png",
     "painting_arcade": "assets/mods/resource_packs/stratum-core/textures/painting/arcade.png",
     "painting_moonlight": "assets/mods/resource_packs/stratum-core/textures/painting/moonlight.png",
-    "painting_easel": "assets/mods/resource_packs/stratum-core/textures/painting/easel.png"
+    "painting_easel": "assets/mods/resource_packs/stratum-core/textures/painting/easel.png",
+    "ladder": "assets/mods/resource_packs/stratum-core/textures/tiles/ladder.png"
   }
 }

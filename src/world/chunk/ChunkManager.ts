@@ -95,6 +95,7 @@ export class ChunkManager {
     for (const row of this.loaded.values()) {
       for (const chunk of row.values()) {
         chunk.dirty = true;
+        chunk.renderDirty = true;
       }
     }
   }

@@ -2,24 +2,24 @@
   "format_version": "1.0.0",
   "stratum:block": {
     "description": {
-      "identifier": "stratum:crafting_table"
+      "identifier": "stratum:ladder"
     },
     "components": {
-      "stratum:display_name": "Crafting Table",
+      "stratum:display_name": "Ladder",
       "stratum:texture": {
-        "all": "crafting_table"
+        "all": "ladder"
       },
       "stratum:solid": false,
       "stratum:collision": false,
       "stratum:transparent": true,
       "stratum:water": false,
-      "stratum:hardness": 2.5,
+      "stratum:hardness": 0.4,
       "stratum:harvest_tool": "axe",
       "stratum:light_emission": 0,
       "stratum:light_absorption": 0,
       "stratum:material": "wood",
-      "stratum:loot_table": "stratum:crafting_table",
-      "stratum:numeric_id": 41
+      "stratum:loot_table": "stratum:ladder",
+      "stratum:numeric_id": 88
     }
   }
 }

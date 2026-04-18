@@ -7,6 +7,7 @@ import type { GameEvent } from "../core/types";
 import type { CachedMod } from "../mods/workshopTypes";
 import type { IndexedDBStore } from "../persistence/IndexedDBStore";
 import type { SaveGame } from "../persistence/SaveGame";
+import { blurFocusContainedBy } from "./blurOverlayFocus";
 import { HUD } from "./screens/HUD";
 import { PauseMenu } from "./screens/PauseMenu";
 
@@ -200,6 +201,9 @@ export class UIShell {
     const el = this.deathOverlay;
     if (el === null) {
       return;
+    }
+    if (!open) {
+      blurFocusContainedBy(el);
     }
     el.classList.toggle("stratum-death-overlay--open", open);
     el.setAttribute("aria-hidden", open ? "false" : "true");

@@ -1,4 +1,4 @@
-﻿{
+{
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
@@ -10,7 +10,7 @@
       "stratum:max_stack": 1,
       "stratum:tool_tier": 3,
       "stratum:max_durability": 1561,
-      "stratum:numeric_id": 125
+      "stratum:numeric_id": 128
     }
   }
 }

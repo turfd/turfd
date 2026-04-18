@@ -21,7 +21,7 @@ import {
   WORLDGEN_NO_COLLIDE,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
-  LIGHT_RECOMPUTE_BUDGET_PER_TICK,
+  LIGHT_RECOMPUTE_BUDGET_MS,
 } from "../core/constants";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import type { EventBus } from "../core/EventBus";
@@ -187,8 +187,6 @@ export type WorldLoadProgressCallback = (progress: WorldLoadProgress) => void;
 const CHUNK_COORD_PACK_BIAS = 32768;
 /** Max new chunks to load/generate per streaming pass to avoid long frame stalls. */
 const CHUNK_LOAD_PASS_BUDGET = 96;
-/** Max ms spent recomputing lighting per animation frame during chunk streaming settle. */
-const CHUNK_LOAD_LIGHT_MS_PER_FRAME = 5;
 function packChunkCoordKey(cx: number, cy: number): number {
   return ((cx + CHUNK_COORD_PACK_BIAS) << 16) | (cy + CHUNK_COORD_PACK_BIAS);
 }
@@ -320,8 +318,8 @@ export class World {
   >();
 
   /**
-   * Chunk coords queued for light recomputation during the current tick.
-   * Flushed once per tick via {@link flushPendingLightRecomputes}.
+   * Chunk coords queued for light recomputation during fixed ticks.
+   * Drained on the render path via {@link flushPendingLightRecomputes} (time-budgeted).
    */
   private readonly _pendingLightChunks = new Map<number, number>();
 
@@ -616,6 +614,7 @@ export class World {
     const { lx, ly } = worldToLocalBlock(wx, wy);
     chunk.metadata[localIndex(lx, ly)] = value;
     chunk.dirty = true;
+    chunk.renderDirty = true;
   }
 
   /**
@@ -714,6 +713,12 @@ export class World {
       }
       this._doorProximitySfxState.set(key, { effective, latched });
       const prev = this._doorRenderSig.get(key);
+      if (prev !== undefined) {
+        const prevEff = prev.charAt(0) === "1";
+        if (prevEff !== effective) {
+          this._queueLightRecomputeForDoorProximityChange(wx, bottomWy);
+        }
+      }
       if (prev !== sig) {
         this._doorRenderSig.set(key, sig);
         this.markForegroundChunkDirtyAtWorldCell(wx, bottomWy);
@@ -726,6 +731,7 @@ export class World {
     const ch = this.getChunkAt(wx, wy);
     if (ch !== undefined) {
       ch.dirty = true;
+      ch.renderDirty = true;
     }
   }
 
@@ -1262,6 +1268,9 @@ export class World {
     }
     this._bulkFgChunkKeys.clear();
     const chunkCoords: { cx: number; cy: number }[] = [];
+    // Bulk fluid may touch many chunks in one flush; we union a neighbour ring per touched chunk,
+    // so the enqueue set can be large. Water/light correctness requires that breadth; cost per
+    // frame is bounded by {@link flushPendingLightRecomputes} (wall-clock budget).
     for (const key of affected) {
       const { cx, cy } = unpackChunkCoordKey(key);
       this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
@@ -1319,7 +1328,6 @@ export class World {
     const idx = localIndex(lx, ly);
     setBlock(chunk, lx, ly, newId);
     chunk.metadata[idx] = newMeta;
-    chunk.dirty = true;
     this._bulkFgChunkKeys.add(packChunkCoordKey(coord.cx, coord.cy));
     this._bulkFgSkyWx.add(wx);
     return true;
@@ -1393,6 +1401,15 @@ export class World {
     if (lightMode !== 0) {
       this._queueLightRecompute(cx, cy, lightMode);
     }
+    // Door latch changed: block ID stays the same so normal light-mode check misses it,
+    // but the occlusion texture and BFS reader must reflect the new open/closed state.
+    if (
+      oldId === id &&
+      this.registry.isDoor(id) &&
+      doorLatchedOpenFromMeta(oldMeta) !== doorLatchedOpenFromMeta(newMeta)
+    ) {
+      this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
+    }
     const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     if (localX === 0) {
@@ -1407,6 +1424,8 @@ export class World {
     if (localY === CHUNK_SIZE - 1) {
       this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
     }
+    // Single-cell foreground change: at most home chunk plus cardinal chunk neighbours
+    // (chunk-grid radius `LIGHT_PROPAGATION_NEIGHBOUR_RADIUS` in constants).
 
     this.breakPlantsIfSupportLost(wx, wy);
 
@@ -1693,6 +1712,8 @@ export class World {
     if (localY === CHUNK_SIZE - 1) {
       this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
     }
+    // Same single-cell neighbour cap as `setBlock` (see `LIGHT_PROPAGATION_NEIGHBOUR_RADIUS`).
+
     this.emitForegroundBlockChanged(wx, wy, oldId, id, oldMeta, 0);
     this.markWaterActiveForBlockChange(wx, wy, oldId, id);
     if (
@@ -2117,7 +2138,7 @@ export class World {
       this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
     }
     if (affected.size > 0) {
-      await this._drainPendingLightRecomputesWithinFrames(CHUNK_LOAD_LIGHT_MS_PER_FRAME);
+      await this._drainPendingLightRecomputesWithinFrames(LIGHT_RECOMPUTE_BUDGET_MS);
     }
     if (import.meta.env.DEV && affected.size > 0) {
       chunkPerfLog("loadChunksAroundCentre:lighting", chunkPerfNow() - tLight, {
@@ -2176,6 +2197,7 @@ export class World {
     chunk.skyLight.fill(0);
     chunk.blockLight.fill(0);
     chunk.dirty = true;
+    chunk.renderDirty = true;
     this.indexDoorBottomsFromChunk(chunk);
     return chunk;
   }
@@ -2214,6 +2236,39 @@ export class World {
     this._pendingLightChunks.set(key, prev | mode);
   }
 
+  /** Queue light recompute for the chunk containing (wx, wy) and boundary neighbours (matches {@link setBlock}). */
+  private _queueLightRecomputeAroundWorldCell(wx: number, wy: number): void {
+    const cx = Math.floor(wx / CHUNK_SIZE);
+    const cy = Math.floor(wy / CHUNK_SIZE);
+    this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
+    const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    if (localX === 0) {
+      this._queueLightRecompute(cx - 1, cy, LIGHT_RECOMPUTE_BOTH);
+    }
+    if (localX === CHUNK_SIZE - 1) {
+      this._queueLightRecompute(cx + 1, cy, LIGHT_RECOMPUTE_BOTH);
+    }
+    if (localY === 0) {
+      this._queueLightRecompute(cx, cy - 1, LIGHT_RECOMPUTE_BOTH);
+    }
+    if (localY === CHUNK_SIZE - 1) {
+      this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
+    }
+  }
+
+  /**
+   * Proximity door open/close changes absorption without a block write — recompute light like a latch toggle.
+   * Also invalidates {@link _skyTopByWx} for the door column so {@link _getSkyExposureTop} rescans.
+   */
+  private _queueLightRecomputeForDoorProximityChange(wx: number, bottomWy: number): void {
+    this.invalidateSkyTopColumn(wx);
+    // Two world rows (door column + above): can enqueue more chunks than the single-cell
+    // `LIGHT_PROPAGATION_NEIGHBOUR_RADIUS` cap — intentional for door gameplay, not a generic block write.
+    this._queueLightRecomputeAroundWorldCell(wx, bottomWy);
+    this._queueLightRecomputeAroundWorldCell(wx, bottomWy + 1);
+  }
+
   /** Flush all queued block-changed events to the EventBus. Call once per tick after all mutations. */
   flushPendingBlockChangedEvents(): void {
     if (this._pendingBlockChangedEvents.length === 0 || this.bus === undefined) {
@@ -2225,13 +2280,17 @@ export class World {
     this._pendingBlockChangedEvents.length = 0;
   }
 
-  /** Flush all pending light recomputes accumulated during the current tick. */
+  /** Flush pending light recomputes up to `LIGHT_RECOMPUTE_BUDGET_MS` wall time per call. */
   flushPendingLightRecomputes(): void {
     const pending = this._pendingLightChunks;
     if (pending.size === 0) {
       return;
     }
-    const t0 = import.meta.env.DEV ? chunkPerfNow() : 0;
+    const t0 =
+      typeof performance !== "undefined" && performance.now !== undefined
+        ? performance.now()
+        : 0;
+    const tLog = import.meta.env.DEV ? chunkPerfNow() : 0;
     let processed = 0;
     const queueBefore = pending.size;
     for (const [key, mode] of pending) {
@@ -2239,12 +2298,16 @@ export class World {
       this.recomputeChunkLight(cx, cy, mode);
       pending.delete(key);
       processed += 1;
-      if (processed >= LIGHT_RECOMPUTE_BUDGET_PER_TICK) {
+      if (
+        typeof performance !== "undefined" &&
+        performance.now !== undefined &&
+        performance.now() - t0 >= LIGHT_RECOMPUTE_BUDGET_MS
+      ) {
         break;
       }
     }
     if (import.meta.env.DEV) {
-      chunkPerfLog("world:flushPendingLightRecomputes", chunkPerfNow() - t0, {
+      chunkPerfLog("world:flushPendingLightRecomputes", chunkPerfNow() - tLog, {
         processed,
         queueBefore,
         queueAfter: pending.size,
@@ -2379,6 +2442,7 @@ export class World {
       chunk.skyLight.fill(0);
       chunk.blockLight.fill(0);
       chunk.dirty = true;
+      chunk.renderDirty = true;
       if (furnaces !== undefined) {
         this.applyFurnaceEntitiesForChunk(cx, cy, furnaces);
       } else {
@@ -2419,7 +2483,12 @@ export class World {
       isSolid: (wx, wy) => this.getSolidById(this.getBlockId(wx, wy)),
       getLightAbsorption: (wx, wy) => {
         const id = this.getBlockId(wx, wy);
-        return this.getLightAbsorptionById(id);
+        const base = this.getLightAbsorptionById(id);
+        // Open doors (latched or proximity) pass light like air for BFS/occlusion.
+        if (base > 0 && this.registry.isDoor(id) && this.isDoorEffectivelyOpen(wx, wy)) {
+          return 0;
+        }
+        return base;
       },
       getLightEmission: (wx, wy) => {
         const id = this.getBlockId(wx, wy);
@@ -2481,6 +2550,9 @@ export class World {
         const ly = wy - chunkWorldY0;
         const id = getBlock(chunk, lx, ly);
         if (this.getSolidById(id)) {
+          if (this.registry.isDoor(id) && this.isDoorEffectivelyOpen(wx, wy)) {
+            continue;
+          }
           top = wy;
           this._skyTopByWx.set(wx, top);
           return top;
@@ -2494,6 +2566,14 @@ export class World {
   /** Numeric foreground block id at world cell (air when chunk missing). */
   getForegroundBlockId(wx: number, wy: number): number {
     return this.getBlockId(wx, wy);
+  }
+
+  /**
+   * Cached light emission for a block id (0 = none). For hot renderer paths that already
+   * have numeric ids (e.g. chunk-local scans); avoids {@link getBlock} / definition lookups.
+   */
+  getLightEmissionForBlockId(id: number): number {
+    return this.getLightEmissionById(id);
   }
 
   private getBlockId(wx: number, wy: number): number {
@@ -2658,6 +2738,7 @@ export class World {
     const chunk = this.chunks.getChunk({ cx, cy });
     if (chunk !== undefined) {
       chunk.dirty = true;
+      chunk.renderDirty = true;
     }
   }
 
@@ -3020,6 +3101,7 @@ export class World {
       const ch = this.chunks.getChunk({ cx: cx + dcx, cy });
       if (ch !== undefined) {
         ch.dirty = true;
+        ch.renderDirty = true;
       }
     }
   }

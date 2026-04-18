@@ -296,11 +296,16 @@ export function injectSettingsSharedStyles(base: string): void {
       height: 24px;
       flex-shrink: 0;
     }
+    /* Cover the track so clicks hit the checkbox (was width:0 and only the label worked). */
     .st-toggle input {
-      opacity: 0;
-      width: 0;
-      height: 0;
       position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      opacity: 0;
+      cursor: pointer;
+      z-index: 2;
     }
     .st-toggle-track {
       position: absolute;
@@ -308,7 +313,7 @@ export function injectSettingsSharedStyles(base: string): void {
       background: rgba(120, 120, 128, 0.36);
       border-radius: 12px;
       transition: background 200ms ease;
-      cursor: pointer;
+      pointer-events: none;
     }
     .st-toggle-track::after {
       content: '';
@@ -330,6 +335,54 @@ export function injectSettingsSharedStyles(base: string): void {
     .st-toggle input:focus-visible + .st-toggle-track {
       outline: 2px solid var(--st-mm-border-strong);
       outline-offset: 2px;
+    }
+
+    /* Segmented control (e.g. tonemapper picker) */
+    .st-segmented {
+      display: flex;
+      flex-shrink: 0;
+    }
+    .st-seg-btn {
+      padding: 7px 14px;
+      font-family: 'BoldPixels', monospace;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      background: var(--st-mm-surface-deep);
+      border: 1px solid var(--st-mm-border);
+      color: var(--st-mm-ink-soft);
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+      margin-left: -1px;
+    }
+    .st-seg-btn:first-child {
+      border-radius: var(--st-mm-radius-sm) 0 0 var(--st-mm-radius-sm);
+      corner-shape: squircle;
+      margin-left: 0;
+    }
+    .st-seg-btn:last-child {
+      border-radius: 0 var(--st-mm-radius-sm) var(--st-mm-radius-sm) 0;
+      corner-shape: squircle;
+    }
+    .st-seg-btn:hover {
+      background: var(--st-mm-surface-raised);
+      color: var(--st-mm-ink);
+      border-color: var(--st-mm-border-strong);
+      z-index: 1;
+      position: relative;
+    }
+    .st-seg-btn--active {
+      background: var(--st-mm-surface-raised) !important;
+      border-color: var(--st-mm-border-strong) !important;
+      color: var(--st-mm-ink) !important;
+      z-index: 1;
+      position: relative;
+    }
+    .st-seg-btn:focus-visible {
+      outline: none;
+      border-color: var(--st-mm-border-strong);
+      z-index: 2;
+      position: relative;
     }
   `;
   document.head.appendChild(style);

@@ -33,6 +33,7 @@ import {
   PLAYER_DEATH_ANIM_DURATION_SEC,
   PLAYER_HEIGHT,
   PLAYER_WIDTH,
+  POINTER_MOVE_THROTTLE_MS,
   REACH_BLOCKS,
   RECIPE_STATION_CRAFTING_TABLE,
   RECIPE_STATION_FURNACE,
@@ -387,6 +388,7 @@ export class Game {
   private _localDeathNotified = false;
 
   private lastRenderWallMs = 0;
+  private _lastMouseWorldPosUpdateTime = 0;
   private started = false;
   private _windowResizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly scheduleWindowResizedEvent = (): void => {
@@ -961,6 +963,7 @@ export class Game {
       itemAtlas,
     );
     entityManager.initVisual(pipeline);
+    pipeline.setBloomMaskPlayerRoot(entityManager.getPlayerGraphic());
     await entityManager.initializeLocalPlayerSkin(this._localSkinId, {
       resolveCustomSkinBlobUrl: async (uuid) => {
         const row = await this.store.getCustomSkin(uuid);
@@ -6551,11 +6554,6 @@ export class Game {
         }
       }
 
-      const tLightFlush = import.meta.env.DEV ? chunkPerfNow() : 0;
-      world.flushPendingLightRecomputes();
-      if (import.meta.env.DEV) {
-        chunkPerfLog("game:flushPendingLightRecomputes", chunkPerfNow() - tLightFlush);
-      }
       world.flushPendingBlockChangedEvents();
 
       if (this._pendingBlockUpdates.length > 0) {
@@ -6727,6 +6725,14 @@ export class Game {
         : 0;
     this.lastRenderWallMs = now;
 
+    if (this.world !== null) {
+      const tLightFlush = import.meta.env.DEV ? chunkPerfNow() : 0;
+      this.world.flushPendingLightRecomputes();
+      if (import.meta.env.DEV) {
+        chunkPerfLog("game:flushPendingLightRecomputes", chunkPerfNow() - tLightFlush);
+      }
+    }
+
     if (this.chunkRenderer !== null && this.world !== null) {
       const cm = this.world.getChunkManager();
       const centre = this.world.getStreamCentre();
@@ -6783,7 +6789,10 @@ export class Game {
     this.pipeline?.getCamera().update(dtSec);
 
     if (this.input !== null && this.pipeline !== null) {
-      this.input.updateMouseWorldPos(this.pipeline.getCamera());
+      if (now - this._lastMouseWorldPosUpdateTime >= POINTER_MOVE_THROTTLE_MS) {
+        this.input.updateMouseWorldPos(this.pipeline.getCamera());
+        this._lastMouseWorldPosUpdateTime = now;
+      }
     }
 
     this.entityManager?.syncPlayerGraphic(alpha, dtSec, now);
@@ -6889,13 +6898,18 @@ export class Game {
           .getByIdentifier("stratum:torch").id;
         let heldTorch: HeldTorchLighting | null = null;
         if (player.getSelectedHotbarBlockId() === torchId) {
-          const st = player.state;
-          const wx = (st.position.x + PLAYER_WIDTH * 0.5) / BLOCK_SIZE;
-          const wy = (st.position.y + PLAYER_HEIGHT * 0.5) / BLOCK_SIZE;
           const ht = this._heldTorchScratch;
-          ht.worldBlock[0] = wx;
-          ht.worldBlock[1] = wy;
-          heldTorch = ht;
+          const tip = this.entityManager.getHeldTorchLightWorldBlock();
+          if (tip !== null) {
+            ht.worldBlock[0] = tip[0];
+            ht.worldBlock[1] = tip[1];
+            heldTorch = ht;
+          } else {
+            const st = player.state;
+            ht.worldBlock[0] = (st.position.x + PLAYER_WIDTH * 0.5) / BLOCK_SIZE;
+            ht.worldBlock[1] = (st.position.y + PLAYER_HEIGHT * 0.5) / BLOCK_SIZE;
+            heldTorch = ht;
+          }
         }
         this.pipeline.lightingComposer.update(
           lightingParams,

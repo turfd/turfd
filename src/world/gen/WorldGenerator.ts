@@ -212,6 +212,7 @@ export class WorldGenerator {
     this.decorateWaterEdgeSugarCane(chunk, originWx, originWy);
     this.decorateDesertSurface(chunk, originWx, originWy);
     chunk.dirty = true;
+    chunk.renderDirty = true;
   }
 
   /** Sugar cane: 1–3 tall, only on sand/grass/dirt, only when adjacent to water. */

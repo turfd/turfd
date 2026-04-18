@@ -1,7 +1,13 @@
 /** Light texture pool, occlusion rebuild, and fullscreen composite lighting pass. */
-import type { Container, RenderTexture } from "pixi.js";
+import type { Container, RenderTexture, TextureSource } from "pixi.js";
 import type { EventBus } from "../../core/EventBus";
-import { BLOCK_SIZE, CHUNK_SIZE } from "../../core/constants";
+import {
+  BLOCK_SIZE,
+  CHUNK_SIZE,
+  MAX_PLACED_TORCHES,
+  TORCH_FLAME_TIP_OFFSET_X_BLOCKS,
+  TORCH_FLAME_TIP_OFFSET_Y_BLOCKS,
+} from "../../core/constants";
 import type { Camera } from "../Camera";
 import { CompositePass } from "./CompositePass";
 import type { CompositeUniforms } from "./CompositePass";
@@ -10,6 +16,8 @@ import { OcclusionTexture } from "./OcclusionTexture";
 import { IndirectLightTexture } from "./IndirectLightTexture";
 import type { WorldLightingParams } from "../../world/lighting/WorldTime";
 import type { World } from "../../world/World";
+import { getBackground, getBlock } from "../../world/chunk/Chunk";
+import { getVideoPrefs } from "../../ui/settings/videoPrefs";
 
 export type HeldTorchLighting = NonNullable<CompositeUniforms["heldTorch"]>;
 
@@ -25,6 +33,25 @@ export class LightingComposer {
   private _screenW: number;
   private _screenH: number;
   private readonly _lightUnsub: () => void;
+  private readonly _emitterBlockUnsub: () => void;
+  private readonly _emitterBulkUnsub: () => void;
+
+  /** Sparse emissive-cell positions per chunk; invalidated on block edits (see constructor). */
+  private readonly _emitterChunkCache = new Map<
+    string,
+    { wx: number[]; wy: number[] }
+  >();
+
+  /** Max-heap by dist² (root = worst of the K nearest). Reused each frame. */
+  private readonly _torchHeapWx = new Float64Array(MAX_PLACED_TORCHES);
+  private readonly _torchHeapWy = new Float64Array(MAX_PLACED_TORCHES);
+  private readonly _torchHeapD2 = new Float64Array(MAX_PLACED_TORCHES);
+  private _torchHeapSize = 0;
+
+  private readonly _placedTorchPairs: [number, number][] = Array.from(
+    { length: MAX_PLACED_TORCHES },
+    () => [0, 0] as [number, number],
+  );
 
   private _camera: Camera | null = null;
   private _occlusion: OcclusionTexture | null = null;
@@ -46,6 +73,18 @@ export class LightingComposer {
     moonIntensity: 0,
     moonTint: [0.6, 0.7, 1.0],
     heldTorch: null,
+    placedTorches: [],
+    placedTorchCount: 0,
+    tonemapper: 1,
+    bloomEnabled: true,
+    bloomMaskActive: true,
+    normalStrength: 0,
+    sunLightZ: 0.22,
+    moonLightZ: 0.22,
+    torchLightZ: 12,
+    debugNormals: false,
+    normalOffsetPx: [0, 0],
+    normalUvScale: 1,
   };
 
   constructor(world: World, bus: EventBus, stage: Container) {
@@ -63,16 +102,39 @@ export class LightingComposer {
       this._occlusion?.markDirty(e.chunkX, e.chunkY);
       this._indirect?.markDirty(e.chunkX, e.chunkY);
     });
+
+    this._emitterBlockUnsub = bus.on("game:block-changed", (e) => {
+      const cx = Math.floor(e.wx / CHUNK_SIZE);
+      const cy = Math.floor(e.wy / CHUNK_SIZE);
+      this._emitterChunkCache.delete(chunkKey(cx, cy));
+    });
+
+    this._emitterBulkUnsub = bus.on("game:chunks-fg-bulk-updated", (e) => {
+      for (const c of e.chunkCoords) {
+        this._emitterChunkCache.delete(chunkKey(c.cx, c.cy));
+      }
+    });
   }
 
-  initComposite(albedoRT: RenderTexture, camera: Camera): void {
+  initComposite(
+    albedoRT: RenderTexture,
+    camera: Camera,
+    playerBloomMaskSource: TextureSource,
+    normalMapSource: TextureSource,
+  ): void {
     if (this._composite !== null) {
       return;
     }
     this._camera = camera;
     this._occlusion = new OcclusionTexture();
     this._indirect = new IndirectLightTexture();
-    this._composite = new CompositePass(albedoRT, this._occlusion, this._indirect);
+    this._composite = new CompositePass(
+      albedoRT,
+      this._occlusion,
+      this._indirect,
+      playerBloomMaskSource,
+      normalMapSource,
+    );
     this._stage.addChild(this._composite.displayObject);
     this._composite.resize(this._screenW, this._screenH);
   }
@@ -135,6 +197,45 @@ export class LightingComposer {
     const cameraWorldX = tl.x / BLOCK_SIZE;
     const cameraWorldY = -tl.y / BLOCK_SIZE;
 
+    const mid = cam.screenToWorld(this._screenW * 0.5, this._screenH * 0.5);
+    const viewCenterWx = mid.x / BLOCK_SIZE;
+    const viewCenterWy = -mid.y / BLOCK_SIZE;
+
+    // Nearest MAX_PLACED_TORCHES emissive cells in the occlusion region (distance to view center).
+    // Chunk-local id scan + per-chunk sparse cache (invalidated on block edits); top-K via max-heap.
+    const regionChunks = OcclusionTexture.REGION_BLOCKS / CHUNK_SIZE;
+    const halfRegion = Math.floor(regionChunks / 2);
+    const camCx = centerChunkX;
+    const camCy = centerChunkY;
+
+    const keepKeys = new Set<string>();
+    for (let dy = -halfRegion; dy <= halfRegion; dy++) {
+      for (let dx = -halfRegion; dx <= halfRegion; dx++) {
+        keepKeys.add(chunkKey(camCx + dx, camCy + dy));
+      }
+    }
+    for (const k of this._emitterChunkCache.keys()) {
+      if (!keepKeys.has(k)) {
+        this._emitterChunkCache.delete(k);
+      }
+    }
+
+    this._torchHeapReset();
+    for (let dy = -halfRegion; dy <= halfRegion; dy++) {
+      for (let dx = -halfRegion; dx <= halfRegion; dx++) {
+        const ccx = camCx + dx;
+        const ccy = camCy + dy;
+        const { wx, wy } = this._getChunkEmitterPositions(this._world, ccx, ccy);
+        for (let i = 0; i < wx.length; i++) {
+          const wxi = wx[i]!;
+          const wyi = wy[i]!;
+          const ddx = wxi - viewCenterWx;
+          const ddy = wyi - viewCenterWy;
+          this._torchHeapOffer(wxi, wyi, ddx * ddx + ddy * ddy);
+        }
+      }
+    }
+
     const u = this._compositeU;
     u.sunDir[0] = lighting.sunDir[0];
     u.sunDir[1] = lighting.sunDir[1];
@@ -159,7 +260,159 @@ export class LightingComposer {
     u.occlusionSize = OcclusionTexture.REGION_BLOCKS;
     u.moonIntensity = lighting.moonIntensity;
     u.heldTorch = heldTorch;
+    this._fillPlacedTorchUniforms(u);
+    const vp = getVideoPrefs();
+    const tm = vp.tonemapper;
+    u.tonemapper =
+      tm === "aces"
+        ? 1
+        : tm === "agx"
+          ? 2
+          : tm === "reinhard"
+            ? 3
+            : 0;
+    u.bloomEnabled = vp.bloom;
+    const ssnOn = vp.screenSpaceNormals;
+    u.normalStrength = ssnOn ? vp.normalMapStrength : 0;
+    u.debugNormals = ssnOn && vp.debugShowNormalMap;
+    u.normalOffsetPx[0] = ssnOn ? vp.ssnNormalOffsetXPx : 0;
+    u.normalOffsetPx[1] = ssnOn ? vp.ssnNormalOffsetYPx : 0;
+    u.normalUvScale = ssnOn ? vp.ssnNormalUvScale : 1;
+    u.sunLightZ = 0.22;
+    u.moonLightZ = 0.22;
+    u.torchLightZ = 12;
     comp.updateUniforms(u);
+  }
+
+  /** Sparse emissive positions for one chunk; cached until block edits or region prune. */
+  private _getChunkEmitterPositions(
+    world: World,
+    cx: number,
+    cy: number,
+  ): { wx: number[]; wy: number[] } {
+    const key = chunkKey(cx, cy);
+    const hit = this._emitterChunkCache.get(key);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const wx: number[] = [];
+    const wy: number[] = [];
+    const chunk = world.getChunk(cx, cy);
+    if (chunk !== undefined) {
+      const wxBase = cx * CHUNK_SIZE;
+      const wyBase = cy * CHUNK_SIZE;
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+          const fgId = getBlock(chunk, lx, ly);
+          const bgId = getBackground(chunk, lx, ly);
+          if (
+            world.getLightEmissionForBlockId(fgId) <= 0 &&
+            world.getLightEmissionForBlockId(bgId) <= 0
+          ) {
+            continue;
+          }
+          wx.push(wxBase + lx);
+          wy.push(wyBase + ly);
+        }
+      }
+    }
+    const entry = { wx, wy };
+    this._emitterChunkCache.set(key, entry);
+    return entry;
+  }
+
+  private _torchHeapReset(): void {
+    this._torchHeapSize = 0;
+  }
+
+  private _torchHeapSwap(a: number, b: number): void {
+    const h = this._torchHeapWx;
+    const hy = this._torchHeapWy;
+    const hd = this._torchHeapD2;
+    let t = h[a]!;
+    h[a] = h[b]!;
+    h[b] = t;
+    t = hy[a]!;
+    hy[a] = hy[b]!;
+    hy[b] = t;
+    t = hd[a]!;
+    hd[a] = hd[b]!;
+    hd[b] = t;
+  }
+
+  private _torchHeapSiftUp(i: number): void {
+    const hd = this._torchHeapD2;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (hd[i]! <= hd[p]!) {
+        break;
+      }
+      this._torchHeapSwap(i, p);
+      i = p;
+    }
+  }
+
+  private _torchHeapSiftDown(i: number): void {
+    const sz = this._torchHeapSize;
+    const hd = this._torchHeapD2;
+    while (true) {
+      const l = i * 2 + 1;
+      const r = l + 1;
+      let largest = i;
+      if (l < sz && hd[l]! > hd[largest]!) {
+        largest = l;
+      }
+      if (r < sz && hd[r]! > hd[largest]!) {
+        largest = r;
+      }
+      if (largest === i) {
+        break;
+      }
+      this._torchHeapSwap(i, largest);
+      i = largest;
+    }
+  }
+
+  /** Max-heap of up to K smallest dist² (root holds the worst among the kept set). */
+  private _torchHeapOffer(wx: number, wy: number, d2: number): void {
+    const h = this._torchHeapWx;
+    const hy = this._torchHeapWy;
+    const hd = this._torchHeapD2;
+    const cap = MAX_PLACED_TORCHES;
+    let sz = this._torchHeapSize;
+    if (sz < cap) {
+      h[sz] = wx;
+      hy[sz] = wy;
+      hd[sz] = d2;
+      sz += 1;
+      this._torchHeapSize = sz;
+      this._torchHeapSiftUp(sz - 1);
+      return;
+    }
+    if (d2 >= hd[0]!) {
+      return;
+    }
+    h[0] = wx;
+    hy[0] = wy;
+    hd[0] = d2;
+    this._torchHeapSiftDown(0);
+  }
+
+  private _fillPlacedTorchUniforms(u: CompositeUniforms): void {
+    const h = this._torchHeapWx;
+    const hy = this._torchHeapWy;
+    const sz = this._torchHeapSize;
+    const pairs = this._placedTorchPairs;
+    const ox = TORCH_FLAME_TIP_OFFSET_X_BLOCKS;
+    const oy = TORCH_FLAME_TIP_OFFSET_Y_BLOCKS;
+    for (let i = 0; i < sz; i++) {
+      const p = pairs[i]!;
+      p[0] = h[i]! + ox;
+      p[1] = hy[i]! + oy;
+    }
+    // Do not set pairs.length = sz — truncating removes slots and causes undefined on the next frame.
+    u.placedTorchCount = sz;
+    u.placedTorches = pairs;
   }
 
   getLightTexture(cx: number, cy: number): LightTexture {
@@ -180,11 +433,14 @@ export class LightingComposer {
 
   destroy(): void {
     this._lightUnsub();
+    this._emitterBlockUnsub();
+    this._emitterBulkUnsub();
     for (const tex of this._textures.values()) {
       tex.destroy();
     }
     this._textures.clear();
     this._dirty.clear();
+    this._emitterChunkCache.clear();
     this._composite?.displayObject.parent?.removeChild(this._composite.displayObject);
     this._composite?.destroy();
     this._composite = null;

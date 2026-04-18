@@ -9,14 +9,14 @@
       "stratum:texture": {
         "all": "stonecutter"
       },
-      "stratum:solid": true,
+      "stratum:solid": false,
       "stratum:collision": false,
-      "stratum:transparent": false,
+      "stratum:transparent": true,
       "stratum:water": false,
       "stratum:hardness": 3.5,
       "stratum:harvest_tool": "pickaxe",
       "stratum:light_emission": 0,
-      "stratum:light_absorption": 15,
+      "stratum:light_absorption": 0,
       "stratum:material": "stone",
       "stratum:loot_table": "stratum:stonecutter",
       "stratum:numeric_id": 85

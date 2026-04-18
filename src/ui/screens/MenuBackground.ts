@@ -6,14 +6,15 @@
  *  2. PixiJS — blurred procedural parallax tile strip, then lit foreground terrain + composite
  *  3. DOM overlay (MainMenu)
  *
- * Zoom matches the game's adaptive formula (max 20 blocks visible horizontally).
+ * Zoom matches the game's adaptive formula (~20 blocks on the shorter viewport edge).
  * Lighting uses the full composite shader (OcclusionTexture + IndirectLightTexture).
  */
-import { Application, Container, RenderTexture } from "pixi.js";
+import { Application, Container, RenderTexture, Texture } from "pixi.js";
 import {
   BACKGROUND_PARALLAX_X,
   BLOCK_SIZE,
   CHUNK_SIZE,
+  MAX_VISIBLE_BLOCKS_ON_MIN_AXIS,
   SKY_LIGHT_MAX,
 } from "../../core/constants";
 import { unixRandom01 } from "../../core/unixRandom";
@@ -27,7 +28,10 @@ import { AtlasLoader } from "../../renderer/AtlasLoader";
 import { ParallaxTileStripRenderer } from "../../renderer/ParallaxTileStripRenderer";
 import { OcclusionTexture } from "../../renderer/lighting/OcclusionTexture";
 import { IndirectLightTexture } from "../../renderer/lighting/IndirectLightTexture";
-import { CompositePass } from "../../renderer/lighting/CompositePass";
+import {
+  CompositePass,
+  emptyBloomMaskSource,
+} from "../../renderer/lighting/CompositePass";
 import {
   buildMesh,
   buildBackgroundMesh,
@@ -57,15 +61,22 @@ const CY_END      = 2;   // surface + canopy
 const MENU_VIEW_OFFSET_X_BLOCKS = 100;
 
 /**
- * Adaptive zoom: same formula as Camera.getEffectiveZoom().
- * Keeps at most `maxVisibleBlocksX` blocks visible across the screen width,
- * but never drops below `minZoom`.
+ * Adaptive zoom: same idea as {@link Camera.getEffectiveZoom} (floor from shorter edge; menu omits integer snap).
+ * Keeps roughly `maxVisibleBlocksOnMinAxis` blocks along the **shorter** viewport side, but never below `minZoom`.
  */
-const DEFAULT_MAX_VISIBLE_BLOCKS_X = 20;
 const DEFAULT_MIN_ZOOM = 2;
 
-function computeZoom(screenW: number, maxVisibleBlocksX: number, minZoom: number): number {
-  return Math.max(minZoom, screenW / (maxVisibleBlocksX * BLOCK_SIZE));
+function computeZoom(
+  screenW: number,
+  screenH: number,
+  maxVisibleBlocksOnMinAxis: number,
+  minZoom: number,
+): number {
+  const minDim = Math.min(screenW, screenH);
+  return Math.max(
+    minZoom,
+    minDim / (maxVisibleBlocksOnMinAxis * BLOCK_SIZE),
+  );
 }
 
 const PAN_SPEED_X       = 0.040;  // rad/s
@@ -100,6 +111,8 @@ const DAYTIME_LIGHTING = {
   moonIntensity: 0.0,
   moonTint:     [0.6, 0.7, 1.0]       as [number, number, number],
   heldTorch:    null,
+  placedTorches: [] as [number, number][],
+  placedTorchCount: 0,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -282,7 +295,8 @@ export class MenuBackground {
       deferHeavyInitMs?: number;
     } = {},
   ) {
-    this.maxVisibleBlocksX = opts.maxVisibleBlocksX ?? DEFAULT_MAX_VISIBLE_BLOCKS_X;
+    this.maxVisibleBlocksX =
+      opts.maxVisibleBlocksX ?? MAX_VISIBLE_BLOCKS_ON_MIN_AXIS;
     this.minZoom = opts.minZoom ?? DEFAULT_MIN_ZOOM;
     this.disableMotion = opts.disableMotion ?? false;
     this.disableIntroSlide = opts.disableIntroSlide ?? false;
@@ -316,7 +330,7 @@ export class MenuBackground {
   private baseY = 0;
   private panRangeXPx = 0;
   private zoom = DEFAULT_MIN_ZOOM;
-  private maxVisibleBlocksX = DEFAULT_MAX_VISIBLE_BLOCKS_X;
+  private maxVisibleBlocksX = MAX_VISIBLE_BLOCKS_ON_MIN_AXIS;
   private minZoom = DEFAULT_MIN_ZOOM;
   private userPanXPx = 0;
   private userPanYPx = 0;
@@ -327,6 +341,7 @@ export class MenuBackground {
   /** Physical backbuffer size; when it changes, albedo RT + zoom must update. */
   private lastRendererW = 0;
   private lastRendererH = 0;
+  private lastRendererRes = 0;
 
   private lastCenterCX = -9999;
   private lastCenterCY = -9999;
@@ -376,6 +391,7 @@ export class MenuBackground {
     // Force a layout recompute next frame.
     this.lastRendererW = 0;
     this.lastRendererH = 0;
+    this.lastRendererRes = 0;
     this.syncLayoutFromRenderer();
   }
 
@@ -508,7 +524,12 @@ export class MenuBackground {
     const dpr     = app.renderer.resolution;
     const screenW = app.renderer.width  / dpr;
     const screenH = app.renderer.height / dpr;
-    const zoom    = computeZoom(screenW, this.getMaxVisibleBlocksX(), this.getMinZoom());
+    const zoom    = computeZoom(
+      screenW,
+      screenH,
+      this.getMaxVisibleBlocksX(),
+      this.getMinZoom(),
+    );
     this.zoom     = zoom;
 
     const worldContainer = new Container();
@@ -568,15 +589,22 @@ export class MenuBackground {
 
     // -- Lighting pipeline --------------------------------------------------
     const albedoRT = RenderTexture.create({
-      width:  app.renderer.width,
+      width: app.renderer.width,
       height: app.renderer.height,
+      resolution: app.renderer.resolution,
       dynamic: true,
     });
     this.albedoRT = albedoRT;
 
     const occlusion = new OcclusionTexture();
     const indirect  = new IndirectLightTexture();
-    const composite = new CompositePass(albedoRT, occlusion, indirect);
+    const composite = new CompositePass(
+      albedoRT,
+      occlusion,
+      indirect,
+      emptyBloomMaskSource(),
+      Texture.EMPTY.source,
+    );
     composite.resize(screenW, screenH);
     this.occlusion = occlusion;
     this.indirect  = indirect;
@@ -612,6 +640,7 @@ export class MenuBackground {
 
     this.lastRendererW = app.renderer.width;
     this.lastRendererH = app.renderer.height;
+    this.lastRendererRes = app.renderer.resolution;
 
     const revealStart = performance.now();
     this.slideRevealStartMs = revealStart;
@@ -665,21 +694,34 @@ export class MenuBackground {
 
     const rw = app.renderer.width;
     const rh = app.renderer.height;
-    if (rw === this.lastRendererW && rh === this.lastRendererH) return;
+    const rRes = app.renderer.resolution;
+    if (
+      rw === this.lastRendererW &&
+      rh === this.lastRendererH &&
+      rRes === this.lastRendererRes
+    ) {
+      return;
+    }
 
     this.lastRendererW = rw;
     this.lastRendererH = rh;
+    this.lastRendererRes = rRes;
 
     const rwR = Math.max(1, Math.round(rw));
     const rhR = Math.max(1, Math.round(rh));
-    albedoRT.resize(rwR, rhR);
+    albedoRT.resize(rwR, rhR, rRes);
 
     const dpr     = app.renderer.resolution;
     const screenW = rw / dpr;
     const screenH = rh / dpr;
     composite.resize(screenW, screenH);
 
-    const zoom = computeZoom(screenW, this.getMaxVisibleBlocksX(), this.getMinZoom());
+    const zoom = computeZoom(
+      screenW,
+      screenH,
+      this.getMaxVisibleBlocksX(),
+      this.getMinZoom(),
+    );
     this.zoom = zoom;
     worldContainer.scale.set(zoom);
 
@@ -818,6 +860,16 @@ export class MenuBackground {
         blockPixels:     BLOCK_SIZE * this.zoom,
         occlusionOrigin: [occlusion.originX, occlusion.originY],
         occlusionSize:   OcclusionTexture.REGION_BLOCKS,
+        tonemapper:      1,
+        bloomEnabled:    true,
+        bloomMaskActive: false,
+        normalStrength:  0,
+        debugNormals:    false,
+        normalOffsetPx:  [0, 0],
+        normalUvScale:   1,
+        sunLightZ:       0.22,
+        moonLightZ:      0.22,
+        torchLightZ:     12,
       });
     }
 

@@ -34,6 +34,8 @@ import {
   PLAYER_WATER_SPEED_MULT,
   PLAYER_WATER_SWIM_HOLD_MAX_UP_SPEED,
   PLAYER_WATER_SWIM_HOLD_UP_ACCEL,
+  PLAYER_LADDER_CLIMB_VY,
+  PLAYER_LADDER_MAX_DESCEND_VY,
   PLAYER_WIDTH,
   PLAYER_FALL_SHALLOW_WATER_DAMAGE_MULT,
   PLAYER_FALL_DAMAGE_IGNORES_ARMOR,
@@ -253,6 +255,32 @@ function playerAabbOverlapsWater(world: World, pos: { x: number; y: number }): b
         continue;
       }
       if (world.getForegroundBlockId(wx, wy) === waterId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function playerAabbOverlapsLadder(world: World, pos: { x: number; y: number }): boolean {
+  const reg = world.getRegistry();
+  if (!reg.isRegistered("stratum:ladder")) {
+    return false;
+  }
+  const ladderId = reg.getByIdentifier("stratum:ladder").id;
+  const region = feetToScreenAABB(pos);
+  const worldYBottom = -(region.y + region.height);
+  const worldYTop = -region.y;
+  const wx0 = Math.floor(region.x / BLOCK_SIZE);
+  const wx1 = Math.floor((region.x + region.width - 1) / BLOCK_SIZE);
+  const wy0 = Math.floor(worldYBottom / BLOCK_SIZE);
+  const wy1 = Math.floor(worldYTop / BLOCK_SIZE);
+  for (let wx = wx0; wx <= wx1; wx++) {
+    for (let wy = wy0; wy <= wy1; wy++) {
+      if (world.getChunkAt(wx, wy) === undefined) {
+        continue;
+      }
+      if (world.getForegroundBlockId(wx, wy) === ladderId) {
         return true;
       }
     }
@@ -770,6 +798,15 @@ export class Player {
       }
     }
 
+    const onLadder = !inWater && playerAabbOverlapsLadder(world, state.position);
+    if (onLadder) {
+      if (input.isDown("jump")) {
+        state.velocity.y = PLAYER_LADDER_CLIMB_VY;
+      } else if (state.velocity.y > PLAYER_LADDER_MAX_DESCEND_VY) {
+        state.velocity.y = PLAYER_LADDER_MAX_DESCEND_VY;
+      }
+    }
+
     let mover = feetToScreenAABB(state.position);
     const dx = state.velocity.x * dt;
     const dy = state.velocity.y * dt;
@@ -811,6 +848,8 @@ export class Player {
     state.position.x = feet.x;
     state.position.y = feet.y;
     const inWaterAfterMove = playerAabbOverlapsWater(world, state.position);
+    const onLadderAfterMove =
+      !inWaterAfterMove && playerAabbOverlapsLadder(world, state.position);
 
     if (hitY && state.velocity.y > 0) {
       state.velocity.y = 0;
@@ -896,7 +935,8 @@ export class Player {
     if (
       state.jumpBufferRemaining > 0 &&
       canUseGroundJump &&
-      !inWaterAfterMove
+      !inWaterAfterMove &&
+      !onLadderAfterMove
     ) {
       const jumpSurface = getFeetSupportBlock(
         world,

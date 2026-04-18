@@ -94,7 +94,8 @@
     "black_wool.json",
     "bed.json",
     "bed_head.json",
-    "painting.json"
+    "painting.json",
+    "ladder.json"
   ],
   "items": [
     "oak_door.json",

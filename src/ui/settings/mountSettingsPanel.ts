@@ -20,6 +20,7 @@ import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
 import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
 import { injectSettingsSharedStyles } from "./settingsSharedStyles";
 import { getSkipIntro, setSkipIntro } from "./uiPrefs";
+import { getVideoPrefs, setVideoPrefs, type Tonemapper } from "./videoPrefs";
 
 function applyStoredVolumesToEngine(audio: AudioEngine): void {
   audio.setMasterVolume(readVolumeStored(VOL_KEYS.master, 80) / 100);
@@ -40,7 +41,7 @@ export type MountSettingsPanelOptions = {
   signal?: AbortSignal;
 };
 
-type SettingsSubTab = "audio" | "controls" | "packs";
+type SettingsSubTab = "audio" | "controls" | "packs" | "video";
 
 function makeBtn(text: string, ...classes: string[]): HTMLButtonElement {
   const b = document.createElement("button");
@@ -94,12 +95,17 @@ export async function mountSettingsPanel(
   panelPacks.className = "st-settings-tab-panel";
   panelPacks.setAttribute("role", "tabpanel");
 
+  const panelVideo = document.createElement("div");
+  panelVideo.className = "st-settings-tab-panel";
+  panelVideo.setAttribute("role", "tabpanel");
+
   let activeTab: SettingsSubTab = "audio";
 
   const tabBtn: Record<SettingsSubTab, HTMLButtonElement> = {
     audio: makeBtn("Audio", "st-settings-subtab"),
     controls: makeBtn("Controls", "st-settings-subtab"),
     packs: makeBtn("Texture packs", "st-settings-subtab"),
+    video: makeBtn("Video", "st-settings-subtab"),
   };
 
   function setTab(tab: SettingsSubTab): void {
@@ -112,9 +118,10 @@ export async function mountSettingsPanel(
     panelAudio.classList.toggle("st-settings-tab-panel--active", tab === "audio");
     panelControls.classList.toggle("st-settings-tab-panel--active", tab === "controls");
     panelPacks.classList.toggle("st-settings-tab-panel--active", tab === "packs");
+    panelVideo.classList.toggle("st-settings-tab-panel--active", tab === "video");
   }
 
-  for (const id of ["audio", "controls", "packs"] as SettingsSubTab[]) {
+  for (const id of ["audio", "controls", "packs", "video"] as SettingsSubTab[]) {
     const b = tabBtn[id];
     b.setAttribute("role", "tab");
     b.addEventListener("click", () => setTab(id));
@@ -385,7 +392,104 @@ export async function mountSettingsPanel(
   });
   panelPacks.appendChild(texBtn);
 
-  panelsWrap.append(panelAudio, panelControls, panelPacks);
+  // --- Video (minimal: normal maps, tonemapper, bloom) ---
+  const videoTitle = document.createElement("div");
+  videoTitle.className = "st-settings-section";
+  videoTitle.style.marginTop = "0";
+  videoTitle.textContent = "Video";
+  panelVideo.appendChild(videoTitle);
+
+  const vpVideo = getVideoPrefs();
+
+  // Normal maps
+  {
+    const row = document.createElement("div");
+    row.className = "st-settings-toggle-row";
+    const lbl = document.createElement("label");
+    lbl.textContent = "Normal maps";
+    const toggleId = "st-toggle-ssn";
+    lbl.htmlFor = toggleId;
+    const toggle = document.createElement("span");
+    toggle.className = "st-toggle";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = toggleId;
+    input.checked = vpVideo.screenSpaceNormals;
+    input.addEventListener("change", () => {
+      setVideoPrefs({ screenSpaceNormals: input.checked });
+    });
+    const track = document.createElement("span");
+    track.className = "st-toggle-track";
+    toggle.appendChild(input);
+    toggle.appendChild(track);
+    row.appendChild(lbl);
+    row.appendChild(toggle);
+    panelVideo.appendChild(row);
+  }
+
+  // Tonemapper: none | reinhard only
+  {
+    const row = document.createElement("div");
+    row.className = "st-settings-toggle-row";
+    const lbl = document.createElement("label");
+    lbl.textContent = "Tonemapper";
+    const options: { id: Tonemapper; label: string }[] = [
+      { id: "none", label: "None" },
+      { id: "reinhard", label: "Reinhard" },
+    ];
+    const segmented = document.createElement("div");
+    segmented.className = "st-segmented";
+
+    function syncSegmented(active: Tonemapper): void {
+      const key = active === "none" ? "none" : "reinhard";
+      for (const btn of segmented.querySelectorAll<HTMLButtonElement>(".st-seg-btn")) {
+        btn.classList.toggle("st-seg-btn--active", btn.dataset["value"] === key);
+      }
+    }
+
+    for (const opt of options) {
+      const btn = makeBtn(opt.label, "st-seg-btn");
+      btn.dataset["value"] = opt.id;
+      btn.addEventListener("click", () => {
+        setVideoPrefs({ tonemapper: opt.id });
+        syncSegmented(opt.id);
+      });
+      segmented.appendChild(btn);
+    }
+    syncSegmented(vpVideo.tonemapper);
+
+    row.appendChild(lbl);
+    row.appendChild(segmented);
+    panelVideo.appendChild(row);
+  }
+
+  // Bloom
+  {
+    const row = document.createElement("div");
+    row.className = "st-settings-toggle-row";
+    const lbl = document.createElement("label");
+    lbl.textContent = "Bloom";
+    const toggleId = "st-toggle-bloom";
+    lbl.htmlFor = toggleId;
+    const toggle = document.createElement("span");
+    toggle.className = "st-toggle";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = toggleId;
+    input.checked = vpVideo.bloom;
+    input.addEventListener("change", () => {
+      setVideoPrefs({ bloom: input.checked });
+    });
+    const track = document.createElement("span");
+    track.className = "st-toggle-track";
+    toggle.appendChild(input);
+    toggle.appendChild(track);
+    row.appendChild(lbl);
+    row.appendChild(toggle);
+    panelVideo.appendChild(row);
+  }
+
+  panelsWrap.append(panelAudio, panelControls, panelPacks, panelVideo);
   root.append(title, tabbar, panelsWrap);
   if (opts.signal?.aborted) {
     return;

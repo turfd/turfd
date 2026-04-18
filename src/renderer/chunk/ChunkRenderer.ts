@@ -6,7 +6,11 @@ import { Rectangle, type Mesh } from "pixi.js";
 import type { BlockRegistry } from "../../world/blocks/BlockRegistry";
 import type { Chunk } from "../../world/chunk/Chunk";
 import type { ChunkCoord } from "../../world/chunk/ChunkCoord";
-import { BLOCK_SIZE, CHUNK_SIZE } from "../../core/constants";
+import {
+  BLOCK_SIZE,
+  CHUNK_SIZE,
+  CHUNK_SYNC_MAX_PER_FRAME,
+} from "../../core/constants";
 import { chunkKey, chunkToWorldOrigin } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
 import type { AtlasLoader } from "../AtlasLoader";
@@ -103,6 +107,7 @@ export class ChunkRenderer {
     const seen = this._syncSeen;
     seen.clear();
     let seenCount = 0;
+    let updatesThisFrame = 0;
 
     for (const chunk of loadedChunks) {
       seenCount += 1;
@@ -136,8 +141,13 @@ export class ChunkRenderer {
         waterLayer.addChild(fgWater);
         this.meshes.set(key, { bg, fgShadow, fg, fgWater });
         chunk.dirty = false;
+        chunk.renderDirty = false;
         added += 1;
-      } else if (chunk.dirty) {
+      } else if (chunk.renderDirty) {
+        if (updatesThisFrame >= CHUNK_SYNC_MAX_PER_FRAME) {
+          continue;
+        }
+        updatesThisFrame += 1;
         updateBackgroundMesh(triple.bg, chunk, this.registry, this.atlas);
         updateFgShadowMesh(triple.fgShadow, chunk, this.fgShadowSampler);
         const { windSways, furnaceFires, waterSurfaces } = updateMesh(
@@ -156,6 +166,7 @@ export class ChunkRenderer {
         this.positionChunkRoot(triple.fg, chunk.coord);
         this.positionChunkRoot(triple.fgWater, chunk.coord);
         chunk.dirty = false;
+        chunk.renderDirty = false;
         updated += 1;
       }
     }

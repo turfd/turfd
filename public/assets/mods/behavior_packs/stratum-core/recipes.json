@@ -113,6 +113,13 @@
       "output": { "itemId": "stratum:chest", "count": 1 }
     },
     {
+      "id": "stratum:ladder_from_sticks",
+      "category": "Basic",
+      "station": null,
+      "ingredients": [{ "itemId": "stratum:stick", "count": 7 }],
+      "output": { "itemId": "stratum:ladder", "count": 3 }
+    },
+    {
       "id": "stratum:sandstone_from_sand",
       "category": "Basic",
       "station": null,

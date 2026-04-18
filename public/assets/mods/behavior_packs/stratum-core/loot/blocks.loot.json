@@ -91,6 +91,11 @@
         { "itemKey": "stratum:chest", "countMin": 1, "countMax": 1, "chance": 1.0 }
       ]
     },
+    "stratum:ladder": {
+      "entries": [
+        { "itemKey": "stratum:ladder", "countMin": 1, "countMax": 1, "chance": 1.0 }
+      ]
+    },
     "stratum:oak_leaves": {
       "entries": [
         { "itemKey": "stratum:stick", "countMin": 0, "countMax": 2, "chance": 0.4 },

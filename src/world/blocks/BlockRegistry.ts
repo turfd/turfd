@@ -75,6 +75,12 @@ export class BlockRegistry {
     return this.byId[id]?.collides ?? false;
   }
 
+  /** Returns true if the block is a door half (lighting is metadata-dependent for doors). */
+  isDoor(id: number): boolean {
+    const h = this.byId[id]?.doorHalf;
+    return h === "bottom" || h === "top";
+  }
+
   getByIdentifier(identifier: string): BlockDefinition {
     const b = this.byIdentifier.get(identifier);
     if (b === undefined) {

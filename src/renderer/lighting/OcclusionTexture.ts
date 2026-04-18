@@ -109,7 +109,7 @@ export class OcclusionTexture {
     originWX: number,
     originWY: number,
     size: number,
-    reg: { isSolid(id: number): boolean },
+    reg: { isSolid(id: number): boolean; isDoor(id: number): boolean },
     airId: number,
     world: World,
   ): void {
@@ -120,9 +120,15 @@ export class OcclusionTexture {
         const wy = ccy * CHUNK_SIZE + ly;
         const col = wx - originWX;
         const row = wy - originWY;
-        const id =
-          chunk === undefined ? airId : getBlock(chunk, lx, ly);
-        this._data[row * size + col] = reg.isSolid(id) ? 255 : 0;
+        const id = chunk === undefined ? airId : getBlock(chunk, lx, ly);
+        let solid = reg.isSolid(id);
+        // Open doors (latched or proximity) are non-occluding for sun rays — matches World light BFS.
+        if (solid && chunk !== undefined && reg.isDoor(id)) {
+          if (world.isDoorEffectivelyOpen(wx, wy)) {
+            solid = false;
+          }
+        }
+        this._data[row * size + col] = solid ? 255 : 0;
       }
     }
   }

@@ -33,6 +33,7 @@ import { MenuBackground } from "./ui/screens/MenuBackground";
 import { runGameEntryBlackTransition } from "./ui/screens/gameEntryTransition";
 import { WorldLoadingScreen } from "./ui/screens/WorldLoadingScreen";
 import { getSkipIntro } from "./ui/settings/uiPrefs";
+import { getVideoPrefs, setVideoPrefs } from "./ui/settings/videoPrefs";
 import "@fortawesome/fontawesome-free/css/fontawesome.min.css";
 import "@fortawesome/fontawesome-free/css/solid.min.css";
 import "./styles/global.css";
@@ -86,11 +87,44 @@ function mountStartupBootOverlay(): void {
     "transition:opacity 420ms ease-out",
     "white-space:nowrap",
   ].join(";");
+  const skipHint = document.createElement("div");
+  skipHint.textContent = "Click or press Esc to skip";
+  skipHint.style.cssText = [
+    "position:fixed",
+    "bottom:20px",
+    "right:24px",
+    "font-family:'BoldPixels','Courier New',monospace",
+    "font-size:13px",
+    "letter-spacing:0.08em",
+    "text-transform:uppercase",
+    "color:rgba(255,255,255,0.4)",
+    "pointer-events:none",
+    "user-select:none",
+    "opacity:0",
+    "transition:opacity 500ms ease-out 2000ms",
+  ].join(";");
   overlay.appendChild(title);
+  overlay.appendChild(skipHint);
   document.body.appendChild(overlay);
+
+  const dismiss = (): void => {
+    overlay.remove();
+  };
+  overlay.style.pointerEvents = "auto";
+  overlay.style.cursor = "pointer";
+  overlay.addEventListener("click", dismiss, { once: true });
+  const escHandler = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") {
+      document.removeEventListener("keydown", escHandler);
+      dismiss();
+    }
+  };
+  document.addEventListener("keydown", escHandler);
+
   performance.mark("startup-boot-overlay-mounted");
   requestAnimationFrame(() => {
     title.style.opacity = "1";
+    skipHint.style.opacity = "1";
     performance.mark("startup-boot-overlay-visible");
     performance.measure(
       "startup-boot-overlay-appear",
@@ -382,6 +416,14 @@ async function main(): Promise<void> {
   if (!mount) {
     throw new Error('Missing root element: expected <div id="app"></div>');
   }
+  if (import.meta.env.DEV) {
+    const w = window as typeof window & {
+      getVideoPrefs: typeof getVideoPrefs;
+      setVideoPrefs: typeof setVideoPrefs;
+    };
+    w.getVideoPrefs = getVideoPrefs;
+    w.setVideoPrefs = setVideoPrefs;
+  }
   mountStartupBootOverlay();
 
   // ---------------------------------------------------------------------------
@@ -427,7 +469,7 @@ async function main(): Promise<void> {
       : 1;
 
     const bg = new MenuBackground({
-      // More zoomed-out than the menu: show more blocks across the screen.
+      // More zoomed-out than default: more blocks along the shorter viewport edge.
       maxVisibleBlocksX: initialBlocks,
       // Allow zoom to go a bit smaller on narrow viewports.
       minZoom: initialMinZoom,
@@ -592,6 +634,9 @@ async function main(): Promise<void> {
   );
 
   let playStartupIntro = !getSkipIntro();
+  if (!playStartupIntro) {
+    document.getElementById("stratum-startup-boot")?.remove();
+  }
   while (true) {
     performance.mark("menu-cycle:start");
     mount.classList.remove("stratum-game-loading");

@@ -13,17 +13,23 @@ const INTRO_Z_INDEX = 30;
 let introImageWarmPromise: Promise<void> | null = null;
 const INTRO_ACTIVE_CLASS = "stratum-startup-intro-active";
 
-function waitMs(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
+function waitMs(ms: number, dismissed: Promise<void>): Promise<void> {
+  return Promise.race([
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms);
+    }),
+    dismissed,
+  ]);
 }
 
-function waitAnimation(animation: Animation): Promise<void> {
-  return new Promise<void>((resolve) => {
-    animation.addEventListener("finish", () => resolve(), { once: true });
-    animation.addEventListener("cancel", () => resolve(), { once: true });
-  });
+function waitAnimation(animation: Animation, dismissed: Promise<void>): Promise<void> {
+  return Promise.race([
+    new Promise<void>((resolve) => {
+      animation.addEventListener("finish", () => resolve(), { once: true });
+      animation.addEventListener("cancel", () => resolve(), { once: true });
+    }),
+    dismissed,
+  ]);
 }
 
 function nextFrame(): Promise<void> {
@@ -76,16 +82,48 @@ export async function runMainMenuStartupIntro({
   const base = import.meta.env.BASE_URL ?? "/";
   const introImageUrl = `${base}${INTRO_IMAGE_RELATIVE_PATH}`;
 
+  // Tracks all running animations so we can finish them immediately on skip.
+  const activeAnimations: Animation[] = [];
+  function track(anim: Animation): Animation {
+    activeAnimations.push(anim);
+    return anim;
+  }
+
+  // Dismiss resolves when the user clicks or presses Escape, skipping the rest.
+  let dismissResolve!: () => void;
+  const dismissed = new Promise<void>((resolve) => {
+    dismissResolve = resolve;
+  });
+
+  function dismiss(): void {
+    dismissResolve();
+    for (const anim of activeAnimations) {
+      try {
+        anim.finish();
+      } catch {
+        // ignore — some animations may already be finished
+      }
+    }
+  }
+
   const overlay = document.createElement("div");
   overlay.className = "stratum-startup-intro-overlay";
   overlay.style.cssText = [
     "position:fixed",
     "inset:0",
     `z-index:${INTRO_Z_INDEX}`,
-    "pointer-events:none",
+    "pointer-events:auto",
     "overflow:hidden",
     "background:transparent",
+    "cursor:pointer",
   ].join(";");
+
+  overlay.addEventListener("click", dismiss, { once: true });
+
+  const escHandler = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") dismiss();
+  };
+  document.addEventListener("keydown", escHandler);
 
   const introMover = document.createElement("div");
   introMover.style.cssText = [
@@ -94,6 +132,7 @@ export async function runMainMenuStartupIntro({
     "transform:translate3d(0, 0, 0)",
     "will-change:transform",
     "backface-visibility:hidden",
+    "pointer-events:none",
   ].join(";");
   overlay.appendChild(introMover);
 
@@ -140,6 +179,7 @@ export async function runMainMenuStartupIntro({
     "background:#000",
     "opacity:1",
     "will-change:opacity",
+    "pointer-events:none",
   ].join(";");
   overlay.appendChild(blackout);
 
@@ -159,8 +199,38 @@ export async function runMainMenuStartupIntro({
     "image-rendering:pixelated",
     "image-rendering:crisp-edges",
     "will-change:transform, left, top, width, opacity",
+    "pointer-events:none",
   ].join(";");
   overlay.appendChild(logo);
+
+  const skipBtn = document.createElement("div");
+  skipBtn.textContent = "Skip";
+  skipBtn.style.cssText = [
+    "position:fixed",
+    "bottom:20px",
+    "right:24px",
+    "font-family:'BoldPixels','Courier New',monospace",
+    "font-size:13px",
+    "letter-spacing:0.08em",
+    "text-transform:uppercase",
+    "color:rgba(255,255,255,0.5)",
+    "cursor:pointer",
+    "padding:6px 10px",
+    "border:1px solid rgba(255,255,255,0.18)",
+    "border-radius:3px",
+    "user-select:none",
+    "transition:color 0.15s,border-color 0.15s",
+    "z-index:1",
+  ].join(";");
+  skipBtn.addEventListener("mouseenter", () => {
+    skipBtn.style.color = "rgba(255,255,255,0.9)";
+    skipBtn.style.borderColor = "rgba(255,255,255,0.5)";
+  });
+  skipBtn.addEventListener("mouseleave", () => {
+    skipBtn.style.color = "rgba(255,255,255,0.5)";
+    skipBtn.style.borderColor = "rgba(255,255,255,0.18)";
+  });
+  overlay.appendChild(skipBtn);
 
   const anchorParent = mount.ownerDocument?.body ?? document.body;
   anchorParent.appendChild(overlay);
@@ -169,9 +239,14 @@ export async function runMainMenuStartupIntro({
   };
 
   try {
-    await warmIntroImage(introImageUrl);
-    await introImageLayer.decode().catch(() => {});
-    await logo.decode().catch(() => {});
+    await Promise.race([
+      Promise.all([
+        warmIntroImage(introImageUrl),
+        introImageLayer.decode().catch(() => {}),
+        logo.decode().catch(() => {}),
+      ]),
+      dismissed,
+    ]);
     performance.mark("startup-intro:assets-ready");
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -198,46 +273,54 @@ export async function runMainMenuStartupIntro({
       blackout.style.opacity = "0";
       introMover.style.transform = `translate3d(0, ${endY}px, 0)`;
       logo.style.opacity = "1";
-      await waitMs(120);
+      await waitMs(120, dismissed);
     } else {
-      const introReveal = blackout.animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: 700,
-        easing: "ease-out",
-        fill: "forwards",
-      });
-      await waitAnimation(introReveal);
+      const introReveal = track(
+        blackout.animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 700,
+          easing: "ease-out",
+          fill: "forwards",
+        }),
+      );
+      await waitAnimation(introReveal, dismissed);
       performance.mark("startup-intro:reveal-finished");
 
-      const bgSlide = introMover.animate(
-        [
-          { transform: "translate3d(0, 0, 0)" },
-          { transform: `translate3d(0, ${endY}px, 0)` },
-        ],
-        {
-          duration: 4200,
-          easing: "cubic-bezier(0.37, 0, 0.2, 1)",
-          fill: "forwards",
-        },
+      const bgSlide = track(
+        introMover.animate(
+          [
+            { transform: "translate3d(0, 0, 0)" },
+            { transform: `translate3d(0, ${endY}px, 0)` },
+          ],
+          {
+            duration: 4200,
+            easing: "cubic-bezier(0.37, 0, 0.2, 1)",
+            fill: "forwards",
+          },
+        ),
       );
-      await waitAnimation(bgSlide);
+      await waitAnimation(bgSlide, dismissed);
       performance.mark("startup-intro:slide-finished");
 
-      const logoInAnim = logo.animate(
-        [
-          { opacity: 0, transform: "translate(-50%, -50%) scale(0.9)" },
-          { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
-        ],
-        { duration: 460, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" },
+      const logoInAnim = track(
+        logo.animate(
+          [
+            { opacity: 0, transform: "translate(-50%, -50%) scale(0.9)" },
+            { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
+          ],
+          { duration: 460, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" },
+        ),
       );
-      await waitAnimation(logoInAnim);
-      await waitMs(220);
+      await waitAnimation(logoInAnim, dismissed);
+      await waitMs(220, dismissed);
 
-      const fadeBgAnim = introImageLayer.animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: 620,
-        easing: "ease-out",
-        fill: "forwards",
-      });
-      await waitAnimation(fadeBgAnim);
+      const fadeBgAnim = track(
+        introImageLayer.animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 620,
+          easing: "ease-out",
+          fill: "forwards",
+        }),
+      );
+      await waitAnimation(fadeBgAnim, dismissed);
     }
 
     // Background image is gone before logo travel starts; keep blackout off so
@@ -246,54 +329,64 @@ export async function runMainMenuStartupIntro({
     introImageLayer.style.opacity = "0";
 
     // Hold on centered logo over the live menu background so the brand can breathe.
-    await waitMs(reduceMotion ? 120 : 1500);
+    await waitMs(reduceMotion ? 120 : 1500, dismissed);
 
     const logoRect = logo.getBoundingClientRect();
     const targetRect = menuLogoEl.getBoundingClientRect();
 
     // Reveal menu UI while logo travels into its final slot.
     menuRoot.style.opacity = "1";
-    const menuReveal = menuRoot.animate([{ opacity: 0 }, { opacity: 1 }], {
-      duration: reduceMotion ? 120 : 420,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      fill: "forwards",
-    });
+    const menuReveal = track(
+      menuRoot.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: reduceMotion ? 120 : 420,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        fill: "forwards",
+      }),
+    );
 
     logo.style.left = `${logoRect.left + logoRect.width / 2}px`;
     logo.style.top = `${logoRect.top + logoRect.height / 2}px`;
     logo.style.width = `${logoRect.width}px`;
     logo.style.transform = "translate(-50%, -50%)";
 
-    const logoToMenu = logo.animate(
-      [
+    const logoToMenu = track(
+      logo.animate(
+        [
+          {
+            left: `${logoRect.left + logoRect.width / 2}px`,
+            top: `${logoRect.top + logoRect.height / 2}px`,
+            width: `${logoRect.width}px`,
+            opacity: 1,
+          },
+          {
+            left: `${targetRect.left + targetRect.width / 2}px`,
+            top: `${targetRect.top + targetRect.height / 2}px`,
+            width: `${targetRect.width}px`,
+            opacity: 1,
+          },
+        ],
         {
-          left: `${logoRect.left + logoRect.width / 2}px`,
-          top: `${logoRect.top + logoRect.height / 2}px`,
-          width: `${logoRect.width}px`,
-          opacity: 1,
+          duration: reduceMotion ? 140 : 900,
+          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+          fill: "forwards",
         },
-        {
-          left: `${targetRect.left + targetRect.width / 2}px`,
-          top: `${targetRect.top + targetRect.height / 2}px`,
-          width: `${targetRect.width}px`,
-          opacity: 1,
-        },
-      ],
-      {
-        duration: reduceMotion ? 140 : 900,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-        fill: "forwards",
-      },
+      ),
     );
-    await Promise.all([waitAnimation(menuReveal), waitAnimation(logoToMenu)]);
+    await Promise.race([
+      Promise.all([waitAnimation(menuReveal, dismissed), waitAnimation(logoToMenu, dismissed)]),
+      dismissed,
+    ]);
     performance.mark("startup-intro:handoff-finished");
 
     menuLogoEl.style.opacity = "1";
   } finally {
+    document.removeEventListener("keydown", escHandler);
     removeBootOverlay();
     mount.classList.remove(INTRO_ACTIVE_CLASS);
     menuRoot.inert = false;
+    menuRoot.style.opacity = "1";
     menuRoot.style.pointerEvents = "";
+    menuLogoEl.style.opacity = "1";
     overlay.remove();
     performance.mark("startup-intro:end");
     performance.measure("startup-intro-total", "startup-intro:start", "startup-intro:end");

@@ -1,4 +1,4 @@
-﻿{
+{
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
@@ -8,7 +8,7 @@
       "stratum:display_name": "Sugar",
       "stratum:texture_key": "sugar",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 128
+      "stratum:numeric_id": 131
     }
   }
 }

@@ -4,10 +4,13 @@ import {
   GlProgram,
   RenderTexture,
   Sprite,
+  Texture,
   UniformGroup,
+  type TextureSource,
 } from "pixi.js";
 import { COMPOSITE_FRAGMENT_GLSL } from "./compositeFragmentSource";
 import { OcclusionTexture } from "./OcclusionTexture";
+import { MAX_PLACED_TORCHES } from "../../core/constants";
 
 function assertCompositeFragmentSource(src: string): string {
   if (typeof src !== "string" || !src.includes("void main")) {
@@ -39,6 +42,19 @@ type CompositeUniformStruct = {
   uTorchRadius: { value: number; type: "f32" };
   uTorchIntensity: { value: number; type: "f32" };
   uTorchColor: { value: Float32Array; type: "vec3<f32>" };
+  uPlacedTorchCount: { value: number; type: "i32" };
+  /** One vec4 per torch (.xy = world flame tip). `size` must be set — Pixi defaults array uniforms to 1. */
+  uPlacedTorchPositions: { value: Float32Array; type: "vec4<f32>"; size: number };
+  uTonemapper: { value: number; type: "i32" };
+  uBloomEnabled: { value: number; type: "f32" };
+  uBloomMaskActive: { value: number; type: "f32" };
+  uNormalOffsetPx: { value: Float32Array; type: "vec2<f32>" };
+  uNormalUvScale: { value: number; type: "f32" };
+  uNormalStrength: { value: number; type: "f32" };
+  uDebugNormals: { value: number; type: "f32" };
+  uSunLightZ: { value: number; type: "f32" };
+  uMoonLightZ: { value: number; type: "f32" };
+  uTorchLightZ: { value: number; type: "f32" };
 };
 
 const FILTER_VERT_SRC = `in vec2 aPosition;
@@ -91,6 +107,31 @@ export type CompositeUniforms = {
     intensity: number;
     color: [number, number, number];
   } | null;
+  /** World-block positions of nearby placed light-emitting blocks (up to MAX_PLACED_TORCHES). */
+  placedTorches: [number, number][];
+  /**
+   * How many entries in {@link placedTorches} are valid this frame. When set, preferred over
+   * `placedTorches.length` so the buffer can stay preallocated without truncating.
+   */
+  placedTorchCount?: number;
+  /** 0 = none (hard clamp), 1 = ACES, 2 = AgX, 3 = extended Reinhard (luminance). */
+  tonemapper: 0 | 1 | 2 | 3;
+  bloomEnabled: boolean;
+  /** When true, bloom is multiplied by (1 - player silhouette alpha). */
+  bloomMaskActive: boolean;
+  /** 0 disables screen-space normal modulation (flat shading). */
+  normalStrength: number;
+  /** Tangent-space Z component for sun/moon directional lights (world XY + this Z). */
+  sunLightZ: number;
+  moonLightZ: number;
+  /** World-block scale vertical component for point lights vs tangent normals. */
+  torchLightZ: number;
+  /** When true, composite outputs the raw normal-map texture (debug). */
+  debugNormals: boolean;
+  /** Debug: shift normal-map sample in logical pixels (see video prefs). */
+  normalOffsetPx: [number, number];
+  /** Debug: UV scale for normal map about screen center (1 = default). */
+  normalUvScale: number;
 };
 
 export class CompositePass {
@@ -102,6 +143,8 @@ export class CompositePass {
     albedoRT: RenderTexture,
     occlusion: OcclusionTexture,
     indirect: IndirectLightTexture,
+    playerBloomMaskSource: TextureSource,
+    normalMapSource: TextureSource,
   ) {
     this._uniformGroup = new UniformGroup<CompositeUniformStruct>({
       uSunDir: { value: new Float32Array(2), type: "vec2<f32>" },
@@ -137,6 +180,22 @@ export class CompositePass {
         value: new Float32Array([1.0, 0.85, 0.55]),
         type: "vec3<f32>",
       },
+      uPlacedTorchCount: { value: 0, type: "i32" },
+      uPlacedTorchPositions: {
+        value: new Float32Array(MAX_PLACED_TORCHES * 4),
+        type: "vec4<f32>",
+        size: MAX_PLACED_TORCHES,
+      },
+      uTonemapper: { value: 1, type: "i32" },
+      uBloomEnabled: { value: 1, type: "f32" },
+      uBloomMaskActive: { value: 0, type: "f32" },
+      uNormalOffsetPx: { value: new Float32Array([0, 0]), type: "vec2<f32>" },
+      uNormalUvScale: { value: 1, type: "f32" },
+      uNormalStrength: { value: 0, type: "f32" },
+      uDebugNormals: { value: 0, type: "f32" },
+      uSunLightZ: { value: 0.22, type: "f32" },
+      uMoonLightZ: { value: 0.22, type: "f32" },
+      uTorchLightZ: { value: 12.0, type: "f32" },
     });
 
     const fragmentSrc = assertCompositeFragmentSource(COMPOSITE_FRAGMENT_GLSL);
@@ -152,6 +211,8 @@ export class CompositePass {
         compositeUniforms: this._uniformGroup,
         uOcclusion: occlusion.texture.source,
         uIndirectLight: indirect.texture.source,
+        uPlayerBloomMask: playerBloomMaskSource,
+        uNormalMap: normalMapSource,
       },
       clipToViewport: false,
     });
@@ -285,6 +346,78 @@ export class CompositePass {
       u.uTorchActive = 0;
       dirty = true;
     }
+    const ptCount = Math.min(
+      p.placedTorchCount ?? p.placedTorches.length,
+      MAX_PLACED_TORCHES,
+    );
+    if (u.uPlacedTorchCount !== ptCount) {
+      u.uPlacedTorchCount = ptCount;
+      dirty = true;
+    }
+    const ptBuf = u.uPlacedTorchPositions;
+    for (let i = 0; i < ptCount; i++) {
+      const entry = p.placedTorches[i];
+      if (entry === undefined) {
+        continue;
+      }
+      const px = entry[0];
+      const py = entry[1];
+      const b = i * 4;
+      if (ptBuf[b] !== px || ptBuf[b + 1] !== py) {
+        ptBuf[b] = px;
+        ptBuf[b + 1] = py;
+        ptBuf[b + 2] = 0;
+        ptBuf[b + 3] = 0;
+        dirty = true;
+      }
+    }
+    if (u.uTonemapper !== p.tonemapper) {
+      u.uTonemapper = p.tonemapper;
+      dirty = true;
+    }
+    const bloomVal = p.bloomEnabled ? 1 : 0;
+    if (u.uBloomEnabled !== bloomVal) {
+      u.uBloomEnabled = bloomVal;
+      dirty = true;
+    }
+    const bma = p.bloomMaskActive ? 1 : 0;
+    if (u.uBloomMaskActive !== bma) {
+      u.uBloomMaskActive = bma;
+      dirty = true;
+    }
+    if (
+      u.uNormalOffsetPx[0] !== p.normalOffsetPx[0] ||
+      u.uNormalOffsetPx[1] !== p.normalOffsetPx[1]
+    ) {
+      u.uNormalOffsetPx[0] = p.normalOffsetPx[0];
+      u.uNormalOffsetPx[1] = p.normalOffsetPx[1];
+      dirty = true;
+    }
+    if (u.uNormalUvScale !== p.normalUvScale) {
+      u.uNormalUvScale = p.normalUvScale;
+      dirty = true;
+    }
+    if (u.uNormalStrength !== p.normalStrength) {
+      u.uNormalStrength = p.normalStrength;
+      dirty = true;
+    }
+    const dbgN = p.debugNormals ? 1 : 0;
+    if (u.uDebugNormals !== dbgN) {
+      u.uDebugNormals = dbgN;
+      dirty = true;
+    }
+    if (u.uSunLightZ !== p.sunLightZ) {
+      u.uSunLightZ = p.sunLightZ;
+      dirty = true;
+    }
+    if (u.uMoonLightZ !== p.moonLightZ) {
+      u.uMoonLightZ = p.moonLightZ;
+      dirty = true;
+    }
+    if (u.uTorchLightZ !== p.torchLightZ) {
+      u.uTorchLightZ = p.torchLightZ;
+      dirty = true;
+    }
     if (dirty) {
       this._uniformGroup.update();
     }
@@ -308,4 +441,9 @@ export class CompositePass {
     this._filter.destroy(false);
     this._sprite.destroy();
   }
+}
+
+/** Placeholder bind for `uPlayerBloomMask` when no RT exists (e.g. menu). */
+export function emptyBloomMaskSource(): TextureSource {
+  return Texture.EMPTY.source;
 }
