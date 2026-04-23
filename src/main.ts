@@ -36,6 +36,11 @@ import { runGameEntryBlackTransition } from "./ui/screens/gameEntryTransition";
 import { WorldLoadingScreen } from "./ui/screens/WorldLoadingScreen";
 import { getSkipIntro } from "./ui/settings/uiPrefs";
 import { getVideoPrefs, setVideoPrefs } from "./ui/settings/videoPrefs";
+import { installStaleClientGuard } from "./clientUpdateCheck";
+import {
+  formatStratumBuildLine,
+  getStratumBuildInfo,
+} from "./versionInfo";
 import "@fortawesome/fontawesome-free/css/fontawesome.min.css";
 import "@fortawesome/fontawesome-free/css/solid.min.css";
 import "./styles/global.css";
@@ -418,14 +423,26 @@ async function main(): Promise<void> {
   if (!mount) {
     throw new Error('Missing root element: expected <div id="app"></div>');
   }
-  if (import.meta.env.DEV) {
+  {
     const w = window as typeof window & {
-      getVideoPrefs: typeof getVideoPrefs;
-      setVideoPrefs: typeof setVideoPrefs;
+      getVideoPrefs?: typeof getVideoPrefs;
+      setVideoPrefs?: typeof setVideoPrefs;
+      stratumBuild?: ReturnType<typeof getStratumBuildInfo>;
+      /** DevTools: run `stratumPrintVersion()` for build id + wire range; reload if banner shows before MP. */
+      stratumPrintVersion?: () => string;
     };
-    w.getVideoPrefs = getVideoPrefs;
-    w.setVideoPrefs = setVideoPrefs;
+    w.stratumBuild = getStratumBuildInfo();
+    w.stratumPrintVersion = (): string => {
+      const line = formatStratumBuildLine();
+      console.log(line);
+      return line;
+    };
+    if (import.meta.env.DEV) {
+      w.getVideoPrefs = getVideoPrefs;
+      w.setVideoPrefs = setVideoPrefs;
+    }
   }
+  installStaleClientGuard();
   mountStartupBootOverlay();
 
   // ---------------------------------------------------------------------------
@@ -755,6 +772,7 @@ async function main(): Promise<void> {
         await loadingBackdrop.init(mount);
       }
 
+      await auth.ensureAuthHydrated();
       const session = auth.getSession();
       const playerSettings = await store.loadPlayerSettings();
       let skinId = playerSettings.selectedSkinId;

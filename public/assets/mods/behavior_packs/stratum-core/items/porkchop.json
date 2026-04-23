@@ -10,7 +10,8 @@
       "stratum:max_stack": 64,
       "stratum:numeric_id": 129,
       "stratum:eat_restore_health": 3,
-      "stratum:inventory_tooltip": "Eat to restore 1.5 hearts."
+      "stratum:eat_temporary_duration_sec": 40,
+      "stratum:inventory_tooltip": "Eat: 1.5 temporary hearts (pink) that vanish; cook for lasting healing."
     }
   }
 }

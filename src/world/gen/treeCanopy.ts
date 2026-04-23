@@ -64,8 +64,18 @@ export function forEachDeciduousBushCell(
 }
 
 /**
- * Spruce cone with the same layer widths as before, plus sparse side tufts and
- * a slightly wider cap so the silhouette is less triangular/picket-fence.
+ * Terraria-style spruce cone. `layers` is indexed top→bottom (layer 0 is the narrow
+ * tip, the last entry is the wide base), so the `layers[n-1-i]` lookup gives the
+ * correct half-width as we iterate from the canopy bottom upward.
+ *
+ * The base shape is a clean stepped triangle: each layer places the solid core
+ * `[−halfW, +halfW]`, with no fattening applied to the tip. On top we emit *sparse*
+ * single-cell edge tufts one column past the core, but only on the lower half of
+ * the cone (layers whose half-width is at least half of the tree's max). Restricting
+ * tufts this way keeps the point at the top visibly pointy while still breaking up
+ * the perfectly straight diagonal that naive cones suffer from — the noisy/branchy
+ * feel of a real spruce silhouette comes from hashed per-cell irregularities on the
+ * lower 2/3 of the canopy, exactly where Terraria's reference art puts them.
  */
 export function forEachSpruceBushCell(
   anchorWx: number,
@@ -74,9 +84,16 @@ export function forEachSpruceBushCell(
   visit: (wx: number, wy: number) => void,
 ): void {
   const n = layers.length;
+  if (n === 0) {
+    return;
+  }
+  const maxHalfW = layers[n - 1]!;
+
   for (let i = 0; i < n; i++) {
     const wy = canopyBottomY + i;
     const halfW = layers[n - 1 - i]!;
+
+    // Solid core of the cone at this layer (always placed).
     if (halfW === 0) {
       visit(anchorWx, wy);
       continue;
@@ -84,25 +101,22 @@ export function forEachSpruceBushCell(
     for (let dx = -halfW; dx <= halfW; dx++) {
       visit(anchorWx + dx, wy);
     }
-    if (halfW >= 1) {
-      const rowRoll = treeRngHash(anchorWx, wy, i ^ 0x4b1d) & 3;
-      if (rowRoll !== 0) {
-        for (const side of [-1, 1] as const) {
-          const wx = anchorWx + side * (halfW + 1);
-          if ((treeRngHash(wx, wy, i * 13) & 3) !== 0) {
-            visit(wx, wy);
-          }
-        }
+
+    // Sparse edge tufts only on the lower/middle band (halfW*2 >= maxHalfW). Each
+    // side is rolled independently at ~25% so we get occasional asymmetric bumps
+    // instead of a mirrored "fat cone". Two-bit bucket per side of the same hash
+    // word keeps the dice independent.
+    if (halfW >= 2 && halfW * 2 >= maxHalfW) {
+      const roll = treeRngHash(anchorWx, wy, (i * 17) ^ 0x4b1d);
+      if ((roll & 3) === 0) {
+        visit(anchorWx - (halfW + 1), wy);
+      }
+      if (((roll >>> 3) & 3) === 0) {
+        visit(anchorWx + (halfW + 1), wy);
       }
     }
   }
 
-  const topWy = canopyBottomY + n - 1;
-  const cap = treeRngHash(anchorWx, topWy, 0x70ee);
-  if ((cap & 1) !== 0) {
-    visit(anchorWx - 1, topWy);
-  }
-  if ((cap & 2) !== 0) {
-    visit(anchorWx + 1, topWy);
-  }
+  // No top-cap widening: the layer array's trailing `0`s already give the tip its
+  // single-cell point, which is exactly what Terraria-style spruces want.
 }

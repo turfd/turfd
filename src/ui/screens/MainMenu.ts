@@ -3158,7 +3158,8 @@ function injectStyles(base: string): void {
 // ---------------------------------------------------------------------------
 
 const WHATS_NEW_HTML = `
-  The combat update. Armor, bows, new mobs, and spatial audio that makes the world feel a lot bigger.
+  A refined world-polish update: richer skies, ambient butterflies and fireflies, denser foliage, ladder support, and improved melee feel.
+  Plus furnace queue QoL and stronger multiplayer version-compatibility safeguards.
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -3528,7 +3529,7 @@ export class MainMenu {
 
         const wnHeading = document.createElement("p");
         wnHeading.className = "mm-home-changelog-title";
-        wnHeading.textContent = "Stratum · Alpha 0.4";
+        wnHeading.textContent = "Stratum · Alpha 0.5";
         wnCopy.appendChild(wnHeading);
 
         const wnBody = document.createElement("div");

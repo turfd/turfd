@@ -519,6 +519,7 @@
       "sounds/bow/bowhit3.ogg",
       "sounds/bow/bowhit4.ogg"
     ],
+    "tool_swing": "sounds/damage/swing.mp3",
     "water_swim": [
       "sounds/water/swim1.ogg",
       "sounds/water/swim2.ogg",

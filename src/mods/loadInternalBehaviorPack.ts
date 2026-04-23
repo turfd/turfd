@@ -89,6 +89,7 @@ export function registerParsedItemsInOrder(
       fuelBurnSeconds: def.fuelBurnSeconds,
       tags: def.tags,
       eatRestoreHealth: def.eatRestoreHealth,
+      eatTemporaryDurationSec: def.eatTemporaryDurationSec,
       inventoryTooltip: def.inventoryTooltip,
     });
     expected += 1;

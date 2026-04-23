@@ -81,6 +81,22 @@ export class BlockRegistry {
     return h === "bottom" || h === "top";
   }
 
+  /**
+   * Foreground blocks that cast orthographic contact-shadow strips on adjacent background tiles.
+   * False for air, non-solid, solid transparent cells, and any block that sets
+   * `castsFgContactShadow: false` in JSON.
+   */
+  castsFgContactShadow(id: number): boolean {
+    const b = this.byId[id];
+    if (b === undefined || !b.solid) {
+      return false;
+    }
+    if (b.castsFgContactShadow !== undefined) {
+      return b.castsFgContactShadow;
+    }
+    return !b.transparent;
+  }
+
   getByIdentifier(identifier: string): BlockDefinition {
     const b = this.byIdentifier.get(identifier);
     if (b === undefined) {

@@ -61,29 +61,40 @@ const OAK_TWIN_FORK_SPEC: TwinForkSpec = {
 // Spruce tree shapes (tall conical canopy)
 // ---------------------------------------------------------------------------
 
+/**
+ * Spruce tree spec (Terraria-style conifer). `canopyLayers` is top→bottom; each
+ * width usually repeats for two rows for a clean stepped cone.
+ *
+ * The trunk is placed *after* leaves, from `surfaceY + 1` through
+ * `surfaceY + canopyStartDy + canopyLayers.length - 1` (inclusive of the
+ * top-of-tree row), so the log column is visible all the way through the crown
+ * in the same way as a classic Minecraft-style spruce.
+ */
 type SpruceTreeSpec = {
-  trunkHeight: number;
   /** Canopy layers from top (narrow) to bottom (wide). Each value = half-width at that row. */
   canopyLayers: readonly number[];
-  /** How far above surface the bottom of the canopy starts. */
+  /**
+   * How many blocks *above* the surface the bottom (widest) canopy row starts.
+   * (First log above surface is `dy === 1`.)
+   */
   canopyStartDy: number;
 };
 
 const SPRUCE_VARIANTS: readonly SpruceTreeSpec[] = [
+  // Small — canopy 9 wide × 9 tall, ~2 blocks of exposed trunk below.
   {
-    trunkHeight: 6,
-    canopyLayers: [0, 1, 1, 2, 2, 3],
-    canopyStartDy: 2,
+    canopyLayers: [0, 1, 1, 2, 2, 3, 3, 4, 4],
+    canopyStartDy: 3,
   },
+  // Medium — canopy 11 wide × 13 tall, ~3 blocks of exposed trunk.
   {
-    trunkHeight: 7,
-    canopyLayers: [0, 1, 1, 2, 2, 3, 3],
-    canopyStartDy: 2,
+    canopyLayers: [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 5],
+    canopyStartDy: 4,
   },
+  // Large — canopy 13 wide × 16 tall, ~4 blocks of exposed trunk.
   {
-    trunkHeight: 8,
-    canopyLayers: [0, 0, 1, 1, 2, 2, 3, 3],
-    canopyStartDy: 2,
+    canopyLayers: [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6],
+    canopyStartDy: 5,
   },
 ] as const;
 
@@ -658,8 +669,10 @@ export class WorldGenerator {
       this.placeBackgroundCell(chunk, originWx, originWy, wx, wy, this.spruceLeavesId);
     });
 
-    // Place trunk (overwrites leaves in the trunk column)
-    for (let dy = 1; dy <= spec.trunkHeight; dy++) {
+    // Trunk: full column through the lower trunk and the canopy, ending at the tip
+    // row. Placed after leaves so it overwrites the centre of each crown layer.
+    const trunkTopDy = spec.canopyStartDy + layers.length - 1;
+    for (let dy = 1; dy <= trunkTopDy; dy++) {
       this.placeTrunkCell(chunk, originWx, originWy, anchorWx, surfaceY + dy, trunkId);
     }
   }

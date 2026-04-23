@@ -73,6 +73,8 @@ const uiEntrySchema = z
     bow: pathOrPaths.optional(),
     /** Arrow impacts solid block (`playSfx("bowhit")`); arrays → random variant. */
     bowhit: pathOrPaths.optional(),
+    /** Tool/weapon swing (`playSfx("tool_swing")`) for air/entity swings (not mining). */
+    tool_swing: pathOrPaths.optional(),
   })
   .strict();
 
@@ -236,6 +238,9 @@ async function loadSoundManifestJson(
   }
   if (ui?.bowhit !== undefined) {
     jobs.push(loadPathOrPaths(audio, packBaseUrl, "bowhit", ui.bowhit));
+  }
+  if (ui?.tool_swing !== undefined) {
+    jobs.push(loadPathOrPaths(audio, packBaseUrl, "tool_swing", ui.tool_swing));
   }
   await Promise.all(jobs);
 }

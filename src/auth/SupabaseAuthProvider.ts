@@ -27,19 +27,24 @@ export class SupabaseAuthProvider implements IAuthProvider {
 
   private readonly listeners = new Set<() => void>();
 
+  /** First `getSession` + {@link applyAuthSession}; awaited by {@link ensureAuthHydrated}. */
+  private readonly initialSessionHydration: Promise<void>;
+
   constructor(url: string, anonKey: string) {
     this.client = createClient(url, anonKey);
-    void this.client.auth
+    this.initialSessionHydration = this.client.auth
       .getSession()
-      .then(({ data: { session } }) => {
-        void this.applyAuthSession(session);
-      })
+      .then(({ data: { session } }) => this.applyAuthSession(session))
       .catch((err: unknown) => {
         console.warn("[SupabaseAuthProvider] getSession failed", err);
       });
     this.client.auth.onAuthStateChange((_event, session) => {
       void this.applyAuthSession(session);
     });
+  }
+
+  ensureAuthHydrated(): Promise<void> {
+    return this.initialSessionHydration;
   }
 
   private notify(): void {

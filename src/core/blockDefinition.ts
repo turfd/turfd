@@ -22,6 +22,12 @@ export interface BlockDefinitionBase {
   textureName: string;
   /** If true, texture can be horizontally mirrored based on world position. */
   randomFlipX?: boolean;
+  /**
+   * Tree-canopy leaf cells: render a second per-chunk "leaf decoration" mesh that stacks an
+   * offset overlay quad over each cell and bleeds small leaf puffs into adjacent air tiles
+   * (see {@link src/renderer/chunk/LeafDecorationBatch}).
+   */
+  decorationLeaves?: boolean;
   solid: boolean;
   /**
    * When false, entities do not collide with this block’s cell (player, dropped items).
@@ -63,6 +69,11 @@ export interface BlockDefinitionBase {
   doorHalf: "none" | "bottom" | "top";
   /** Two-wide bed halves; foot is the placed-from-item cell (`stratum:bed_half`). */
   bedHalf: "none" | "foot" | "head";
+  /**
+   * When false, this foreground block does not cast the batched back-wall contact-shadow strips.
+   * Use for furniture or art with large transparent regions where tile-sized shadows look wrong.
+   */
+  castsFgContactShadow?: boolean;
   /**
    * Pixels cropped from the top of the cell when drawing (0–15). Bottom of the quad stays
    * on the block’s lower edge so short plants don’t visually float above the ground.

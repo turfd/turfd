@@ -37,7 +37,7 @@ const FOREST_TYPE_SCALE = 400;
 const DESERT_SCALE_BLOCKS = 280;
 
 /** Raw desert field above this (after smoothstep) counts as desert if forest is sparse. */
-const DESERT_THRESHOLD = 0.58;
+const DESERT_THRESHOLD = 0.63;
 
 /** Forest density must stay below this so dense woods are never overridden by desert. */
 const DESERT_MAX_FOREST_DENSITY = 0.22;

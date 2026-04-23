@@ -39,6 +39,8 @@ const stratumBlockComponentsSchema = z
     "stratum:loot_table": z.string().optional(),
     "stratum:material": blockMaterialSchema.optional(),
     "stratum:random_flip_x": z.boolean().optional(),
+    /** Enables per-chunk leaf decoration mesh (stacked overlay + edge puffs). */
+    "stratum:decoration_leaves": z.boolean().optional(),
     "stratum:replaceable": z.boolean().optional(),
     "stratum:tall_grass": z.enum(["none", "bottom", "top"]).optional(),
     "stratum:door_half": z.enum(["bottom", "top"]).optional(),
@@ -59,6 +61,11 @@ const stratumBlockComponentsSchema = z
     "stratum:no_block_item": z.boolean().optional(),
     /** Multi-cell painting block placed on background walls. */
     "stratum:is_painting": z.boolean().optional(),
+    /**
+     * When false, skips contact-shadow bands on background tiles next to this foreground cell.
+     * Omitted: solid + non-`transparent` blocks cast; solid transparent (e.g. glass) do not.
+     */
+    "stratum:casts_fg_contact_shadow": z.boolean().optional(),
     /** Stable save/wire id; must be dense 0..N-1 with air = 0 (`BlockRegistry.registerInOrder`). */
     "stratum:numeric_id": z.number().int().min(0).max(65535),
   })
@@ -90,6 +97,7 @@ export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
     displayName: c["stratum:display_name"],
     textureName: c["stratum:texture"].all,
     randomFlipX: c["stratum:random_flip_x"],
+    decorationLeaves: c["stratum:decoration_leaves"],
     solid: c["stratum:solid"],
     collides: c["stratum:collision"] ?? c["stratum:solid"],
     transparent: c["stratum:transparent"],
@@ -115,6 +123,9 @@ export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
     ...(c["stratum:stair"] === true ? { isStair: true as const } : {}),
     ...(c["stratum:no_block_item"] === true ? { noBlockItem: true as const } : {}),
     ...(c["stratum:is_painting"] === true ? { isPainting: true as const } : {}),
+    ...(c["stratum:casts_fg_contact_shadow"] !== undefined
+      ? { castsFgContactShadow: c["stratum:casts_fg_contact_shadow"] }
+      : {}),
     numericId: c["stratum:numeric_id"],
   };
 }

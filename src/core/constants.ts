@@ -365,6 +365,12 @@ export const STONECUTTER_ACCESS_RADIUS_BLOCKS = 4;
  */
 export const MAX_RENDER_DEVICE_PIXEL_RATIO = 2;
 
+/**
+ * Sub-pixel correction scale for camera nudge. The current renderer runs at native backbuffer
+ * resolution, so one nudge unit maps to one screen pixel.
+ */
+export const PIXEL_SCALE = 1;
+
 /** Base seconds per hardness unit for breaking. */
 export const BREAK_TIME_BASE = 0.5;
 
@@ -391,10 +397,44 @@ export const BLOCK_STEP_KICK_PARTICLE_SPRINT_EXTRA = 1;
 /** Shorter than break debris so kicked dust reads lighter. */
 export const BLOCK_STEP_KICK_LIFETIME_SEC = 0.36;
 
+/**
+ * Bushy tree rendering: per-leaf-cell "decoration" mesh layered above the base tile mesh
+ * (see {@link src/renderer/chunk/LeafDecorationBatch}). All jitter is hashed from world
+ * coordinates so the look is stable across chunk rebuilds and camera motion.
+ */
+/**
+ * Max absolute world-px offset for the stacked overlay quad (hashed in `[-max, +max]`).
+ * Integer pixel only: values are `Math.round`-ed in the batch so the overlay always snaps
+ * to a whole-pixel position (no half-texel smear).
+ */
+export const LEAF_DECO_OVERLAY_OFFSET_MAX_PX = 2;
+/**
+ * Native size palette (world px) for interior-corner gap-fill clumps. Each fill picks
+ * one size from this list; the rendered quad size is ALWAYS equal to the UV sub-window
+ * size in atlas texels, giving strict 1:1 pixel mapping (no mixels). Sizes are
+ * intentionally all even and ≤ BLOCK_SIZE so UV windows fit inside the 16² frame.
+ */
+export const LEAF_DECO_CLUMP_SIZES_PX: readonly number[] = [6, 8, 10, 12];
+/**
+ * Per-corner chance an interior gap-fill clump is emitted when the diagonal neighbour is
+ * also a leaf. Fills the transparent-pixel X-gap formed where four leaf tiles meet.
+ */
+export const LEAF_DECO_CORNER_FILL_CHANCE = 1.0;
+/**
+ * Exterior-canopy corner shave (world px, = atlas texels at 1:1). At each exterior
+ * corner of a leaf cell (diagonal + both adjacent cardinals all air) the base 16×16
+ * tile is emitted as 3 horizontal strips whose top / bottom strips omit a square of
+ * this side length at each shaved corner. The outward corner bump quads emitted by
+ * {@link src/renderer/chunk/LeafDecorationBatch} sit *on top* of this notch, turning
+ * the crisp 90° silhouette corner into a soft rounded clump instead. Keep this
+ * strictly below `BLOCK_SIZE / 2` (8) so all three strips stay non-degenerate.
+ */
+export const LEAF_DECO_CORNER_SHAVE_PX = 5;
+
 /** Ambient canopy leaf fall: max concurrent sprites (Minecraft-like density). */
-export const LEAF_FALL_MAX_PARTICLES = 96;
+export const LEAF_FALL_MAX_PARTICLES = 160;
 /** Spawn attempts per fixed tick (each samples a random loaded chunk / cell). */
-export const LEAF_FALL_SPAWN_TRIES_PER_TICK = 40;
+export const LEAF_FALL_SPAWN_TRIES_PER_TICK = 72;
 /** When a candidate leaf cell qualifies, probability to actually spawn one particle. */
 export const LEAF_FALL_SPAWN_CHANCE = 1;
 /**
@@ -430,6 +470,85 @@ export const LEAF_FALL_FRAME_COUNT = 12;
 export const LEAF_FALL_MINING_PARTICLES_PER_PROGRESS = 11;
 /** Random world-cell samples per spawned mining leaf (canopy may be offset from the trunk cell). */
 export const LEAF_FALL_MINING_SAMPLE_TRIES = 7;
+
+/** Ambient flower butterflies: max concurrent sprites (client-only VFX). */
+export const BUTTERFLY_MAX_PARTICLES = 40;
+/** Hard cap on butterflies inside the tight (non-margin) camera rect at once. */
+export const BUTTERFLY_MAX_ONSCREEN = 10;
+/** Outer spawn attempts per fixed tick (each tries several cells in one chunk). */
+export const BUTTERFLY_SPAWN_TRIES_PER_TICK = 10;
+/** Random foreground cells sampled per attempt (within one chunk) to find a flower. */
+export const BUTTERFLY_FLOWER_LOCATE_SAMPLES = 28;
+/** Probability to spawn once a flower cell is found for that attempt. */
+export const BUTTERFLY_SPAWN_CHANCE = 0.65;
+/** Chebyshev chunk distance from player for which chunks are considered loaded candidates. */
+export const BUTTERFLY_SPAWN_CHUNK_RADIUS = 8;
+/**
+ * Prefer sampling chunks within this Chebyshev distance of the player (surface/flora density);
+ * falls back to the full candidate set when none match.
+ */
+export const BUTTERFLY_SPAWN_POOL_CHEB = 6;
+/** Seconds per wing half-cycle (open/closed). */
+export const BUTTERFLY_FLAP_SEC = 0.11;
+/** Despawn after this many seconds fully outside the inflated view rect. */
+export const BUTTERFLY_OFFSCREEN_DESPAWN_SEC = 4;
+/** Quantized hue offsets in [0, 1). */
+export const BUTTERFLY_HUE_BUCKETS = 28;
+/** Max baked (variant × hue) texture pairs; evicts oldest when exceeded. */
+export const BUTTERFLY_HUE_CACHE_MAX = 72;
+/** Screen-space margin (px) expanded to world for visibility / despawn hysteresis. */
+export const BUTTERFLY_VIEW_MARGIN_SCREEN_PX = 100;
+/** 1 = one sprite texel maps to one world pixel (same space as tiles). */
+export const BUTTERFLY_SCALE = 1;
+/** Velocity damping per second (higher = snappier stops). */
+export const BUTTERFLY_VEL_DAMP_PER_SEC = 1.05;
+/** Random acceleration impulse scale (world px/s²-ish). */
+export const BUTTERFLY_WANDER_ACCEL = 55;
+/** Max speed magnitude (world px/s). */
+export const BUTTERFLY_MAX_SPEED = 38;
+/** Sine wander strength (world px/s²). */
+export const BUTTERFLY_WANDER_SINE_STRENGTH = 32;
+/**
+ * Max rise above spawn in block heights (world feet-up / Pixi −Y). Keeps flight near the ground / flower band.
+ */
+export const BUTTERFLY_MAX_RISE_BLOCKS = 2.4;
+
+/** Ambient fireflies (night-only): max concurrent particles. */
+export const FIREFLY_MAX_PARTICLES = 10;
+/** Hard cap inside tight camera rect to avoid visual overload. */
+export const FIREFLY_MAX_ONSCREEN = 5;
+/** Spawn attempts per fixed tick (each samples candidate ground cells). */
+export const FIREFLY_SPAWN_TRIES_PER_TICK = 10;
+/** Random cells sampled per spawn attempt to locate valid near-water ground. */
+export const FIREFLY_GROUND_LOCATE_SAMPLES = 20;
+/** Probability to spawn once a valid candidate ground cell is found. */
+export const FIREFLY_SPAWN_CHANCE = 0.55;
+/** Chebyshev chunk distance from player for loaded candidate chunks. */
+export const FIREFLY_SPAWN_CHUNK_RADIUS = 8;
+/** Prefer chunks near the player for less pop-in and better density. */
+export const FIREFLY_SPAWN_POOL_CHEB = 6;
+/** Screen-space margin expanded to world for visibility/despawn hysteresis. */
+export const FIREFLY_VIEW_MARGIN_SCREEN_PX = 120;
+/** Despawn after this many seconds fully outside the loose view rect. */
+export const FIREFLY_OFFSCREEN_DESPAWN_SEC = 6;
+/** Max rise above spawn anchor (block heights), keeps fireflies low. */
+export const FIREFLY_MAX_RISE_BLOCKS = 1.5;
+/** Max speed magnitude (world px/s). */
+export const FIREFLY_MAX_SPEED = 28;
+/** Random acceleration impulse scale (world px/s²-ish). */
+export const FIREFLY_WANDER_ACCEL = 48;
+/** Sine wander acceleration scale (world px/s²). */
+export const FIREFLY_WANDER_SINE_STRENGTH = 24;
+/** Per-second velocity damping for smooth drift. */
+export const FIREFLY_VEL_DAMP_PER_SEC = 1.2;
+/** Candidate ground must have water this close (Chebyshev blocks). */
+export const FIREFLY_NEAR_WATER_RADIUS_BLOCKS = 5;
+/** Avoid spawning directly on immediate shoreline edge. */
+export const FIREFLY_MIN_WATER_DISTANCE_BLOCKS = 2;
+/** Max dynamic firefly lights submitted to composite each frame. */
+export const FIREFLY_LIGHT_MAX_EMITTERS = 5;
+/** Relative strength for firefly lights in the placed-light path. */
+export const FIREFLY_LIGHT_STRENGTH = 0.42;
 
 /** Blocks per chunk edge (square chunks). */
 export const CHUNK_SIZE = 32;
@@ -498,9 +617,6 @@ export const LIGHT_RECOMPUTE_BUDGET_MS = 4;
  * {@link World.setBlock} enqueue logic.
  */
 export const LIGHT_PROPAGATION_NEIGHBOUR_RADIUS = 1;
-
-/** Bloom mask RT is dirtied when the camera centre moves by more than this many tiles (block units). */
-export const BLOOM_CAMERA_MOVE_THRESHOLD_TILES = 1;
 
 /** Max chunk mesh updates (existing meshes) per frame; excess `renderDirty` work rolls to the next frame. */
 export const CHUNK_SYNC_MAX_PER_FRAME = 8;
@@ -575,6 +691,13 @@ export const ITEM_PULL_SPEED_PX = 720;
 export const ITEM_COLLECT_SNAP_PX = 10;
 
 /**
+ * After the local player throws/drops an item (Q, cursor toss), this many seconds pass
+ * before it can be magnet-pulled or picked up — avoids instantly re-absorbing the entity
+ * (Minecraft-style pickup delay).
+ */
+export const ITEM_PLAYER_THROW_PICKUP_DELAY_SEC = 0.5;
+
+/**
  * Minimum time between world pickup pops while a stack is merging in over many fixed ticks
  * (avoids ~60 Hz SFX when the player stays inside {@link ITEM_COLLECT_SNAP_PX}).
  */
@@ -589,11 +712,34 @@ export const ITEM_MAX_FALL_SPEED = 15;
 /** Half-width of a dropped item hitbox in world pixels (matches 0.5× block sprite). */
 export const ITEM_HALF_EXTENT_PX = BLOCK_SIZE * 0.25;
 
-/** Initial speed (px/s) when pressing Q to throw the selected hotbar stack. */
-export const ITEM_THROW_SPEED_PX = 380;
+/**
+ * Aim magnitude for Q / inventory cursor toss (px/s), before player-velocity blend and
+ * {@link ITEM_THROW_MAX_INITIAL_SPEED_PX}. Tuned with item gravity so typical arcs stay
+ * within roughly {@link ITEM_THROW_MAX_RANGE_BLOCKS}.
+ */
+export const ITEM_THROW_SPEED_PX = 4.6 * BLOCK_SIZE;
+
+/** Soft target for how far a toss should travel (blocks); used to document the speed cap. */
+export const ITEM_THROW_MAX_RANGE_BLOCKS = 2.5;
+
+/**
+ * Hard cap on initial √(vx²+vy²) (px/s) after aim + horizontal carry — prevents sprint
+ * or steep aim from exceeding ~{@link ITEM_THROW_MAX_RANGE_BLOCKS} for normal ground arcs.
+ */
+export const ITEM_THROW_MAX_INITIAL_SPEED_PX = 6.1 * BLOCK_SIZE;
 
 /** Spawn offset from player center along aim (px) so the entity clears the body. */
 export const ITEM_THROW_SPAWN_OFFSET_PX = 14;
+
+/**
+ * Thrown items blend cursor aim with facing: horizontal direction must align with
+ * facing (dot of unit dirX and ±1) by at least this much so Q/cursor tosses push
+ * away from the body instead of into the back.
+ */
+export const ITEM_THROW_MIN_OUTWARD_VS_FACE = 0.5;
+
+/** Horizontal throw adds this fraction of the player's foot velocity (Minecraft-like carry). */
+export const ITEM_THROW_INHERIT_PLAYER_VEL_X = 0.12;
 
 /** Seconds of right-hold to reach full bow draw (charge = 1). */
 export const BOW_MAX_DRAW_SEC = 0.78;
@@ -709,6 +855,25 @@ export const PLAYER_FALL_DAMAGE_REFERENCE_MAX_HEALTH = 20;
 export const PLAYER_HEART_COUNT = 5;
 
 /**
+ * Temporary HP (e.g. raw food): HUD pink hearts fade in opacity over the last
+ * this many seconds before the buff ends.
+ */
+export const PLAYER_TEMP_HEART_FADE_START_SEC = 2.6;
+
+/**
+ * One full pulse (bright→dim) cycle: slow when a lot of time left, short when almost expired.
+ * Actual period is lerped from {@link PLAYER_TEMP_PULSE_MAX_SEC} down to
+ * {@link PLAYER_TEMP_PULSE_MIN_SEC} using remaining temp duration.
+ */
+export const PLAYER_TEMP_PULSE_MAX_SEC = 2.0;
+export const PLAYER_TEMP_PULSE_MIN_SEC = 0.4;
+
+/**
+ * `remain` above this many seconds is treated as “full slow pulse” (avoids unbounded slow wobble on long buffs).
+ */
+export const PLAYER_TEMP_PULSE_REMAIN_REF_SEC = 40;
+
+/**
  * Beta-style armor: max mitigation per piece before cap (four pieces × 0.2 = 0.8, like
  * four armor points × 4% each toward the classic `/25` cap).
   */
@@ -773,8 +938,9 @@ export const LAKE_BIOME_SCALE_BLOCKS = 640;
 /**
  * Lake mask (macro noise 0..1): smoothstep edges. Higher band ⇒ fewer, more separated lakes.
  */
-export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.88;
-export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.97;
+/** Narrower lake basins vs sea (fewer large “ocean” columns). */
+export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.91;
+export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.98;
 
 /**
  * Second noise channel (0..1): multiplied with macro mask for irregular shorelines and extra rarity.
@@ -785,7 +951,7 @@ export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.86;
 /**
  * Applied to (macro × micro) so mid-strength shores shrink — fewer large lake footprints.
  */
-export const LAKE_BIOME_INFLUENCE_POW = 1.28;
+export const LAKE_BIOME_INFLUENCE_POW = 1.35;
 
 /** Approximate lake bed depth below {@link WATER_SEA_LEVEL_WY} at full lake influence (before jitter). */
 export const LAKE_BIOME_DEPTH_BLOCKS = 7;
@@ -914,6 +1080,16 @@ export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_BRIGHTEN = 1.15;
  * colors do not crush the distant strip.
  */
 export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_TINT_WHITEN = 0.55;
+
+/**
+ * Distance-fog strength for the parallax terrain strip: how strongly the multiplicative
+ * tint is pulled toward the sky's lower-gradient colour. 0 = no fog (raw texture tint),
+ * 1 = tint is fully the sky colour (terrain reads as a silhouette in the sky's hue).
+ *
+ * Matches the "atmospheric perspective" in the reference screenshot where distant trees
+ * desaturate toward the sunset sky.
+ */
+export const BACKGROUND_TILE_STRIP_SKY_FOG_BLEND = 0.55;
 
 /**
  * Slide parallax chunk window when the camera is within this many **blocks** of strip edge.

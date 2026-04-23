@@ -209,11 +209,6 @@ export class UIShell {
     el.setAttribute("aria-hidden", open ? "false" : "true");
   }
 
-  /** Tab background wall edit mode indicator. */
-  setBackgroundEditMode(active: boolean): void {
-    this.hud.setBackgroundEditMode(active);
-  }
-
   destroy(): void {
     this.unsubSave?.();
     this.unsubSave = null;

@@ -165,6 +165,8 @@ export type GameEvent =
   | { type: "craft:result"; ok: false; reason: string }
   | { type: "furnace:fuel-slot-click"; button: number }
   | { type: "furnace:output-slot-click"; slotIndex: number; button: number }
+  /** Remove queued smelts for this smelting JSON id and refund ingredients (host/solo). */
+  | { type: "furnace:cancel-queue-request"; smeltingRecipeId: string }
   | { type: "chest:open-request"; wx: number; wy: number }
   | { type: "crafting-table:open-request"; wx: number; wy: number }
   | { type: "stonecutter:open-request"; wx: number; wy: number }
@@ -256,3 +258,11 @@ export type GameEvent =
       worldAnchorY: number;
       damage: number;
     };
+
+/** Dynamic world-space emissive source used by the composite placed-light path. */
+export type DynamicLightEmitter = {
+  worldBlockX: number;
+  worldBlockY: number;
+  /** Relative intensity scale (1 = regular placed torch contribution). */
+  strength: number;
+};

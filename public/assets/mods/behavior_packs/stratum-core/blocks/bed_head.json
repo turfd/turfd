@@ -10,6 +10,7 @@
         "all": "bed"
       },
       "stratum:solid": true,
+      "stratum:casts_fg_contact_shadow": false,
       "stratum:collision": false,
       "stratum:transparent": false,
       "stratum:water": false,

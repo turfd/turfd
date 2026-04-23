@@ -76,6 +76,7 @@ function smoothstep01(x: number): number {
 
 /** Match {@link AtlasLoader} sampling threshold. */
 const RECOLOR_ALPHA_MIN = 10;
+const LEAF_FALL_COLLISION_STEP_PX = BLOCK_SIZE * 0.35;
 
 function rgbToHsl01(r: number, g: number, b: number): { h: number; s: number; l: number } {
   const max = Math.max(r, g, b);
@@ -357,8 +358,14 @@ export class LeafFallParticles {
       p.vy += g * dtSec;
       p.vy *= dragPow;
       p.vx *= dragPow;
-      p.x += p.vx * dtSec;
-      p.y += p.vy * dtSec;
+      const nextX = p.x + p.vx * dtSec;
+      const nextY = p.y + p.vy * dtSec;
+      if (this.segmentHitsNonLeafSolid(p.x, p.y, nextX, nextY)) {
+        this.recycleParticle(i);
+        continue;
+      }
+      p.x = nextX;
+      p.y = nextY;
       p.swayT += dtSec;
 
       const sway =
@@ -581,6 +588,46 @@ export class LeafFallParticles {
       }
     }
     return out;
+  }
+
+  /**
+   * Swept point test through world space to prevent fast particles from tunneling through
+   * colliders; leaf blocks intentionally remain pass-through.
+   */
+  private segmentHitsNonLeafSolid(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+  ): boolean {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const steps = Math.max(
+      1,
+      Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / LEAF_FALL_COLLISION_STEP_PX),
+    );
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const x = x0 + dx * t;
+      const y = y0 + dy * t;
+      if (this.isPointInsideNonLeafSolid(x, y)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private isPointInsideNonLeafSolid(x: number, pixiY: number): boolean {
+    const bx = Math.floor(x / BLOCK_SIZE);
+    const by = Math.floor(-pixiY / BLOCK_SIZE);
+    if (by < WORLD_Y_MIN || by > WORLD_Y_MAX) {
+      return false;
+    }
+    const b = this.world.getBlock(bx, by);
+    if (b.id === this.airBlockId || this.leafIds.has(b.id)) {
+      return false;
+    }
+    return b.collides;
   }
 
   /**

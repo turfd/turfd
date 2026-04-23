@@ -854,19 +854,19 @@ export class BlockInteractions {
   }
 
   private growSpruceTree(wx: number, wy: number): void {
-    const trunkHeight = 7;
-    const canopyStartDy = 2;
-    const canopyLayers: readonly number[] = [0, 1, 1, 2, 2, 3, 3];
-
-    // Sapling sits at surfaceY+1; worldgen uses surfaceY + canopyStartDy for canopy base.
+    // Matches the SMALL spruc variant in {@link WorldGenerator}: same cone,
+    // full trunk from sapling up through the tip of the tree (leaves first,
+    // then trunk overwrites the centre — same as worldgen).
+    const canopyStartDy = 3;
+    const canopyLayers: readonly number[] = [0, 1, 1, 2, 2, 3, 3, 4, 4];
     const surfaceY = wy - 1;
     const canopyBottom = surfaceY + canopyStartDy;
-
-    this.placeTrunkFromSapling(wx, wy, trunkHeight, this.spruceLogId);
+    const trunkBlockCount = canopyStartDy + canopyLayers.length - 1;
 
     forEachSpruceBushCell(wx, canopyBottom, canopyLayers, (cx, cy) => {
       this.placeTreeBlock(cx, cy, this.spruceLeavesId);
     });
+    this.placeTrunkFromSapling(wx, wy, trunkBlockCount, this.spruceLogId);
   }
 
   /** Bottom log always replaces the sapling cell; upper segments respect replaceable/air. */

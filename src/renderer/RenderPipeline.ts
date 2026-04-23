@@ -3,6 +3,7 @@ import {
   Assets,
   Container,
   Culler,
+  Rectangle,
   RenderTexture,
   TilingSprite,
   type Texture,
@@ -10,8 +11,6 @@ import {
 import type { EventBus } from "../core/EventBus";
 import {
   BACKGROUND_PARALLAX_X,
-  BLOCK_SIZE,
-  BLOOM_CAMERA_MOVE_THRESHOLD_TILES,
   DAY_LENGTH_MS,
   MAX_RENDER_DEVICE_PIXEL_RATIO,
 } from "../core/constants";
@@ -24,19 +23,17 @@ import type { AtlasLoader } from "./AtlasLoader";
 import { BackgroundLayerRenderer } from "./BackgroundLayerRenderer";
 import { Camera } from "./Camera";
 import { LightingComposer } from "./lighting/LightingComposer";
-import {
-  ScreenSpaceNormalPass,
-  type ScreenSpaceNormalParams,
-} from "./lighting/ScreenSpaceNormalPass";
 import { TonemapFilter } from "./lighting/TonemapFilter";
 import { getVideoPrefs } from "../ui/settings/videoPrefs";
 import { WeatherRainParticles } from "./WeatherRainParticles";
 import { WeatherSnowParticles } from "./WeatherSnowParticles";
+import { SpriteCloudLayer } from "./sky/SpriteCloudLayer";
 
 /**
  * Named world layers (instances are created by {@link RenderPipeline}).
  * Z-order is back → front: sky → … → particles.
- * {@link layerWaterOverEntities} draws water after mobs so submerged areas occlude sprites.
+ * {@link layerWaterOverEntities} holds water (lower z) and the local player (higher z) so the body
+ * draws in front of fluid while mobs stay in {@link layerEntities} below; torch bloom uses this order.
  */
 export interface RenderPipelineLayers {
   readonly layerSky: Container;
@@ -57,21 +54,8 @@ function hexToCss(hex: number): string {
   return `#${((hex & 0xffffff) >>> 0).toString(16).padStart(6, "0")}`;
 }
 
-function lerpColor(a: number, b: number, t: number): number {
-  const ar = (a >> 16) & 0xff;
-  const ag = (a >> 8) & 0xff;
-  const ab = a & 0xff;
-  const br = (b >> 16) & 0xff;
-  const bg = (b >> 8) & 0xff;
-  const bb = b & 0xff;
-  const r = Math.round(ar + (br - ar) * t);
-  const g = Math.round(ag + (bg - ag) * t);
-  const bl = Math.round(ab + (bb - ab) * t);
-  return (r << 16) | (g << 8) | bl;
-}
-
-const SKY_WHITE = 0xffffff;
 const SKY_PAINT_CLOCK_BUCKET_MS = 100;
+const GAMEPLAY_RT_OVERSCAN_PAD_PX = 1;
 
 function clamp01(t: number): number {
   return Math.min(1, Math.max(0, t));
@@ -103,7 +87,7 @@ type SkyStarPixel = {
   x: number;
   y: number;
   /** Pixel size in screen-space; larger tiers are rarer/brighter. */
-  s: 2 | 3;
+  s: 4 | 6;
   /** Base opacity before time-of-day curve */
   a: number;
   rgb: [number, number, number];
@@ -120,6 +104,7 @@ export class RenderPipeline implements RenderPipelineLayers {
   private readonly mount: HTMLElement;
   private app: Application | null = null;
   private readonly camera: Camera;
+  private readonly subPixelNudge: Container;
   private _lastSkyLighting: WorldLightingParams | null = null;
   /** Last `worldTimeMs` passed to {@link updateSky}; drives sky CSS invalidation. */
   private _skyClockMs = 0;
@@ -132,6 +117,7 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _lastCullCameraY = Number.NaN;
   private _lastCullScreenW = -1;
   private _lastCullScreenH = -1;
+  private readonly _cullScreen = new Rectangle();
   /** Sky flash alpha from {@link updateSky} (0–1). */
   private _skyLightningAlpha = 0;
   /** Last world ms applied to parallax background tint. */
@@ -172,25 +158,19 @@ export class RenderPipeline implements RenderPipelineLayers {
   readonly layerParticles: Container;
 
   private _lightingComposer: LightingComposer | null = null;
-  private _screenSpaceNormalPass: ScreenSpaceNormalPass | null = null;
   private _albedoRT: RenderTexture | null = null;
-  /** Terrain + water + foreground tiles only (no entities/lightmap/particles/weather) for screen-space normals. */
   /** Screen-space alpha mask of the local player; occludes torch bloom in {@link CompositePass}. */
   private _bloomMaskRT: RenderTexture | null = null;
   private _bloomMaskPlayerRoot: Container | null = null;
   private readonly _emptyMaskClearRoot = new Container();
   private _bgToneFilter: TonemapFilter | null = null;
 
-  /** When false, {@link renderBloomMask} skips GPU work until something marks the mask stale. */
-  private _bloomDirty = true;
-  private _lastBloomCameraTileX = Number.NaN;
-  private _lastBloomCameraTileY = Number.NaN;
-  private _lastBloomSkyClockBucket = -1;
-  private _lastBloomLightningForBloom = -999;
 
   private _backgroundLayer: BackgroundLayerRenderer | null = null;
   private _backgroundWorld: World | null = null;
   private readonly _backgroundBusUnsubs: (() => void)[] = [];
+  private _spriteCloud: SpriteCloudLayer | null = null;
+  private readonly _overscanPadPx = GAMEPLAY_RT_OVERSCAN_PAD_PX;
 
   private readonly onWindowResize = (): void => {
     this.syncSizeFromRenderer();
@@ -204,6 +184,8 @@ export class RenderPipeline implements RenderPipelineLayers {
   constructor(options: RenderPipelineOptions) {
     this.mount = options.mount;
     this.camera = new Camera();
+    this.subPixelNudge = new Container({ label: "subPixelNudge" });
+    this.subPixelNudge.addChild(this.camera.worldRoot);
 
     this.layerSky = new Container({ label: "layerSky" });
     this.layerTilesBack = new Container({ label: "layerTilesBack" });
@@ -220,6 +202,9 @@ export class RenderPipeline implements RenderPipelineLayers {
 
     // So local player zIndex can sort above mobs (e.g. zIndex -2) and match bloom mask vs albedo.
     this.layerEntities.sortableChildren = true;
+    // Local player is mounted here; sort above water quads (z 0) so they draw in front and torch
+    // bloom + bloom mask line up with the visible sprite, not the submerged entity layer.
+    this.layerWaterOverEntities.sortableChildren = true;
 
     const world = this.camera.worldRoot;
     world.addChild(this.layerTilesBack);
@@ -258,7 +243,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     const bgRenderer = new BackgroundLayerRenderer(this.app, this.camera);
     bgRenderer.setWorldAndAtlas(world, blockAtlas);
     this._backgroundLayer = bgRenderer;
-    const worldRootIndex = this.app.stage.getChildIndex(this.camera.worldRoot);
+    const worldRootIndex = this.app.stage.getChildIndex(this.subPixelNudge);
     this.app.stage.addChildAt(bgRenderer.displayRoot, worldRootIndex);
 
     const bgTone = new TonemapFilter();
@@ -278,34 +263,22 @@ export class RenderPipeline implements RenderPipelineLayers {
       bus.on("window:resized", regenBackground),
     );
 
-    this._backgroundBusUnsubs.push(
-      bus.on("game:block-changed", (e) => {
-        if (this.blockCellOverlapsCameraView(e.wx, e.wy)) {
-          this._bloomDirty = true;
-        }
-      }),
-    );
-
     this._lightingComposer = new LightingComposer(world, bus, this.app.stage);
     if (this._bloomMaskRT === null) {
-      throw new Error("RenderPipeline.init() must create bloom mask RT before initLighting()");
+      throw new Error(
+        "RenderPipeline.init() must create bloom mask RT before initLighting()",
+      );
     }
-    this._screenSpaceNormalPass = new ScreenSpaceNormalPass(this.app.renderer);
-    this._screenSpaceNormalPass.resize(
-      Math.max(1, Math.round(this.app.renderer.width)),
-      Math.max(1, Math.round(this.app.renderer.height)),
-      this.app.renderer.resolution,
-    );
     this._lightingComposer.initComposite(
       this._albedoRT,
       this.camera,
       this._bloomMaskRT.source,
-      this._screenSpaceNormalPass.output,
     );
     this._lightingComposer.resize(
       Math.max(1, Math.round(this.app.renderer.width)),
       Math.max(1, Math.round(this.app.renderer.height)),
     );
+    this.updateCompositeViewportMapping();
   }
 
   /**
@@ -367,9 +340,17 @@ export class RenderPipeline implements RenderPipelineLayers {
     this.mount.appendChild(canvas);
 
     const rtRes = application.renderer.resolution;
+    const initialRtWidth = Math.max(
+      1,
+      Math.round(application.renderer.width) + this._overscanPadPx * 2,
+    );
+    const initialRtHeight = Math.max(
+      1,
+      Math.round(application.renderer.height) + this._overscanPadPx * 2,
+    );
     this._albedoRT = RenderTexture.create({
-      width: application.renderer.width,
-      height: application.renderer.height,
+      width: initialRtWidth,
+      height: initialRtHeight,
       resolution: rtRes,
       dynamic: true,
     });
@@ -377,14 +358,26 @@ export class RenderPipeline implements RenderPipelineLayers {
     // framebuffer edges (looks like a 1px normal shift when a block edge sits on-screen).
     this._albedoRT.source.scaleMode = "nearest";
     this._bloomMaskRT = RenderTexture.create({
-      width: application.renderer.width,
-      height: application.renderer.height,
+      width: initialRtWidth,
+      height: initialRtHeight,
       resolution: rtRes,
       dynamic: true,
     });
     this._bloomMaskRT.source.scaleMode = "nearest";
 
-    application.stage.addChild(this.camera.worldRoot);
+    application.stage.addChild(this.subPixelNudge);
+
+    const cloud = new SpriteCloudLayer();
+    void cloud.init().then(() => {
+      if (this.app === null) {
+        cloud.destroy();
+        return;
+      }
+      this._spriteCloud = cloud;
+      this._resizeCloudLayer();
+      cloud.applySunnyDefaultPalette();
+      this.app.stage.addChildAt(cloud.displayRoot, 0);
+    });
 
     window.addEventListener("resize", this.onWindowResize);
     document.addEventListener("fullscreenchange", this.onFullscreenChange);
@@ -400,6 +393,45 @@ export class RenderPipeline implements RenderPipelineLayers {
    */
   prepareFrame(): void {
     this.syncSizeFromRenderer();
+    this.syncLocalPlayerBloomUvRect();
+  }
+
+  /**
+   * Feeds a UV AABB into the composite pass so torch bloom (small HDR kernel) is cut inside the
+   * local player rectangle even when the bloom-mask RT misses semi-transparent pixels.
+   */
+  private syncLocalPlayerBloomUvRect(): void {
+    const lc = this._lightingComposer;
+    const rt = this._albedoRT;
+    const app = this.app;
+    const root = this._bloomMaskPlayerRoot;
+    if (lc === null || rt === null || app === null) {
+      return;
+    }
+    if (root === null || root.parent === null || !root.visible) {
+      lc.setLocalPlayerBloomUvBounds(false, 0, 0, 0, 0);
+      return;
+    }
+    const pad = this._overscanPadPx;
+    const rw = Math.max(1, Math.round(rt.width));
+    const rh = Math.max(1, Math.round(rt.height));
+    const vw = this.lastScreenW;
+    const vh = this.lastScreenH;
+    const b = root.getBounds(true);
+    const expand = 10;
+    const x0 = Math.max(0, b.x - expand);
+    const y0 = Math.max(0, b.y - expand);
+    const x1 = Math.min(vw, b.x + b.width + expand);
+    const y1 = Math.min(vh, b.y + b.height + expand);
+    if (x1 <= x0 + 0.5 || y1 <= y0 + 0.5) {
+      lc.setLocalPlayerBloomUvBounds(false, 0, 0, 0, 0);
+      return;
+    }
+    const minU = (x0 + pad) / rw;
+    const minV = (y0 + pad) / rh;
+    const maxU = (x1 + pad) / rw;
+    const maxV = (y1 + pad) / rh;
+    lc.setLocalPlayerBloomUvBounds(true, minU, minV, maxU, maxV);
   }
 
   /**
@@ -414,20 +446,11 @@ export class RenderPipeline implements RenderPipelineLayers {
     this._lastSkyLighting = lighting;
     this._skyClockMs = worldTimeMs;
     this._skyLightningAlpha = extras?.lightningAlpha ?? 0;
-    const clockBucket = Math.floor(worldTimeMs / SKY_PAINT_CLOCK_BUCKET_MS);
-    const li = extras?.lightningAlpha ?? 0;
-    if (
-      clockBucket !== this._lastBloomSkyClockBucket ||
-      li !== this._lastBloomLightningForBloom
-    ) {
-      this._bloomDirty = true;
-      this._lastBloomSkyClockBucket = clockBucket;
-      this._lastBloomLightningForBloom = li;
-    }
     if (worldTimeMs !== this._lastBackgroundLightingMs) {
       this._backgroundLayer?.applyWorldLighting(lighting);
       this._lastBackgroundLightingMs = worldTimeMs;
     }
+    this._spriteCloud?.applyWorldLighting(lighting);
   }
 
   /**
@@ -585,14 +608,14 @@ export class RenderPipeline implements RenderPipelineLayers {
       const big = rand() < 0.085;
       let x = Math.floor(rand() * cw);
       let y = Math.floor(rand() * upperH);
-      let s: 2 | 3 = 2;
-      if (big && x <= cw - 3 && y <= upperH - 3) {
-        s = 3;
+      let s: 4 | 6 = 4;
+      if (big && x <= cw - 6 && y <= upperH - 6) {
+        s = 6;
       } else {
-        x = Math.min(x, cw - 1);
-        y = Math.min(y, upperH - 1);
+        x = Math.min(x, Math.max(0, cw - 4));
+        y = Math.min(y, Math.max(0, upperH - 4));
       }
-      const a = (s === 3 ? 0.16 : 0.07) + rand() * (s === 3 ? 0.32 : 0.26);
+      const a = (s === 6 ? 0.16 : 0.07) + rand() * (s === 6 ? 0.32 : 0.26);
       const cool = rand();
       const r = Math.round(198 + cool * 58);
       const g = Math.round(208 + cool * 48);
@@ -649,30 +672,14 @@ export class RenderPipeline implements RenderPipelineLayers {
 
     const { top, horizon, bottom } = lighting.sky;
 
-    const midHigh = lerpColor(top, horizon, 0.35);
-    const midLow = lerpColor(horizon, bottom, 0.45);
-
     /**
-     * Day-only horizon brightening (Minecraft-style). Must stay off while sun/ambient are still
-     * low or it lerps dawn/dusk palette stops toward white and reads as muddy, desaturated twilight.
-     * (Sky palette keys in WorldTime stay unchanged; this only gates the extra paint pass.)
+     * Clean two-stop vertical gradient from palette `top` → `bottom`, with `horizon` anchored at
+     * the midpoint so weather/rain tints still influence the middle band. No horizon-brightening
+     * "haze toward white" pass — the per-phase palette already carries all the intended colour.
      */
-    const hazeSun = smoothstep(0.34, 0.72, lighting.sunIntensity);
-    const hazeAmb = smoothstep(0.44, 0.82, lighting.ambient);
-    const haze = hazeSun * hazeAmb;
-    const towardWhite = (c: number, amount: number): number =>
-      lerpColor(c, SKY_WHITE, amount * haze);
-
     const grd = ctx.createLinearGradient(0, 0, 0, ch);
     grd.addColorStop(0, hexToCss(top));
-    grd.addColorStop(0.14, hexToCss(lerpColor(top, midHigh, 0.55)));
-    grd.addColorStop(0.30, hexToCss(midHigh));
-    grd.addColorStop(0.44, hexToCss(towardWhite(midHigh, 0.14)));
-    grd.addColorStop(0.52, hexToCss(towardWhite(horizon, 0.36)));
-    grd.addColorStop(0.58, hexToCss(towardWhite(horizon, 0.58)));
-    grd.addColorStop(0.65, hexToCss(towardWhite(horizon, 0.4)));
-    grd.addColorStop(0.75, hexToCss(towardWhite(midLow, 0.22)));
-    grd.addColorStop(0.88, hexToCss(midLow));
+    grd.addColorStop(0.5, hexToCss(horizon));
     grd.addColorStop(1, hexToCss(bottom));
     ctx.fillStyle = grd;
     ctx.fillRect(0, 0, cw, ch);
@@ -681,8 +688,14 @@ export class RenderPipeline implements RenderPipelineLayers {
     this.drawSkyStars(ctx, lighting);
 
     const { sunDir, moonDir, sunIntensity, moonIntensity } = lighting;
+    /** Horizontal half-axis of the celestial arc (screen space). */
     const spread = cw * 0.38;
-    const baseY = ch * 0.16;
+    /**
+     * Vertical orbit: center near mid-gradient and a large Y radius so the disc follows a tall
+     * ellipse (sunrise → zenith → set → nadir under the “horizon”) instead of hugging the top band.
+     */
+    const celestialOrbitCy = ch * 0.5;
+    const celestialOrbitRy = ch * 0.5;
 
     let sunAlpha = Math.min(1, sunIntensity / 0.65);
     let moonAlpha = Math.min(1, moonIntensity / 0.22);
@@ -698,7 +711,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     const celestialDim = Math.max(20, sunTexW * 1.25) * 4;
 
     const sx = cw * 0.5 + sunDir[0] * spread;
-    const sy = baseY - sunDir[1] * ch * 0.2;
+    const sy = celestialOrbitCy - sunDir[1] * celestialOrbitRy;
     if (sunAlpha > 0.04) {
       if (sunImg !== null && sunImg.naturalWidth > 0) {
         ctx.save();
@@ -720,7 +733,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     }
 
     const mx = cw * 0.5 + moonDir[0] * spread;
-    const my = baseY - moonDir[1] * ch * 0.2;
+    const my = celestialOrbitCy - moonDir[1] * celestialOrbitRy;
     if (moonAlpha > 0.04) {
       const phase8 =
         Math.floor((this._skyClockMs / DAY_LENGTH_MS) * 8) % 8;
@@ -779,49 +792,22 @@ export class RenderPipeline implements RenderPipelineLayers {
     this._lastSkyCanvasPaintLightning = li;
   }
 
-  /** World block cell (wx, wy) overlaps the current camera view frustum in world pixel space. */
-  private blockCellOverlapsCameraView(wx: number, wy: number): boolean {
-    if (this.app === null) {
-      return false;
+  private shouldRenderBloomMaskSibling(
+    sibling: unknown,
+    localRoot: unknown,
+  ): boolean {
+    if (sibling === localRoot) {
+      return true;
     }
-    const w = this.app.renderer.screen.width;
-    const h = this.app.renderer.screen.height;
-    const tl = this.camera.screenToWorld(0, 0);
-    const br = this.camera.screenToWorld(w, h);
-    const minVx = Math.min(tl.x, br.x);
-    const maxVx = Math.max(tl.x, br.x);
-    const minVy = Math.min(tl.y, br.y);
-    const maxVy = Math.max(tl.y, br.y);
-    const x0 = wx * BLOCK_SIZE;
-    const x1 = (wx + 1) * BLOCK_SIZE;
-    const y0 = wy * BLOCK_SIZE;
-    const y1 = (wy + 1) * BLOCK_SIZE;
-    return !(x1 < minVx || x0 > maxVx || y1 < minVy || y0 > maxVy);
+    // Remote player roots share the local player's parent and are Containers.
+    // Water quads/meshes are not Containers and should not suppress bloom.
+    return sibling instanceof Container;
   }
 
-  private updateBloomDirtyFromCamera(): void {
-    const pos = this.camera.getPosition();
-    const tx = pos.x / BLOCK_SIZE;
-    const ty = pos.y / BLOCK_SIZE;
-    if (
-      !Number.isFinite(this._lastBloomCameraTileX) ||
-      !Number.isFinite(this._lastBloomCameraTileY) ||
-      Math.abs(tx - this._lastBloomCameraTileX) > BLOOM_CAMERA_MOVE_THRESHOLD_TILES ||
-      Math.abs(ty - this._lastBloomCameraTileY) > BLOOM_CAMERA_MOVE_THRESHOLD_TILES
-    ) {
-      this._bloomDirty = true;
-    }
-    this._lastBloomCameraTileX = tx;
-    this._lastBloomCameraTileY = ty;
-  }
-
-  /** Renders local player silhouette into {@link _bloomMaskRT} for composite bloom occlusion. */
+  /** Renders player silhouettes into {@link _bloomMaskRT} for composite bloom occlusion. */
   private renderBloomMask(): void {
     const vp = getVideoPrefs();
     if (!vp.bloom) {
-      return;
-    }
-    if (!this._bloomDirty) {
       return;
     }
     const app = this.app;
@@ -832,39 +818,48 @@ export class RenderPipeline implements RenderPipelineLayers {
     }
     const wr = this.camera.worldRoot;
     const le = this.layerEntities;
+    const lwo = this.layerWaterOverEntities;
 
-    if (playerRoot !== null && playerRoot.parent === le) {
-      const worldVis: { n: Container; v: boolean }[] = [];
-      for (const c of wr.children) {
-        worldVis.push({ n: c, v: c.visible });
-        c.visible = c === le;
+    if (playerRoot !== null) {
+      const p = playerRoot;
+      const par = p.parent;
+      if (par === le || par === lwo) {
+        const worldVis: { n: Container; v: boolean }[] = [];
+        for (const c of wr.children) {
+          worldVis.push({ n: c, v: c.visible });
+          c.visible = c === par;
+        }
+        const sibVis: Array<{ n: (typeof par.children)[number]; v: boolean }> = [];
+        for (const c of par.children) {
+          sibVis.push({ n: c, v: c.visible });
+          c.visible = this.shouldRenderBloomMaskSibling(c, p);
+        }
+        this.renderWorldWithOverscanOffset(maskRt);
+        for (const { n, v } of sibVis) {
+          n.visible = v;
+        }
+        for (const { n, v } of worldVis) {
+          n.visible = v;
+        }
+        return;
       }
-      const entVis: { n: Container; v: boolean }[] = [];
-      for (const c of le.children) {
-        entVis.push({ n: c, v: c.visible });
-        c.visible = c === playerRoot;
-      }
-      app.renderer.render({
-        container: wr,
-        target: maskRt,
-        clear: true,
-        clearColor: "rgba(0,0,0,0)",
-      });
-      for (const { n, v } of entVis) {
-        n.visible = v;
-      }
-      for (const { n, v } of worldVis) {
-        n.visible = v;
-      }
-    } else {
-      app.renderer.render({
-        container: this._emptyMaskClearRoot,
-        target: maskRt,
-        clear: true,
-        clearColor: "rgba(0,0,0,0)",
-      });
     }
-    this._bloomDirty = false;
+    app.renderer.render({
+      container: this._emptyMaskClearRoot,
+      target: maskRt,
+      clear: true,
+      clearColor: "rgba(0,0,0,0)",
+    });
+  }
+
+  private _resizeCloudLayer(): void {
+    if (this.app === null || this._spriteCloud === null) {
+      return;
+    }
+    const dpr = this.app.renderer.resolution;
+    const w = this.app.renderer.width / dpr;
+    const h = this.app.renderer.height / dpr;
+    this._spriteCloud.resize(w, h);
   }
 
   /**
@@ -876,6 +871,10 @@ export class RenderPipeline implements RenderPipelineLayers {
     }
 
     this.syncSizeFromRenderer();
+    // Keep the world root fully pixel-snapped during camera pans so packed-tile
+    // mesh edges cannot drift onto fractional screen pixels and reveal seams.
+    this.subPixelNudge.position.set(0, 0);
+    this._spriteCloud?.updateTime(performance.now(), this._skyClockMs);
     this._backgroundLayer?.updateParallax(
       this.camera.getPosition().x,
       BACKGROUND_PARALLAX_X,
@@ -904,7 +903,11 @@ export class RenderPipeline implements RenderPipelineLayers {
         screen.height !== this._lastCullScreenH;
       if (shouldCull) {
         const tCull = import.meta.env.DEV ? chunkPerfNow() : 0;
-        Culler.shared.cull(this.camera.worldRoot, screen, true);
+        this._cullScreen.x = -this._overscanPadPx;
+        this._cullScreen.y = -this._overscanPadPx;
+        this._cullScreen.width = screen.width + this._overscanPadPx * 2;
+        this._cullScreen.height = screen.height + this._overscanPadPx * 2;
+        Culler.shared.cull(this.camera.worldRoot, this._cullScreen, true);
         this._lastCullCameraX = cameraPos.x;
         this._lastCullCameraY = cameraPos.y;
         this._lastCullScreenW = screen.width;
@@ -913,28 +916,8 @@ export class RenderPipeline implements RenderPipelineLayers {
           chunkPerfLog("renderPipeline:cull", chunkPerfNow() - tCull);
         }
       }
-      this.app.renderer.render({
-        container: this.camera.worldRoot,
-        target: this._albedoRT,
-        clear: true,
-        clearColor: "rgba(0,0,0,0)",
-      });
+      this.renderWorldWithOverscanOffset(this._albedoRT);
       const vp = getVideoPrefs();
-      const sn = this._screenSpaceNormalPass;
-      if (sn !== null && this._albedoRT !== null && vp.screenSpaceNormals) {
-        const p: ScreenSpaceNormalParams = {
-          bevel: vp.ssnBevel,
-          strength: vp.ssnHeightStrength,
-          smooth: vp.ssnSmoothness,
-          detail: vp.ssnDetailWeight,
-          invertX: vp.ssnInvertX,
-          invertY: vp.ssnInvertY,
-        };
-        // Same RT the composite samples — avoids two-pass drift when the camera moves (terrain-only
-        // RT was a second render and could diverge slightly from this buffer).
-        sn.update(this._albedoRT, p);
-      }
-      this.updateBloomDirtyFromCamera();
       if (vp.bloom) {
         this.renderBloomMask();
       }
@@ -1027,8 +1010,6 @@ export class RenderPipeline implements RenderPipelineLayers {
       this._rainTiling = null;
       this._rainRoot?.destroy({ children: true });
       this._rainRoot = null;
-      this._screenSpaceNormalPass?.destroy();
-      this._screenSpaceNormalPass = null;
       this._lightingComposer?.destroy();
       this._lightingComposer = null;
       this._bgToneFilter?.destroy();
@@ -1047,6 +1028,9 @@ export class RenderPipeline implements RenderPipelineLayers {
         u();
       }
       this._backgroundBusUnsubs.length = 0;
+      this._spriteCloud?.displayRoot.removeFromParent();
+      this._spriteCloud?.destroy();
+      this._spriteCloud = null;
       this._backgroundLayer?.displayRoot.removeFromParent();
       this._backgroundLayer?.dispose();
       this._backgroundLayer = null;
@@ -1081,34 +1065,67 @@ export class RenderPipeline implements RenderPipelineLayers {
         this._skyCssH = h;
       }
       this.camera.setScreenSize(w, h);
-      this._albedoRT?.resize(w, h, res);
+      const rtW = Math.max(1, w + this._overscanPadPx * 2);
+      const rtH = Math.max(1, h + this._overscanPadPx * 2);
+      this._albedoRT?.resize(rtW, rtH, res);
       if (this._albedoRT !== null) {
         const aw = Math.max(1, Math.round(this._albedoRT.width));
         const ah = Math.max(1, Math.round(this._albedoRT.height));
         const ar = this._albedoRT.source.resolution;
         this._bloomMaskRT?.resize(aw, ah, ar);
-        this._screenSpaceNormalPass?.resize(aw, ah, ar);
       } else {
-        this._bloomMaskRT?.resize(w, h, res);
-        this._screenSpaceNormalPass?.resize(w, h, res);
+        this._bloomMaskRT?.resize(rtW, rtH, res);
       }
     }
+    this._resizeCloudLayer();
     this.syncCompositeSpriteToAlbedoRt();
   }
 
   /**
-   * Keep the lighting composite quad exactly the size of the albedo RT every frame.
-   * After fullscreen / DPR changes, renderer-reported size and filter sprite size can briefly
-   * diverge, which stretches the albedo vs the normal map (different texture bindings).
+   * Keep the composite pass sized to the visible viewport while sampling from overscanned RTs.
    */
   private syncCompositeSpriteToAlbedoRt(): void {
     if (this._albedoRT === null || this._lightingComposer === null) {
       return;
     }
-    const rt = this._albedoRT;
     this._lightingComposer.resize(
-      Math.max(1, Math.round(rt.width)),
-      Math.max(1, Math.round(rt.height)),
+      Math.max(1, this.lastScreenW),
+      Math.max(1, this.lastScreenH),
     );
+    this.updateCompositeViewportMapping();
   }
+
+  private renderWorldWithOverscanOffset(target: RenderTexture): void {
+    if (this.app === null) {
+      return;
+    }
+    const root = this.subPixelNudge;
+    const baseX = root.x;
+    const baseY = root.y;
+    root.position.set(baseX + this._overscanPadPx, baseY + this._overscanPadPx);
+    try {
+      this.app.renderer.render({
+        container: root,
+        target,
+        clear: true,
+        clearColor: "rgba(0,0,0,0)",
+      });
+    } finally {
+      root.position.set(baseX, baseY);
+    }
+  }
+
+  private updateCompositeViewportMapping(): void {
+    if (this._lightingComposer === null || this._albedoRT === null) {
+      return;
+    }
+    this._lightingComposer.setCompositeViewportMapping({
+      viewWidth: Math.max(1, this.lastScreenW),
+      viewHeight: Math.max(1, this.lastScreenH),
+      renderWidth: Math.max(1, Math.round(this._albedoRT.width)),
+      renderHeight: Math.max(1, Math.round(this._albedoRT.height)),
+      overscanPadPx: this._overscanPadPx,
+    });
+  }
+
 }

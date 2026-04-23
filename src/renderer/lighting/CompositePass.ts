@@ -24,7 +24,6 @@ function assertCompositeFragmentSource(src: string): string {
 import { IndirectLightTexture } from "./IndirectLightTexture";
 
 type CompositeUniformStruct = {
-  uSunDir: { value: Float32Array; type: "vec2<f32>" };
   uAmbient: { value: number; type: "f32" };
   uAmbientTint: { value: Float32Array; type: "vec3<f32>" };
   uSkyLightTint: { value: Float32Array; type: "vec3<f32>" };
@@ -34,7 +33,6 @@ type CompositeUniformStruct = {
   uBlockPixels: { value: number; type: "f32" };
   uOcclusionOrigin: { value: Float32Array; type: "vec2<f32>" };
   uOcclusionSize: { value: number; type: "f32" };
-  uMoonDir: { value: Float32Array; type: "vec2<f32>" };
   uMoonIntensity: { value: number; type: "f32" };
   uMoonTint: { value: Float32Array; type: "vec3<f32>" };
   uTorchActive: { value: number; type: "f32" };
@@ -48,13 +46,13 @@ type CompositeUniformStruct = {
   uTonemapper: { value: number; type: "i32" };
   uBloomEnabled: { value: number; type: "f32" };
   uBloomMaskActive: { value: number; type: "f32" };
-  uNormalOffsetPx: { value: Float32Array; type: "vec2<f32>" };
-  uNormalUvScale: { value: number; type: "f32" };
-  uNormalStrength: { value: number; type: "f32" };
-  uDebugNormals: { value: number; type: "f32" };
-  uSunLightZ: { value: number; type: "f32" };
-  uMoonLightZ: { value: number; type: "f32" };
-  uTorchLightZ: { value: number; type: "f32" };
+  /** 1 = multiply torch bloom by UV AABB from local player (same space as sampleUv). */
+  uPlayerBloomUvBoundsActive: { value: number; type: "f32" };
+  uPlayerBloomUvMin: { value: Float32Array; type: "vec2<f32>" };
+  uPlayerBloomUvMax: { value: Float32Array; type: "vec2<f32>" };
+  uUvBaseOffset: { value: Float32Array; type: "vec2<f32>" };
+  uUvScale: { value: Float32Array; type: "vec2<f32>" };
+  uUvSubpixelOffset: { value: Float32Array; type: "vec2<f32>" };
 };
 
 const FILTER_VERT_SRC = `in vec2 aPosition;
@@ -87,7 +85,6 @@ void main(void)
 `;
 
 export type CompositeUniforms = {
-  sunDir: [number, number];
   ambient: number;
   ambientTint: [number, number, number];
   skyLightTint: [number, number, number];
@@ -97,7 +94,6 @@ export type CompositeUniforms = {
   blockPixels: number;
   occlusionOrigin: [number, number];
   occlusionSize: number;
-  moonDir: [number, number];
   moonIntensity: number;
   moonTint: [number, number, number];
   /** When null, held torch contribution is disabled. */
@@ -107,8 +103,11 @@ export type CompositeUniforms = {
     intensity: number;
     color: [number, number, number];
   } | null;
-  /** World-block positions of nearby placed light-emitting blocks (up to MAX_PLACED_TORCHES). */
-  placedTorches: [number, number][];
+  /**
+   * Nearby placed/dynamic emitters (up to MAX_PLACED_TORCHES).
+   * Tuple: [worldX, worldY, strength(0..1+)].
+   */
+  placedTorches: [number, number, number?][];
   /**
    * How many entries in {@link placedTorches} are valid this frame. When set, preferred over
    * `placedTorches.length` so the buffer can stay preallocated without truncating.
@@ -119,19 +118,18 @@ export type CompositeUniforms = {
   bloomEnabled: boolean;
   /** When true, bloom is multiplied by (1 - player silhouette alpha). */
   bloomMaskActive: boolean;
-  /** 0 disables screen-space normal modulation (flat shading). */
-  normalStrength: number;
-  /** Tangent-space Z component for sun/moon directional lights (world XY + this Z). */
-  sunLightZ: number;
-  moonLightZ: number;
-  /** World-block scale vertical component for point lights vs tangent normals. */
-  torchLightZ: number;
-  /** When true, composite outputs the raw normal-map texture (debug). */
-  debugNormals: boolean;
-  /** Debug: shift normal-map sample in logical pixels (see video prefs). */
-  normalOffsetPx: [number, number];
-  /** Debug: UV scale for normal map about screen center (1 = default). */
-  normalUvScale: number;
+  /** UV offset to the inner, visible rect of the albedo RT (overscan crop). */
+  uvBaseOffset: [number, number];
+  /** UV scale of the visible rect inside the albedo RT (overscan crop). */
+  uvScale: [number, number];
+  /** Frame-local camera subpixel shift in albedo UV space. */
+  uvSubpixelOffset: [number, number];
+  /** When true, torch bloom is suppressed inside the UV rectangle (local player silhouette). */
+  playerBloomUvBoundsActive: boolean;
+  /** Min corner (U,V) in full albedo texture UV space; see {@link playerBloomUvBoundsActive}. */
+  playerBloomUvMin: [number, number];
+  /** Max corner (U,V) in full albedo texture UV space. */
+  playerBloomUvMax: [number, number];
 };
 
 export class CompositePass {
@@ -144,10 +142,8 @@ export class CompositePass {
     occlusion: OcclusionTexture,
     indirect: IndirectLightTexture,
     playerBloomMaskSource: TextureSource,
-    normalMapSource: TextureSource,
   ) {
     this._uniformGroup = new UniformGroup<CompositeUniformStruct>({
-      uSunDir: { value: new Float32Array(2), type: "vec2<f32>" },
       uAmbient: { value: 1, type: "f32" },
       uAmbientTint: {
         value: new Float32Array([1, 1, 1]),
@@ -166,7 +162,6 @@ export class CompositePass {
       uBlockPixels: { value: 32, type: "f32" },
       uOcclusionOrigin: { value: new Float32Array(2), type: "vec2<f32>" },
       uOcclusionSize: { value: OcclusionTexture.REGION_BLOCKS, type: "f32" },
-      uMoonDir: { value: new Float32Array(2), type: "vec2<f32>" },
       uMoonIntensity: { value: 0, type: "f32" },
       uMoonTint: {
         value: new Float32Array([0.6, 0.7, 1.0]),
@@ -189,13 +184,12 @@ export class CompositePass {
       uTonemapper: { value: 1, type: "i32" },
       uBloomEnabled: { value: 1, type: "f32" },
       uBloomMaskActive: { value: 0, type: "f32" },
-      uNormalOffsetPx: { value: new Float32Array([0, 0]), type: "vec2<f32>" },
-      uNormalUvScale: { value: 1, type: "f32" },
-      uNormalStrength: { value: 0, type: "f32" },
-      uDebugNormals: { value: 0, type: "f32" },
-      uSunLightZ: { value: 0.22, type: "f32" },
-      uMoonLightZ: { value: 0.22, type: "f32" },
-      uTorchLightZ: { value: 12.0, type: "f32" },
+      uPlayerBloomUvBoundsActive: { value: 0, type: "f32" },
+      uPlayerBloomUvMin: { value: new Float32Array(2), type: "vec2<f32>" },
+      uPlayerBloomUvMax: { value: new Float32Array(2), type: "vec2<f32>" },
+      uUvBaseOffset: { value: new Float32Array(2), type: "vec2<f32>" },
+      uUvScale: { value: new Float32Array([1, 1]), type: "vec2<f32>" },
+      uUvSubpixelOffset: { value: new Float32Array(2), type: "vec2<f32>" },
     });
 
     const fragmentSrc = assertCompositeFragmentSource(COMPOSITE_FRAGMENT_GLSL);
@@ -212,7 +206,6 @@ export class CompositePass {
         uOcclusion: occlusion.texture.source,
         uIndirectLight: indirect.texture.source,
         uPlayerBloomMask: playerBloomMaskSource,
-        uNormalMap: normalMapSource,
       },
       clipToViewport: false,
     });
@@ -225,11 +218,6 @@ export class CompositePass {
   updateUniforms(p: CompositeUniforms): void {
     const u = this._uniformGroup.uniforms;
     let dirty = false;
-    if (u.uSunDir[0] !== p.sunDir[0] || u.uSunDir[1] !== p.sunDir[1]) {
-      u.uSunDir[0] = p.sunDir[0];
-      u.uSunDir[1] = p.sunDir[1];
-      dirty = true;
-    }
     if (u.uAmbient !== p.ambient) {
       u.uAmbient = p.ambient;
       dirty = true;
@@ -290,11 +278,6 @@ export class CompositePass {
     }
     if (u.uOcclusionSize !== p.occlusionSize) {
       u.uOcclusionSize = p.occlusionSize;
-      dirty = true;
-    }
-    if (u.uMoonDir[0] !== p.moonDir[0] || u.uMoonDir[1] !== p.moonDir[1]) {
-      u.uMoonDir[0] = p.moonDir[0];
-      u.uMoonDir[1] = p.moonDir[1];
       dirty = true;
     }
     if (u.uMoonIntensity !== p.moonIntensity) {
@@ -362,11 +345,12 @@ export class CompositePass {
       }
       const px = entry[0];
       const py = entry[1];
+      const strength = entry[2] ?? 1;
       const b = i * 4;
-      if (ptBuf[b] !== px || ptBuf[b + 1] !== py) {
+      if (ptBuf[b] !== px || ptBuf[b + 1] !== py || ptBuf[b + 2] !== strength) {
         ptBuf[b] = px;
         ptBuf[b + 1] = py;
-        ptBuf[b + 2] = 0;
+        ptBuf[b + 2] = strength;
         ptBuf[b + 3] = 0;
         dirty = true;
       }
@@ -385,37 +369,46 @@ export class CompositePass {
       u.uBloomMaskActive = bma;
       dirty = true;
     }
+    const pbba = p.playerBloomUvBoundsActive ? 1 : 0;
+    if (u.uPlayerBloomUvBoundsActive !== pbba) {
+      u.uPlayerBloomUvBoundsActive = pbba;
+      dirty = true;
+    }
     if (
-      u.uNormalOffsetPx[0] !== p.normalOffsetPx[0] ||
-      u.uNormalOffsetPx[1] !== p.normalOffsetPx[1]
+      u.uPlayerBloomUvMin[0] !== p.playerBloomUvMin[0] ||
+      u.uPlayerBloomUvMin[1] !== p.playerBloomUvMin[1]
     ) {
-      u.uNormalOffsetPx[0] = p.normalOffsetPx[0];
-      u.uNormalOffsetPx[1] = p.normalOffsetPx[1];
+      u.uPlayerBloomUvMin[0] = p.playerBloomUvMin[0];
+      u.uPlayerBloomUvMin[1] = p.playerBloomUvMin[1];
       dirty = true;
     }
-    if (u.uNormalUvScale !== p.normalUvScale) {
-      u.uNormalUvScale = p.normalUvScale;
+    if (
+      u.uPlayerBloomUvMax[0] !== p.playerBloomUvMax[0] ||
+      u.uPlayerBloomUvMax[1] !== p.playerBloomUvMax[1]
+    ) {
+      u.uPlayerBloomUvMax[0] = p.playerBloomUvMax[0];
+      u.uPlayerBloomUvMax[1] = p.playerBloomUvMax[1];
       dirty = true;
     }
-    if (u.uNormalStrength !== p.normalStrength) {
-      u.uNormalStrength = p.normalStrength;
+    if (
+      u.uUvBaseOffset[0] !== p.uvBaseOffset[0] ||
+      u.uUvBaseOffset[1] !== p.uvBaseOffset[1]
+    ) {
+      u.uUvBaseOffset[0] = p.uvBaseOffset[0];
+      u.uUvBaseOffset[1] = p.uvBaseOffset[1];
       dirty = true;
     }
-    const dbgN = p.debugNormals ? 1 : 0;
-    if (u.uDebugNormals !== dbgN) {
-      u.uDebugNormals = dbgN;
+    if (u.uUvScale[0] !== p.uvScale[0] || u.uUvScale[1] !== p.uvScale[1]) {
+      u.uUvScale[0] = p.uvScale[0];
+      u.uUvScale[1] = p.uvScale[1];
       dirty = true;
     }
-    if (u.uSunLightZ !== p.sunLightZ) {
-      u.uSunLightZ = p.sunLightZ;
-      dirty = true;
-    }
-    if (u.uMoonLightZ !== p.moonLightZ) {
-      u.uMoonLightZ = p.moonLightZ;
-      dirty = true;
-    }
-    if (u.uTorchLightZ !== p.torchLightZ) {
-      u.uTorchLightZ = p.torchLightZ;
+    if (
+      u.uUvSubpixelOffset[0] !== p.uvSubpixelOffset[0] ||
+      u.uUvSubpixelOffset[1] !== p.uvSubpixelOffset[1]
+    ) {
+      u.uUvSubpixelOffset[0] = p.uvSubpixelOffset[0];
+      u.uUvSubpixelOffset[1] = p.uvSubpixelOffset[1];
       dirty = true;
     }
     if (dirty) {

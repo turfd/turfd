@@ -2,7 +2,12 @@
  * Aim vector from player chest toward the cursor (same convention as the break/place reach line).
  * `dirY` is in display space (positive toward screen bottom / world down for throw velocity).
  */
-import { BLOCK_SIZE, PLAYER_HEIGHT } from "../core/constants";
+import {
+  BLOCK_SIZE,
+  ITEM_THROW_MAX_INITIAL_SPEED_PX,
+  ITEM_THROW_MIN_OUTWARD_VS_FACE,
+  PLAYER_HEIGHT,
+} from "../core/constants";
 
 export function getAimUnitVectorFromFeet(
   feetX: number,
@@ -20,6 +25,55 @@ export function getAimUnitVectorFromFeet(
     return { dirX: dx / dist, dirY: dy / dist };
   }
   return { dirX: facingRight ? 1 : -1, dirY: 0 };
+}
+
+/**
+ * Unit direction for tossed items (Q, inventory cursor toss): cursor aim from
+ * {@link getAimUnitVectorFromFeet}, then horizontal bias so velocity has a clear
+ * outward component in facing (still normalized for world throw velocity).
+ */
+export function getItemThrowUnitVectorFromFeet(
+  feetX: number,
+  feetY: number,
+  mouseWorldX: number,
+  mouseWorldY: number,
+  facingRight: boolean,
+): { dirX: number; dirY: number } {
+  const faceX = facingRight ? 1 : -1;
+  const aim = getAimUnitVectorFromFeet(
+    feetX,
+    feetY,
+    mouseWorldX,
+    mouseWorldY,
+    facingRight,
+  );
+  let { dirX, dirY } = aim;
+  const outward = dirX * faceX;
+  if (outward < ITEM_THROW_MIN_OUTWARD_VS_FACE) {
+    dirX = faceX * ITEM_THROW_MIN_OUTWARD_VS_FACE;
+    const len = Math.hypot(dirX, dirY);
+    if (len > 1e-6) {
+      dirX /= len;
+      dirY /= len;
+    } else {
+      return { dirX: faceX, dirY: 0 };
+    }
+  }
+  return { dirX, dirY };
+}
+
+/** Scales (vx, vy) so initial toss speed stays within {@link ITEM_THROW_MAX_INITIAL_SPEED_PX}. */
+export function clampItemThrowVelocity(vx: number, vy: number): {
+  vx: number;
+  vy: number;
+} {
+  const max = ITEM_THROW_MAX_INITIAL_SPEED_PX;
+  const h = Math.hypot(vx, vy);
+  if (h <= max || h < 1e-8) {
+    return { vx, vy };
+  }
+  const s = max / h;
+  return { vx: vx * s, vy: vy * s };
 }
 
 /** Reach line + crosshair (display / camera space, same axes as `InputManager.mouseWorldPos`). */

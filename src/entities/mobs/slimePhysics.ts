@@ -360,6 +360,25 @@ export function applySlimeKnockback(
   }
 }
 
+export function slimeFeetOverlapPlayerFeet(
+  sx: number,
+  sy: number,
+  px: number,
+  py: number,
+  playerHalfW: number,
+  playerH: number,
+): boolean {
+  const sLeft = sx - SLIME_WIDTH_PX * 0.5;
+  const sRight = sx + SLIME_WIDTH_PX * 0.5;
+  const sTop = sy - SLIME_HEIGHT_PX;
+  const sBot = sy;
+  const pLeft = px - playerHalfW;
+  const pRight = px + playerHalfW;
+  const pTop = py - playerH;
+  const pBot = py;
+  return sLeft < pRight && sRight > pLeft && sTop < pBot && sBot > pTop;
+}
+
 /**
  * Same melee reach model as {@link zombieFeetInMeleeRangeOfPlayerFeet}, using the slime combat
  * hitbox so attacks line up with zombie spacing.

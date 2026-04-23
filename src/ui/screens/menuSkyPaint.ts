@@ -2,10 +2,14 @@
  * 2D sky gradient + sun for menu / loading backdrops (matches {@link MenuBackground} daytime look).
  */
 
-const SKY_TOP = 0x74b3ff;
-const SKY_HORIZON = 0xa8d8ff;
-const SKY_BOTTOM = 0x6a8a9a;
-const SKY_WHITE = 0xffffff;
+/**
+ * Noon palette — must match {@link SKY_NOON} in WorldTime.ts so the menu backdrop
+ * reads as "daytime sky" using the same two hex codes that drive the in-game sky
+ * gradient at peak sun.
+ */
+export const MENU_SKY_TOP = 0x5596ff;
+export const MENU_SKY_BOTTOM = 0x89c4ff;
+export const MENU_SKY_HORIZON = lerpColor(MENU_SKY_TOP, MENU_SKY_BOTTOM, 0.5);
 
 const DAYTIME_LIGHTING = {
   sunIntensity: 0.82,
@@ -30,13 +34,10 @@ function hexToCss(hex: number): string {
   return `#${(hex & 0xffffff).toString(16).padStart(6, "0")}`;
 }
 
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
-
 /**
  * Fills the canvas backing store (cw×ch device pixels) with the daytime sky + sun disc.
+ * Clean two-stop gradient (top → bottom) through the midpoint, matching the in-game
+ * sky paint in {@link RenderPipeline.paintSkyCss}.
  */
 export function paintMenuSky(
   ctx: CanvasRenderingContext2D,
@@ -45,23 +46,11 @@ export function paintMenuSky(
   dpr: number,
 ): void {
   const sunIntensity = DAYTIME_LIGHTING.sunIntensity;
-  const haze = smoothstep(0.34, 0.72, sunIntensity);
-  const towardWhite = (c: number, amt: number): number => lerpColor(c, SKY_WHITE, amt * haze);
-
-  const midHigh = lerpColor(SKY_TOP, SKY_HORIZON, 0.35);
-  const midLow = lerpColor(SKY_HORIZON, SKY_BOTTOM, 0.45);
 
   const grd = ctx.createLinearGradient(0, 0, 0, ch);
-  grd.addColorStop(0.0, hexToCss(SKY_TOP));
-  grd.addColorStop(0.14, hexToCss(lerpColor(SKY_TOP, midHigh, 0.55)));
-  grd.addColorStop(0.3, hexToCss(midHigh));
-  grd.addColorStop(0.44, hexToCss(towardWhite(midHigh, 0.14)));
-  grd.addColorStop(0.52, hexToCss(towardWhite(SKY_HORIZON, 0.36)));
-  grd.addColorStop(0.58, hexToCss(towardWhite(SKY_HORIZON, 0.58)));
-  grd.addColorStop(0.65, hexToCss(towardWhite(SKY_HORIZON, 0.4)));
-  grd.addColorStop(0.75, hexToCss(towardWhite(midLow, 0.22)));
-  grd.addColorStop(0.88, hexToCss(midLow));
-  grd.addColorStop(1.0, hexToCss(SKY_BOTTOM));
+  grd.addColorStop(0, hexToCss(MENU_SKY_TOP));
+  grd.addColorStop(0.5, hexToCss(MENU_SKY_HORIZON));
+  grd.addColorStop(1, hexToCss(MENU_SKY_BOTTOM));
   ctx.fillStyle = grd;
   ctx.fillRect(0, 0, cw, ch);
 
@@ -85,10 +74,10 @@ export function paintMenuSky(
 
 /**
  * CSS gradient under the menu sky canvas (canvas is transparent until first paint / while WebGL loads).
- * Keep hues aligned with {@link paintMenuSky} (`SKY_TOP` / `SKY_HORIZON` / `SKY_BOTTOM`).
+ * Keep all three stops aligned with {@link paintMenuSky}.
  */
 export const MENU_SKY_FALLBACK_GRADIENT =
-  "linear-gradient(180deg, #74b3ff 0%, #a8d8ff 52%, #6a8a9a 100%)";
+  `linear-gradient(180deg, ${hexToCss(MENU_SKY_TOP)} 0%, ${hexToCss(MENU_SKY_HORIZON)} 50%, ${hexToCss(MENU_SKY_BOTTOM)} 100%)`;
 
 const MENU_BACKDROP_CLASS = "stratum-menu-backdrop";
 

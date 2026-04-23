@@ -1,6 +1,10 @@
-/** Builds one batched MeshGeometry per chunk from block IDs + atlas UVs (no per-tile Graphics). */
+/** Builds one batched {@link MeshGeometry} per chunk from block IDs + atlas UVs (no per-tile Graphics). */
 import { Mesh, MeshGeometry, Texture } from "pixi.js";
-import { BLOCK_SIZE, CHUNK_SIZE } from "../../core/constants";
+import {
+  BLOCK_SIZE,
+  CHUNK_SIZE,
+  LEAF_DECO_CORNER_SHAVE_PX,
+} from "../../core/constants";
 import {
   getWaterFlowLevel,
   waterDepthVInCell,
@@ -87,8 +91,8 @@ const WIND_SWAY_GROUND_PHASE_LAG_RAD = 0.44;
 /** Crown edge is slightly ahead of the reference phase so tips move before the base catches up. */
 const WIND_SWAY_CROWN_PHASE_LEAD_RAD = 0.38;
 
-/** Min |vx| (px/s) before a body adds extra horizontal bend to swaying foliage. */
-const FOLIAGE_BODY_SWAY_VX_MIN = 22;
+/** Reference |vx| (px/s) for body-driven bend when the hitbox does not overlap the plant cell. */
+export const FOLIAGE_BODY_SWAY_VX_REF = 22;
 /** Horizontal reach (world px) for body influence; 1 at center, 0 at edge. */
 const FOLIAGE_BODY_SWAY_REACH_X = BLOCK_SIZE * 1.5;
 /** Vertical reach (world px, feet space) from the cell midline. */
@@ -97,6 +101,11 @@ const FOLIAGE_BODY_SWAY_REACH_Y = BLOCK_SIZE * 2.6;
 const FOLIAGE_BODY_SWAY_GAIN = 1.22;
 /** Caps combined wind + body offset (multiples of maxPx). */
 const FOLIAGE_BODY_SWAY_COMBINED_CAP = 3.1;
+/**
+ * Crown (top edge of the sway quad) moves ~2× the bottom edge: bottom uses this fraction
+ * of wind + body bend; top uses the remainder of the 2:1 split (see {@link applyWindSwayToMesh}).
+ */
+const FOLIAGE_SWAY_BOTTOM_REL = 0.5;
 
 type WindWaveTier = "ground" | "seam" | "crown";
 
@@ -213,6 +222,16 @@ export type FoliageWindInfluence = {
   feetX: number;
   feetY: number;
   vx: number;
+  /** Player hitbox (world px, same space as {@link TileWindSway.bodySwayWorldCenterX}). */
+  hitboxX: number;
+  hitboxY: number;
+  hitboxW: number;
+  hitboxH: number;
+  /**
+   * Last non-zero motion sign from horizontal velocity (−1, 0, or +1). Used for bend
+   * direction while the hitbox overlaps a plant and vx is near zero.
+   */
+  bendSignLatch: number;
 };
 
 /** Lit furnace: ping-pong UV animation through `furnace_on_*` atlas frames (see {@link applyFurnaceFireToMesh}). */
@@ -269,6 +288,44 @@ function pingPongFrameIndexFromFloat(t: number, n: number): number {
     return Math.floor(p);
   }
   return n * 2 - 2 - Math.floor(p);
+}
+
+/** Bit flags packed into the leaf corner-shave mask (one bit per cell corner). */
+const LEAF_SHAVE_NE = 1 << 0;
+const LEAF_SHAVE_NW = 1 << 1;
+const LEAF_SHAVE_SE = 1 << 2;
+const LEAF_SHAVE_SW = 1 << 3;
+
+/**
+ * A corner is "exterior canopy" (and therefore gets its 90° base-tile square shaved into
+ * a soft diagonal) iff the diagonal neighbour AND both cardinals adjacent to that corner
+ * are all air. That way the shave only touches edges where the canopy silhouette meets
+ * sky — a log or another leaf touching the corner suppresses the shave so the outline
+ * stays tight against neighbouring blocks.
+ */
+function leafCornerShaveMask(
+  sampleWorldBlockId: (wx: number, wy: number) => number,
+  worldX: number,
+  worldY: number,
+): number {
+  const nAir = sampleWorldBlockId(worldX, worldY + 1) === AIR_ID;
+  const sAir = sampleWorldBlockId(worldX, worldY - 1) === AIR_ID;
+  const eAir = sampleWorldBlockId(worldX + 1, worldY) === AIR_ID;
+  const wAir = sampleWorldBlockId(worldX - 1, worldY) === AIR_ID;
+  let mask = 0;
+  if (nAir && eAir && sampleWorldBlockId(worldX + 1, worldY + 1) === AIR_ID) {
+    mask |= LEAF_SHAVE_NE;
+  }
+  if (nAir && wAir && sampleWorldBlockId(worldX - 1, worldY + 1) === AIR_ID) {
+    mask |= LEAF_SHAVE_NW;
+  }
+  if (sAir && eAir && sampleWorldBlockId(worldX + 1, worldY - 1) === AIR_ID) {
+    mask |= LEAF_SHAVE_SE;
+  }
+  if (sAir && wAir && sampleWorldBlockId(worldX - 1, worldY - 1) === AIR_ID) {
+    mask |= LEAF_SHAVE_SW;
+  }
+  return mask;
 }
 
 /** One or two quads per cell when a ground deadband splits wind geometry. */
@@ -339,6 +396,14 @@ function buildGeometryFromCells(
       const def = registry.getById(id);
       if (def.identifier === "stratum:water" && splitWaterOverlay) {
         waterQuadCount += 1;
+      } else if (def.decorationLeaves === true) {
+        const wx = chunkOrigin.wx + lx;
+        const wy = chunkOrigin.wy + ly;
+        // Shaved corners split the tile into 3 strips (top / middle / bottom); no
+        // exterior corner keeps the single full-tile quad, matching the fast path.
+        mainQuadCount += leafCornerShaveMask(sampleWorldBlockId, wx, wy) === 0
+          ? 1
+          : 3;
       } else {
         mainQuadCount += windForegroundQuadsForCell(def, ly);
       }
@@ -872,6 +937,91 @@ function buildGeometryFromCells(
           continue;
         }
 
+        if (def.decorationLeaves === true) {
+          // Shave the square outer corner of the base tile into a small notch at each
+          // exterior-canopy corner (diagonal + both adjacent cardinals all air). The
+          // corner bumps emitted by LeafDecorationBatch land on top of the notch, so
+          // the final silhouette reads as a rounded clump instead of a crisp 90° edge.
+          // mesh-y convention in this builder: cell spans [py, py + b] where py is the
+          // *top* of the cell (visually up = smaller Pixi Y, see earlier computations).
+          const shaveMask = leafCornerShaveMask(
+            sampleWorldBlockId,
+            worldX,
+            worldY,
+          );
+          if (shaveMask !== 0) {
+            const shave = Math.max(
+              1,
+              Math.min(b - 1, Math.floor(LEAF_DECO_CORNER_SHAVE_PX)),
+            );
+            const uSpan = rightU - leftU;
+            const vSpan = v1 - v0;
+            const emitLeafStrip = (
+              xLOff: number,
+              xROff: number,
+              kTop: number,
+              kBot: number,
+            ): void => {
+              if (xROff <= xLOff || kBot <= kTop) {
+                return;
+              }
+              const xL = px + xLOff;
+              const xR = px + xROff;
+              const yT = py + kTop;
+              const yB = py + kBot;
+              const uL = leftU + (xLOff / b) * uSpan;
+              const uR = leftU + (xROff / b) * uSpan;
+              const vT = v0 + (kTop / b) * vSpan;
+              const vB = v0 + (kBot / b) * vSpan;
+
+              positions[pi] = xL;
+              positions[pi + 1] = yT;
+              uvs[pi] = uL;
+              uvs[pi + 1] = vT;
+              pi += 2;
+
+              positions[pi] = xR;
+              positions[pi + 1] = yT;
+              uvs[pi] = uR;
+              uvs[pi + 1] = vT;
+              pi += 2;
+
+              positions[pi] = xL;
+              positions[pi + 1] = yB;
+              uvs[pi] = uL;
+              uvs[pi + 1] = vB;
+              pi += 2;
+
+              positions[pi] = xR;
+              positions[pi + 1] = yB;
+              uvs[pi] = uR;
+              uvs[pi + 1] = vB;
+              pi += 2;
+
+              const b0 = vertBase;
+              indices[ii] = b0;
+              indices[ii + 1] = b0 + 1;
+              indices[ii + 2] = b0 + 2;
+              indices[ii + 3] = b0 + 1;
+              indices[ii + 4] = b0 + 3;
+              indices[ii + 5] = b0 + 2;
+              ii += 6;
+              vertBase += 4;
+            };
+            // N strip (visually up, mesh-y near py): NW / NE corners live here.
+            const topXL = (shaveMask & LEAF_SHAVE_NW) !== 0 ? shave : 0;
+            const topXR = (shaveMask & LEAF_SHAVE_NE) !== 0 ? b - shave : b;
+            emitLeafStrip(topXL, topXR, 0, shave);
+            // Middle strip stays full width so the canopy body is untouched.
+            emitLeafStrip(0, b, shave, b - shave);
+            // S strip (visually down, mesh-y near py+b): SW / SE corners.
+            const botXL = (shaveMask & LEAF_SHAVE_SW) !== 0 ? shave : 0;
+            const botXR = (shaveMask & LEAF_SHAVE_SE) !== 0 ? b - shave : b;
+            emitLeafStrip(botXL, botXR, b - shave, b);
+            continue;
+          }
+        }
+
         const quadPosStart = pi;
         emitQuad(yTop, yBottom, vUvTop, vUvBottom);
 
@@ -1014,15 +1164,15 @@ function getFgShadowTexture(): Texture {
   return fgShadowTexture;
 }
 
-/** Samples solid foreground across chunk boundaries (loaded chunks only). */
+/** Samples foreground blocks that cast back-wall contact shadows (chunk boundaries, loaded chunks only). */
 export type FgShadowSampler = {
-  isSolidForegroundAt(wx: number, wy: number): boolean;
+  castsFgContactShadowAt(wx: number, wy: number): boolean;
 };
 
 export function createWorldFgShadowSampler(world: World): FgShadowSampler {
   const reg = world.getRegistry();
   return {
-    isSolidForegroundAt(wx: number, wy: number): boolean {
+    castsFgContactShadowAt(wx: number, wy: number): boolean {
       const chunk = world.getChunkAt(wx, wy);
       if (chunk === undefined) {
         return false;
@@ -1030,11 +1180,7 @@ export function createWorldFgShadowSampler(world: World): FgShadowSampler {
       const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
       const ly = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
       const id = getBlock(chunk, lx, ly);
-      // Chest is rendered as a non-full visual; excluding it avoids square contact-shadow artifacts.
-      if (reg.getById(id).identifier === "stratum:chest") {
-        return false;
-      }
-      return reg.isSolid(id);
+      return reg.castsFgContactShadow(id);
     },
   };
 }
@@ -1100,19 +1246,38 @@ function buildFgShadowGeometry(
   const backgrounds = chunk.background;
   const depth = Math.max(4, FG_ON_BG_SHADOW_DEPTH_PX);
   const origin = chunkToWorldOrigin(chunk.coord);
+  const cellCount = CHUNK_SIZE * CHUNK_SIZE;
+  const wantTop = new Uint8Array(cellCount);
+  const wantBottom = new Uint8Array(cellCount);
+  const wantLeft = new Uint8Array(cellCount);
+  const wantRight = new Uint8Array(cellCount);
 
-  let quadCount = 0;
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-      if (backgrounds[localIndex(lx, ly)]! === AIR_ID) {
+      const i = localIndex(lx, ly);
+      if (backgrounds[i]! === AIR_ID) {
         continue;
       }
       const wx = origin.wx + lx;
       const wy = origin.wy + ly;
-      if (sampler.isSolidForegroundAt(wx, wy + 1)) quadCount += 1;
-      if (sampler.isSolidForegroundAt(wx, wy - 1)) quadCount += 1;
-      if (sampler.isSolidForegroundAt(wx - 1, wy)) quadCount += 1;
-      if (sampler.isSolidForegroundAt(wx + 1, wy)) quadCount += 1;
+      if (sampler.castsFgContactShadowAt(wx, wy + 1)) wantTop[i] = 1;
+      if (sampler.castsFgContactShadowAt(wx, wy - 1)) wantBottom[i] = 1;
+      if (sampler.castsFgContactShadowAt(wx - 1, wy)) wantLeft[i] = 1;
+      if (sampler.castsFgContactShadowAt(wx + 1, wy)) wantRight[i] = 1;
+    }
+  }
+
+  let quadCount = 0;
+  for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      const i = localIndex(lx, ly);
+      if (backgrounds[i]! === AIR_ID) {
+        continue;
+      }
+      if (wantTop[i]) quadCount += 1;
+      if (wantBottom[i]) quadCount += 1;
+      if (wantLeft[i]) quadCount += 1;
+      if (wantRight[i]) quadCount += 1;
     }
   }
 
@@ -1136,86 +1301,101 @@ function buildFgShadowGeometry(
 
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-      if (backgrounds[localIndex(lx, ly)]! === AIR_ID) {
+      const i = localIndex(lx, ly);
+      if (backgrounds[i]! === AIR_ID) {
         continue;
       }
-      const wx = origin.wx + lx;
-      const wy = origin.wy + ly;
       const px = lx * BLOCK_SIZE;
       const py = -(ly + 1) * BLOCK_SIZE;
       const cellBottomY = py + BLOCK_SIZE;
 
-      if (sampler.isSolidForegroundAt(wx, wy + 1)) {
-        const r = pushShadowQuad(
-          positions,
-          uvs,
-          indices,
-          pi,
-          ii,
-          vertBase,
-          0,
-          px,
-          py,
-          px + BLOCK_SIZE,
-          py + depth,
-        );
-        pi = r.pi;
-        vertBase = r.vertBase;
-        ii += 6;
+      if (wantTop[i]) {
+        const x0 = px;
+        const x1 = px + BLOCK_SIZE;
+        if (x1 > x0) {
+          const r = pushShadowQuad(
+            positions,
+            uvs,
+            indices,
+            pi,
+            ii,
+            vertBase,
+            0,
+            x0,
+            py,
+            x1,
+            py + depth,
+          );
+          pi = r.pi;
+          vertBase = r.vertBase;
+          ii += 6;
+        }
       }
-      if (sampler.isSolidForegroundAt(wx, wy - 1)) {
-        const r = pushShadowQuad(
-          positions,
-          uvs,
-          indices,
-          pi,
-          ii,
-          vertBase,
-          1,
-          px,
-          cellBottomY - depth,
-          px + BLOCK_SIZE,
-          cellBottomY,
-        );
-        pi = r.pi;
-        vertBase = r.vertBase;
-        ii += 6;
+      if (wantBottom[i]) {
+        const x0 = px;
+        const x1 = px + BLOCK_SIZE;
+        if (x1 > x0) {
+          const r = pushShadowQuad(
+            positions,
+            uvs,
+            indices,
+            pi,
+            ii,
+            vertBase,
+            1,
+            x0,
+            cellBottomY - depth,
+            x1,
+            cellBottomY,
+          );
+          pi = r.pi;
+          vertBase = r.vertBase;
+          ii += 6;
+        }
       }
-      if (sampler.isSolidForegroundAt(wx - 1, wy)) {
-        const r = pushShadowQuad(
-          positions,
-          uvs,
-          indices,
-          pi,
-          ii,
-          vertBase,
-          2,
-          px,
-          py,
-          px + depth,
-          py + BLOCK_SIZE,
-        );
-        pi = r.pi;
-        vertBase = r.vertBase;
-        ii += 6;
+      if (wantLeft[i]) {
+        const y0 = py;
+        const y1 = py + BLOCK_SIZE;
+        if (y1 > y0) {
+          const r = pushShadowQuad(
+            positions,
+            uvs,
+            indices,
+            pi,
+            ii,
+            vertBase,
+            2,
+            px,
+            y0,
+            px + depth,
+            y1,
+          );
+          pi = r.pi;
+          vertBase = r.vertBase;
+          ii += 6;
+        }
       }
-      if (sampler.isSolidForegroundAt(wx + 1, wy)) {
-        const r = pushShadowQuad(
-          positions,
-          uvs,
-          indices,
-          pi,
-          ii,
-          vertBase,
-          3,
-          px + BLOCK_SIZE - depth,
-          py,
-          px + BLOCK_SIZE,
-          py + BLOCK_SIZE,
-        );
-        pi = r.pi;
-        vertBase = r.vertBase;
-        ii += 6;
+      if (wantRight[i]) {
+        const y0 = py;
+        const y1 = py + BLOCK_SIZE;
+        if (y1 > y0) {
+          const r = pushShadowQuad(
+            positions,
+            uvs,
+            indices,
+            pi,
+            ii,
+            vertBase,
+            3,
+            px + BLOCK_SIZE - depth,
+            y0,
+            px + BLOCK_SIZE,
+            y1,
+          );
+          pi = r.pi;
+          vertBase = r.vertBase;
+          ii += 6;
+        }
       }
     }
   }
@@ -1224,7 +1404,8 @@ function buildFgShadowGeometry(
 }
 
 /**
- * Batched contact shadows on back-wall tiles from orthogonally adjacent solid foreground.
+ * Batched contact shadows on back-wall tiles from orthogonally adjacent foreground blocks
+ * that {@link BlockRegistry#castsFgContactShadow}.
  * One Mesh per chunk (shared gradient atlas per Pixi app). Drawn between bg and fg meshes.
  */
 export function buildFgShadowMesh(
@@ -1251,7 +1432,7 @@ export function updateFgShadowMesh(
 
 export type ForegroundTileMeshBundle = {
   mesh: Mesh;
-  /** Water-only chunk layer; parent above {@link RenderPipeline.layerEntities} in gameplay. */
+  /** Water chunk meshes in {@link RenderPipeline.layerWaterOverEntities} (below local player z-sort). */
   waterMesh: Mesh;
   windSways: TileWindSway[];
   furnaceFires: TileFurnaceFire[];
@@ -1277,12 +1458,12 @@ export function buildMesh(
       geometry,
       texture: tex,
       roundPixels: true,
-    }),
+    }) as unknown as Mesh,
     waterMesh: new Mesh({
       geometry: waterOverlayGeometry,
       texture: tex,
       roundPixels: true,
-    }),
+    }) as unknown as Mesh,
     windSways,
     furnaceFires,
     waterSurfaces,
@@ -1306,7 +1487,7 @@ export function buildBackgroundMesh(
     geometry,
     texture: atlas.getAtlasTexture(),
     tint: BACKGROUND_MESH_TINT,
-  });
+  }) as unknown as Mesh;
 }
 
 export function updateMesh(
@@ -1330,8 +1511,8 @@ export function updateMesh(
   } = buildGeometryFromCells(chunk, chunk.blocks, registry, atlas, opts);
   mesh.geometry.destroy();
   waterMesh.geometry.destroy();
-  mesh.geometry = geometry;
-  waterMesh.geometry = waterOverlayGeometry;
+  mesh.geometry = geometry as unknown as typeof mesh.geometry;
+  waterMesh.geometry = waterOverlayGeometry as unknown as typeof waterMesh.geometry;
   return { windSways, furnaceFires, waterSurfaces };
 }
 
@@ -1350,7 +1531,25 @@ export function updateBackgroundMesh(
     false,
   );
   mesh.geometry.destroy();
-  mesh.geometry = geometry;
+  mesh.geometry = geometry as unknown as typeof mesh.geometry;
+}
+
+function foliageHitboxesOverlap(
+  plantLeft: number,
+  plantTop: number,
+  plantW: number,
+  plantH: number,
+  hx: number,
+  hy: number,
+  hw: number,
+  hh: number,
+): boolean {
+  return (
+    plantLeft < hx + hw &&
+    plantLeft + plantW > hx &&
+    plantTop < hy + hh &&
+    plantTop + plantH > hy
+  );
 }
 
 /**
@@ -1367,22 +1566,55 @@ function extraSwayFromBodies(
   const cx = s.bodySwayWorldCenterX;
   const wy = s.bodySwayWorldBlockY;
   const cellMidYFeet = (wy + 0.5) * BLOCK_SIZE;
+  const plantLeft = cx - BLOCK_SIZE * 0.5;
+  /** Block row `wy` in world-root (chunk + mesh) space: top edge is smaller Pixi Y. */
+  const plantTopPixi = -(wy + 1) * BLOCK_SIZE;
+  const plantW = BLOCK_SIZE;
+  const plantH = BLOCK_SIZE;
   let sum = 0;
   for (const inf of influences) {
-    if (Math.abs(inf.vx) < FOLIAGE_BODY_SWAY_VX_MIN) {
-      continue;
-    }
+    const hitOverlap = foliageHitboxesOverlap(
+      plantLeft,
+      plantTopPixi,
+      plantW,
+      plantH,
+      inf.hitboxX,
+      inf.hitboxY,
+      inf.hitboxW,
+      inf.hitboxH,
+    );
     const dy = Math.abs(inf.feetY - cellMidYFeet);
-    if (dy > FOLIAGE_BODY_SWAY_REACH_Y) {
-      continue;
-    }
     const dx = Math.abs(inf.feetX - cx);
-    if (dx > FOLIAGE_BODY_SWAY_REACH_X) {
-      continue;
+    if (!hitOverlap) {
+      if (dy > FOLIAGE_BODY_SWAY_REACH_Y || dx > FOLIAGE_BODY_SWAY_REACH_X) {
+        continue;
+      }
     }
-    const px = Math.max(0, 1 - dx / FOLIAGE_BODY_SWAY_REACH_X);
-    const py = Math.max(0, 1 - dy / FOLIAGE_BODY_SWAY_REACH_Y);
-    sum += Math.sign(inf.vx) * px * py * s.maxPx * FOLIAGE_BODY_SWAY_GAIN;
+    const absVx = Math.abs(inf.vx);
+    let dir: number;
+    if (absVx >= 9) {
+      dir = Math.sign(inf.vx);
+    } else if (inf.bendSignLatch !== 0) {
+      dir = Math.sign(inf.bendSignLatch);
+    } else if (hitOverlap) {
+      dir = inf.feetX < cx ? 1 : inf.feetX > cx ? -1 : 1;
+    } else {
+      if (absVx < 0.08) {
+        continue;
+      }
+      dir = Math.sign(inf.vx);
+    }
+    const px = hitOverlap
+      ? 1
+      : Math.max(0, 1 - dx / FOLIAGE_BODY_SWAY_REACH_X);
+    const py = hitOverlap
+      ? 1
+      : Math.max(0, 1 - dy / FOLIAGE_BODY_SWAY_REACH_Y);
+    const speedMul = hitOverlap
+      ? 1
+      : Math.min(1, absVx / FOLIAGE_BODY_SWAY_VX_REF);
+    sum +=
+      dir * px * py * s.maxPx * FOLIAGE_BODY_SWAY_GAIN * speedMul;
   }
   const cap = s.maxPx * (FOLIAGE_BODY_SWAY_COMBINED_CAP - 1);
   return Math.max(-cap, Math.min(cap, sum));
@@ -1406,7 +1638,7 @@ export function applyWindSwayToMesh(
       -s.maxPx,
       Math.min(s.maxPx, Math.round(wTop * s.maxPx * s.topWaveMul)),
     );
-    const dxBottomWind =
+    const dxBottomWindRaw =
       s.bottomWaveMul <= 0
         ? 0
         : Math.max(
@@ -1420,10 +1652,26 @@ export function applyWindSwayToMesh(
               ),
             ),
           );
+    const dxBottomWind = Math.round(dxBottomWindRaw * FOLIAGE_SWAY_BOTTOM_REL);
     const extra = Math.round(extraSwayFromBodies(s, influences));
+    /** Body: rooted ground edge = 0; else bottom gets half, top 2× that so crown : base ≈ 2 : 1. */
+    const extraBodyBottom =
+      s.bottomWaveTier === "ground"
+        ? 0
+        : Math.round(extra * FOLIAGE_SWAY_BOTTOM_REL);
+    const extraBodyTop =
+      s.bottomWaveTier === "ground"
+        ? Math.round(extra)
+        : extraBodyBottom * 2;
     const lim = Math.round(s.maxPx * FOLIAGE_BODY_SWAY_COMBINED_CAP);
-    const dxTop = Math.max(-lim, Math.min(lim, dxTopWind + extra));
-    const dxBottom = Math.max(-lim, Math.min(lim, dxBottomWind + extra));
+    const dxTop = Math.max(
+      -lim,
+      Math.min(lim, dxTopWind + extraBodyTop),
+    );
+    const dxBottom = Math.max(
+      -lim,
+      Math.min(lim, dxBottomWind + extraBodyBottom),
+    );
     // Interleaved float32: x,y per vertex; quad order TL, TR, BL, BR (see build loop above).
     const i = s.posIndex;
     pos[i] = s.xLeft + dxTop;

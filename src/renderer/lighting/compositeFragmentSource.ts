@@ -15,7 +15,6 @@ uniform sampler2D uPlayerBloomMask;
 
 uniform highp vec4 uInputSize;
 
-uniform vec2 uSunDir;
 uniform float uAmbient;
 uniform vec3 uAmbientTint;
 uniform vec3 uSkyLightTint;
@@ -26,7 +25,6 @@ uniform float uBlockPixels;
 uniform vec2 uOcclusionOrigin;
 uniform float uOcclusionSize;
 
-uniform vec2 uMoonDir;
 uniform float uMoonIntensity;
 uniform vec3 uMoonTint;
 
@@ -46,19 +44,13 @@ uniform int uTonemapper;
 uniform float uBloomEnabled;
 // 1.0 = apply uPlayerBloomMask to bloom; 0.0 = ignore mask (menu / no gameplay root)
 uniform float uBloomMaskActive;
-
-uniform sampler2D uNormalMap;
-/** Nudge normal-map sampling in **logical** pixels (same space as uInputSize.xy). */
-uniform vec2 uNormalOffsetPx;
-/** 1 = match albedo; below 1 zooms normal map out, above 1 zooms in (about screen center). */
-uniform float uNormalUvScale;
-/** 0 = legacy flat shading; 1 = full screen-space normal diffuse on direct lights. */
-uniform float uNormalStrength;
-/** 1 = output encoded normal RGB for debugging (same UV as albedo). */
-uniform float uDebugNormals;
-uniform float uSunLightZ;
-uniform float uMoonLightZ;
-uniform float uTorchLightZ;
+// 1.0 = suppress torch bloom inside uPlayerBloomUvMin/Max (same UV space as sampleUv).
+uniform float uPlayerBloomUvBoundsActive;
+uniform vec2 uPlayerBloomUvMin;
+uniform vec2 uPlayerBloomUvMax;
+uniform vec2 uUvBaseOffset;
+uniform vec2 uUvScale;
+uniform vec2 uUvSubpixelOffset;
 
 const float SHADOW_FLOOR_DAY = 0.20;
 const float SHADOW_FLOOR_NIGHT = 0.34;
@@ -199,40 +191,29 @@ float placedTorchShadow(vec2 from, vec2 to) {
 // Bloom: elliptical falloff in 16px-tile space; center shifted slightly below flame tip on screen.
 float torchBloomGain(vec2 worldPos, vec2 tip) {
   vec2 dPx = (worldPos - tip) * 16.0;
-  // hw: horizontal semi-axis in dPx space (+1 here = +2 px total bloom width).
-  const float hw = 2.55;
-  const float hh = 4.6;
+  // hw: horizontal semi-axis in dPx space (+1 here ≈ +2 px total bloom width).
+  const float hw = 4.05;
+  const float hh = 6.1;
   float g = max(0.0, 1.0 - length(vec2(dPx.x / hw, dPx.y / hh)));
   return g * g;
 }
 
-vec3 tangentNormalFromMap(vec4 albedo, vec2 uv) {
-  vec4 nm = texture(uNormalMap, uv);
-  if (albedo.a < 0.04 || nm.a < 0.04) {
-    return vec3(0.0, 0.0, 1.0);
-  }
-  return normalize(vec3(nm.xy * 2.0 - 1.0, nm.z * 2.0 - 1.0));
-}
-
 void main() {
-  // Scale normal-map UVs about center (debug: slight size mismatch vs albedo).
-  vec2 uvScaled =
-    (vTextureCoord - vec2(0.5)) * uNormalUvScale + vec2(0.5);
-  // Positive offset = shift the normal map layer right / down on screen (matches slider labels).
-  vec2 uvNormal = uvScaled - vec2(
-    uNormalOffsetPx.x / uInputSize.x,
-    uNormalOffsetPx.y / uInputSize.y
+  vec2 sampleUv = clamp(
+    vTextureCoord * uUvScale + uUvBaseOffset + uUvSubpixelOffset,
+    vec2(0.0),
+    vec2(1.0)
   );
-  vec4 albedo = texture(uTexture, vTextureCoord);
-  vec3 tN = vec3(0.0, 0.0, 1.0);
-  if (uNormalStrength > 0.001) {
-    tN = tangentNormalFromMap(albedo, uvNormal);
-  }
+  vec4 albedo = texture(uTexture, sampleUv);
 
-  vec2 screenPos = vTextureCoord * uInputSize.xy;
+  // View pixels (0,0) = top-left of the visible viewport. Must use the same UV crop as
+  // sampleUv / uPlayerBloomMask; vTextureCoord * uInputSize spans the overscanned RT and
+  // shifts world-space torch bloom vs the mask + albedo (bloom reads on top of sprites).
+  vec2 padPx = uUvBaseOffset * uInputSize.xy;
+  vec2 viewPx = sampleUv * uInputSize.xy - padPx;
   vec2 worldPos;
-  worldPos.x = uCameraWorld.x + screenPos.x / uBlockPixels;
-  worldPos.y = uCameraWorld.y - screenPos.y / uBlockPixels;
+  worldPos.x = uCameraWorld.x + viewPx.x / uBlockPixels;
+  worldPos.y = uCameraWorld.y - viewPx.y / uBlockPixels;
 
   float skyTerm = 1.0;
   float blockTerm = 0.0;
@@ -279,17 +260,8 @@ void main() {
 
   float skyExposure = max(smoothedSky, mix(0.03, 0.10, nightPenumbra));
 
-  vec3 Lsun = normalize(vec3(uSunDir.x, -uSunDir.y, uSunLightZ));
-  vec3 Lmoon = normalize(vec3(uMoonDir.x, -uMoonDir.y, uMoonLightZ));
-  const vec3 tFlat = vec3(0.0, 0.0, 1.0);
-  float ndlSun = max(0.0, dot(tN, Lsun));
-  float ndlMoon = max(0.0, dot(tN, Lmoon));
-  float ndlSunFlat = max(0.0, dot(tFlat, Lsun));
-  float ndlMoonFlat = max(0.0, dot(tFlat, Lmoon));
-  float sunMul = mix(1.0, ndlSun / max(ndlSunFlat, 1e-4), uNormalStrength);
-  float moonMul = mix(1.0, ndlMoon / max(ndlMoonFlat, 1e-4), uNormalStrength);
-  vec3 sunContrib = vec3(directSun * sunMul) * uSunTint;
-  vec3 moonContrib = vec3(directMoon * moonMul) * uMoonTint;
+  vec3 sunContrib = vec3(directSun) * uSunTint;
+  vec3 moonContrib = vec3(directMoon) * uMoonTint;
   vec3 light = vec3(uAmbient * skyExposure) * uAmbientTint * uSkyLightTint + sunContrib + moonContrib;
 
   float indirectSky =
@@ -308,11 +280,7 @@ void main() {
       float atten = max(0.0, 1.0 - n);
       atten = atten * atten * 0.7 + atten * 0.3;
       // Same as placed torches: distance × ray-marched visibility (not a screen-space overlay).
-      vec3 Lheld = normalize(vec3(toTorch.x, -toTorch.y, uTorchLightZ));
-      float ndlHeld = max(0.0, dot(tN, Lheld));
-      float ndlHeldFlat = max(0.0, dot(tFlat, Lheld));
-      float heldMul = mix(1.0, ndlHeld / max(ndlHeldFlat, 1e-4), uNormalStrength);
-      float heldTorchLight = uTorchIntensity * atten * heldTorchVis * heldMul;
+      float heldTorchLight = uTorchIntensity * atten * heldTorchVis;
       light += uTorchColor * clamp(heldTorchLight, 0.0, 1.0);
     }
   }
@@ -323,19 +291,16 @@ void main() {
   float placedTorchAmt = 0.0;
   for (int i = 0; i < MAX_PLACED_TORCHES; i++) {
     if (i >= uPlacedTorchCount) break;
-    vec2 tp = uPlacedTorchPositions[i].xy;
+    vec4 placed = uPlacedTorchPositions[i];
+    vec2 tp = placed.xy;
+    float placedStrength = max(0.0, placed.z);
     float dist = length(tp - worldPos);
     if (dist < PLACED_TORCH_RADIUS) {
       float n = dist / PLACED_TORCH_RADIUS;
       float atten = max(0.0, 1.0 - n);
       atten = atten * atten * 0.7 + atten * 0.3;
       float shadow = placedTorchShadow(worldPos, tp);
-      vec2 toPl = tp - worldPos;
-      vec3 Lpl = normalize(vec3(toPl.x, -toPl.y, uTorchLightZ));
-      float ndlPl = max(0.0, dot(tN, Lpl));
-      float ndlPlFlat = max(0.0, dot(tFlat, Lpl));
-      float plMul = mix(1.0, ndlPl / max(ndlPlFlat, 1e-4), uNormalStrength);
-      placedTorchAmt = max(placedTorchAmt, 0.75 * atten * shadow * plMul);
+      placedTorchAmt = max(placedTorchAmt, 0.75 * atten * shadow * placedStrength);
     }
   }
   light += vec3(1.0, 0.85, 0.55) * placedTorchAmt;
@@ -350,12 +315,17 @@ void main() {
     bloom += uTorchColor * clamp(heldBloom, 0.0, 1.0);
   }
 
+  // Match held-torch bloom: scale by ray-marched visibility so bloom doesn't sit on top of
+  // occluders the same way lighting already does. (Entities use uPlayerBloomMask below.)
   float placedBloomAmt = 0.0;
   for (int i = 0; i < MAX_PLACED_TORCHES; i++) {
     if (i >= uPlacedTorchCount) break;
-    vec2 tp = uPlacedTorchPositions[i].xy;
+    vec4 placed = uPlacedTorchPositions[i];
+    vec2 tp = placed.xy;
+    float placedStrength = max(0.0, placed.z);
     float g = torchBloomGain(worldPos, tp + bloomTipShift);
-    placedBloomAmt = max(placedBloomAmt, 0.42 * g);
+    float shadow = placedTorchShadow(worldPos, tp);
+    placedBloomAmt = max(placedBloomAmt, 0.42 * g * shadow * placedStrength);
   }
   bloom += vec3(1.0, 0.85, 0.50) * placedBloomAmt;
 
@@ -363,14 +333,31 @@ void main() {
   // behaviour. Only the bloom contribution is allowed to exceed 1.0, giving
   // ACES something to compress without over-brightening the base scene.
   light = clamp(light, 0.0, 1.0);
-  float bloomPlayerOccl = mix(1.0, 1.0 - texture(uPlayerBloomMask, vTextureCoord).a, uBloomMaskActive);
-  vec3 hdrColor = albedo.rgb * light + bloom * albedo.a * uBloomEnabled * bloomPlayerOccl;
-
-  if (uDebugNormals > 0.5) {
-    vec4 nmDbg = texture(uNormalMap, uvNormal);
-    finalColor = vec4(nmDbg.rgb, 1.0);
-    return;
+  // Raw mask.a misses soft sprite edges (hair); smoothstep pulls mids in so torch bloom
+  // doesn't read as a screen-space disc on top of the body. Neighbor max tolerates tiny
+  // filter/texture-coordinate mismatch between uTexture and uPlayerBloomMask.
+  vec2 dUv = vec2(1.0 / max(uInputSize.x, 1.0), 1.0 / max(uInputSize.y, 1.0)) * 1.25;
+  float bloomMaskA = max(
+    max(
+      max(texture(uPlayerBloomMask, sampleUv).a, texture(uPlayerBloomMask, sampleUv + vec2(dUv.x, 0.0)).a),
+      texture(uPlayerBloomMask, sampleUv - vec2(dUv.x, 0.0)).a
+    ),
+    max(texture(uPlayerBloomMask, sampleUv + vec2(0.0, dUv.y)).a, texture(uPlayerBloomMask, sampleUv - vec2(0.0, dUv.y)).a)
+  );
+  float bloomPlayerOccl = mix(
+    1.0,
+    1.0 - smoothstep(0.06, 0.52, bloomMaskA),
+    uBloomMaskActive
+  );
+  if (uPlayerBloomUvBoundsActive > 0.5) {
+    float ax = smoothstep(uPlayerBloomUvMin.x - 0.0014, uPlayerBloomUvMin.x + 0.0014, sampleUv.x);
+    float bx = 1.0 - smoothstep(uPlayerBloomUvMax.x - 0.0014, uPlayerBloomUvMax.x + 0.0014, sampleUv.x);
+    float ay = smoothstep(uPlayerBloomUvMin.y - 0.0014, uPlayerBloomUvMin.y + 0.0014, sampleUv.y);
+    float by = 1.0 - smoothstep(uPlayerBloomUvMax.y - 0.0014, uPlayerBloomUvMax.y + 0.0014, sampleUv.y);
+    float insideUv = ax * bx * ay * by;
+    bloomPlayerOccl *= (1.0 - 0.998 * insideUv);
   }
+  vec3 hdrColor = albedo.rgb * light + bloom * albedo.a * uBloomEnabled * bloomPlayerOccl;
 
   vec3 tonemapped;
   if (uTonemapper == 1) {

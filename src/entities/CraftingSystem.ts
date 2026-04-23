@@ -5,7 +5,7 @@ import {
   RECIPE_STATION_FURNACE,
   RECIPE_STATION_STONECUTTER,
 } from "../core/constants";
-import type { ItemId } from "../core/itemDefinition";
+import type { ItemId, ItemStack } from "../core/itemDefinition";
 import type { CraftResult, IngredientSlot, RecipeDefinition } from "../core/recipe";
 import type { PlayerInventory } from "../items/PlayerInventory";
 import type { ItemRegistry } from "../items/ItemRegistry";
@@ -279,5 +279,32 @@ export class CraftingSystem {
       return 0;
     }
     return this.maxBatchesLimitedByIngredients(recipe, inventory);
+  }
+
+  /**
+   * Returns stacks that did not fit when refunding cancelled furnace queue batches (mirrors enqueue consumption).
+   */
+  refundFurnaceBatchesToInventory(
+    recipe: RecipeDefinition,
+    batches: number,
+    inventory: PlayerInventory,
+  ): ItemStack[] {
+    const overflow: ItemStack[] = [];
+    if (batches <= 0) {
+      return overflow;
+    }
+    for (const ing of recipe.ingredients) {
+      const ids = this.resolveIngredientIds(ing);
+      if (ids.length === 0) {
+        continue;
+      }
+      const preferId = ids[0]!;
+      const n = ing.count * batches;
+      const rest = inventory.addItemStack({ itemId: preferId, count: n });
+      if (rest !== null && rest.count > 0) {
+        overflow.push(rest);
+      }
+    }
+    return overflow;
   }
 }

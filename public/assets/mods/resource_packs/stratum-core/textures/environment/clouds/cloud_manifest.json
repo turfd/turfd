@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "generatedAt": "2026-04-22T17:16:09.352Z",
+  "bands": {
+    "top": [
+      {
+        "imagePath": "environment/clouds/top/top_01.png",
+        "rects": []
+      },
+      {
+        "imagePath": "environment/clouds/top/top_02.png",
+        "rects": []
+      }
+    ],
+    "mid": [
+      {
+        "imagePath": "environment/clouds/mid/mid_01.png",
+        "rects": []
+      }
+    ],
+    "bottom": [
+      {
+        "imagePath": "environment/clouds/bottom/bottom_01.png",
+        "rects": []
+      },
+      {
+        "imagePath": "environment/clouds/bottom/bottom_02.png",
+        "rects": []
+      },
+      {
+        "imagePath": "environment/clouds/bottom/bottom_03.png",
+        "rects": []
+      },
+      {
+        "imagePath": "environment/clouds/bottom/bottom_04.png",
+        "rects": []
+      }
+    ]
+  }
+}

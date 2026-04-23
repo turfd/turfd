@@ -11,6 +11,10 @@ export class NullAuthProvider implements IAuthProvider {
     return null;
   }
 
+  ensureAuthHydrated(): Promise<void> {
+    return Promise.resolve();
+  }
+
   getDisplayLabel(): string {
     return getOrCreateLocalGuestIdentity().displayName;
   }

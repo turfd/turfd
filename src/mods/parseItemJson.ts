@@ -20,6 +20,10 @@ export type ItemModDefinition = {
   readonly tags?: readonly string[];
   /** HP restored when eaten (right-click in world). */
   readonly eatRestoreHealth?: number;
+  /**
+   * When set, `eatRestoreHealth` is **temporary** HP (expires after this many seconds).
+   */
+  readonly eatTemporaryDurationSec?: number;
   readonly inventoryTooltip?: string;
 };
 
@@ -45,6 +49,7 @@ const stratumItemComponentsSchema = z
     "stratum:tags": z.array(z.string()).optional(),
     "stratum:numeric_id": z.number().int().min(1).max(65535),
     "stratum:eat_restore_health": z.number().int().min(1).optional(),
+    "stratum:eat_temporary_duration_sec": z.number().positive().optional(),
     "stratum:inventory_tooltip": z.string().min(1).optional(),
   })
   .strict();
@@ -82,6 +87,7 @@ export function parseItemJson(raw: unknown): ItemModDefinition {
     fuelBurnSeconds: c["stratum:fuel"]?.burn_seconds,
     tags: c["stratum:tags"],
     eatRestoreHealth: c["stratum:eat_restore_health"],
+    eatTemporaryDurationSec: c["stratum:eat_temporary_duration_sec"],
     inventoryTooltip: c["stratum:inventory_tooltip"],
   };
 }

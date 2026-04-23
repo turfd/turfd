@@ -1,6 +1,7 @@
 /**
  * Block break progress: Minecraft-style destroy-stage overlay from
  * `textures/GUI/destroy_stage/destroy_stage_0.png` … `_9.png`, with procedural fallback if any stage fails to load.
+ * Also draws a passive crosshair outline on the targeted block when not mining, and a duller outline in back-wall mode.
  */
 import { Assets, Container, Graphics, Sprite, Texture } from "pixi.js";
 import { BLOCK_SIZE } from "../core/constants";
@@ -10,6 +11,10 @@ import type { RemotePlayer } from "../world/entities/RemotePlayer";
 import type { RenderPipeline } from "./RenderPipeline";
 
 const DESTROY_STAGE_COUNT = 10;
+
+/** Mining / passive outline: bright (foreground) vs darker (back-wall edit mode). */
+const OUTLINE_BRIGHT = 0xffffff;
+const OUTLINE_BG_MODE = 0x3d4a58;
 
 function destroyStageUrls(): readonly string[] {
   return Array.from({ length: DESTROY_STAGE_COUNT }, (_, i) =>
@@ -28,12 +33,18 @@ export class BreakOverlay {
   private readonly localRoot: Container;
   private readonly localSprite: Sprite;
   private readonly localFallback: Graphics;
+  private readonly localPassiveOutline: Graphics;
   private textures: Texture[] | null = null;
   private readonly remoteByPeer = new Map<string, BreakVisual>();
 
   constructor(pipeline: RenderPipeline) {
     this.remoteLayer = new Container();
     pipeline.layerEntities.addChild(this.remoteLayer);
+
+    this.localPassiveOutline = new Graphics();
+    this.localPassiveOutline.visible = false;
+    this.localPassiveOutline.blendMode = "normal";
+    pipeline.layerEntities.addChild(this.localPassiveOutline);
 
     this.localRoot = new Container();
     this.localRoot.visible = false;
@@ -77,20 +88,48 @@ export class BreakOverlay {
   }
 
   sync(state: PlayerState): void {
-    const t = state.breakTarget;
-    if (t === null || state.breakProgress <= 0) {
-      this.localRoot.visible = false;
+    const dullOutline = state.backgroundEditMode;
+    const strokeColor = dullOutline ? OUTLINE_BG_MODE : OUTLINE_BRIGHT;
+
+    const mining =
+      state.breakTarget !== null && state.breakProgress < 1;
+
+    if (mining && state.breakTarget !== null) {
+      this.localPassiveOutline.visible = false;
+      this.localPassiveOutline.clear();
+      const t = state.breakTarget;
+      this.paintBreak(
+        this.localRoot,
+        this.localSprite,
+        this.localFallback,
+        t.wx,
+        t.wy,
+        state.breakProgress,
+        strokeColor,
+      );
       return;
     }
 
-    this.paintBreak(
-      this.localRoot,
-      this.localSprite,
-      this.localFallback,
-      t.wx,
-      t.wy,
-      state.breakProgress,
-    );
+    this.localRoot.visible = false;
+    const aim = state.aimOutlineTarget;
+    if (aim !== null) {
+      const px = aim.wx * BLOCK_SIZE;
+      const py = -(aim.wy + 1) * BLOCK_SIZE;
+      this.localPassiveOutline.clear();
+      this.localPassiveOutline.position.set(px, py);
+      const w = BLOCK_SIZE;
+      this.localPassiveOutline.rect(0, 0, w, w);
+      this.localPassiveOutline.stroke({
+        width: 2,
+        color: strokeColor,
+        alpha: dullOutline ? 0.98 : 1,
+      });
+      this.localPassiveOutline.visible = true;
+      return;
+    }
+
+    this.localPassiveOutline.visible = false;
+    this.localPassiveOutline.clear();
   }
 
   /** Renders other players’ mining cracks (host + clients). */
@@ -98,7 +137,7 @@ export class BreakOverlay {
     const seen = new Set<string>();
     for (const [peerId, rp] of remotes) {
       const bm = rp.getBreakMining();
-      if (bm === null || bm.progress <= 0) {
+      if (bm === null || bm.progress < 0 || bm.progress >= 1) {
         continue;
       }
       seen.add(peerId);
@@ -123,6 +162,7 @@ export class BreakOverlay {
         bm.wx,
         bm.wy,
         bm.progress,
+        OUTLINE_BRIGHT,
       );
     }
     for (const id of this.remoteByPeer.keys()) {
@@ -145,6 +185,8 @@ export class BreakOverlay {
     this.remoteLayer.destroy({ children: true });
     this.localRoot.parent?.removeChild(this.localRoot);
     this.localRoot.destroy({ children: true });
+    this.localPassiveOutline.parent?.removeChild(this.localPassiveOutline);
+    this.localPassiveOutline.destroy();
   }
 
   private paintBreak(
@@ -154,6 +196,7 @@ export class BreakOverlay {
     wx: number,
     wy: number,
     progress: number,
+    strokeRgb: number,
   ): void {
     root.visible = true;
     root.position.set(wx * BLOCK_SIZE, -(wy + 1) * BLOCK_SIZE);
@@ -172,21 +215,22 @@ export class BreakOverlay {
       if (sprite.texture !== tex) {
         sprite.texture = tex;
       }
+      sprite.tint = strokeRgb;
     } else {
       sprite.visible = false;
       fallback.visible = true;
       fallback.clear();
-      drawProceduralFallback(fallback, progress);
+      drawProceduralFallback(fallback, progress, strokeRgb);
     }
   }
 }
 
-function drawProceduralFallback(g: Graphics, p: number): void {
+function drawProceduralFallback(g: Graphics, p: number, strokeRgb: number): void {
   const w = BLOCK_SIZE;
   g.rect(0, 0, w, w);
   g.fill({ color: 0x000000, alpha: p * 0.7 });
   g.rect(0, 0, w, w);
-  g.stroke({ width: 2, color: 0xffffff, alpha: 1 });
+  g.stroke({ width: 2, color: strokeRgb, alpha: 1 });
   const pad = 3;
   const span = (w - pad * 2) * p;
   g.moveTo(pad, pad);

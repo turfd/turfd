@@ -33,9 +33,20 @@ import {
   type TileWindSway,
   type WaterRippleSample,
 } from "./TileDrawBatch";
+import {
+  buildLeafDecorationMesh,
+  updateLeafDecorationMesh,
+} from "./LeafDecorationBatch";
 import { chunkPerfLog, chunkPerfNow } from "../../debug/chunkPerf";
 
-type ChunkMeshes = { bg: Mesh; fgShadow: Mesh; fg: Mesh; fgWater: Mesh };
+type ChunkMeshes = {
+  bg: Mesh;
+  fgShadow: Mesh;
+  fg: Mesh;
+  /** Bushy leaf decoration (stacked overlays + edge puffs); rendered after {@link fg}. */
+  leafDeco: Mesh;
+  fgWater: Mesh;
+};
 
 export type WaterRippleBodySample = {
   id: string;
@@ -117,29 +128,39 @@ export class ChunkRenderer {
       if (triple === undefined) {
         const bg = buildBackgroundMesh(chunk, this.registry, this.atlas);
         const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler);
+        const meshOpts = this.tileMeshOpts();
         const {
           mesh: fg,
           waterMesh: fgWater,
           windSways,
           furnaceFires,
           waterSurfaces,
-        } = buildMesh(chunk, this.registry, this.atlas, this.tileMeshOpts());
+        } = buildMesh(chunk, this.registry, this.atlas, meshOpts);
+        const leafDeco = buildLeafDecorationMesh(
+          chunk,
+          this.registry,
+          this.atlas,
+          { sampleBlockId: meshOpts.sampleBlockId },
+        );
         this.syncWindyFg(fg, windSways);
         this.syncFurnaceFg(fg, furnaceFires);
         this.syncWateryFg(fgWater, waterSurfaces);
         this.applyChunkMeshCulling(bg);
         this.applyChunkMeshCulling(fgShadow);
         this.applyChunkMeshCulling(fg);
+        this.applyChunkMeshCulling(leafDeco);
         this.applyChunkMeshCulling(fgWater);
         this.positionChunkRoot(bg, chunk.coord);
         this.positionChunkRoot(fgShadow, chunk.coord);
         this.positionChunkRoot(fg, chunk.coord);
+        this.positionChunkRoot(leafDeco, chunk.coord);
         this.positionChunkRoot(fgWater, chunk.coord);
         layer.addChild(bg);
         layer.addChild(fgShadow);
         layer.addChild(fg);
+        layer.addChild(leafDeco);
         waterLayer.addChild(fgWater);
-        this.meshes.set(key, { bg, fgShadow, fg, fgWater });
+        this.meshes.set(key, { bg, fgShadow, fg, leafDeco, fgWater });
         chunk.dirty = false;
         chunk.renderDirty = false;
         added += 1;
@@ -150,13 +171,21 @@ export class ChunkRenderer {
         updatesThisFrame += 1;
         updateBackgroundMesh(triple.bg, chunk, this.registry, this.atlas);
         updateFgShadowMesh(triple.fgShadow, chunk, this.fgShadowSampler);
+        const meshOpts = this.tileMeshOpts();
         const { windSways, furnaceFires, waterSurfaces } = updateMesh(
           triple.fg,
           triple.fgWater,
           chunk,
           this.registry,
           this.atlas,
-          this.tileMeshOpts(),
+          meshOpts,
+        );
+        updateLeafDecorationMesh(
+          triple.leafDeco,
+          chunk,
+          this.registry,
+          this.atlas,
+          { sampleBlockId: meshOpts.sampleBlockId },
         );
         this.syncWindyFg(triple.fg, windSways);
         this.syncFurnaceFg(triple.fg, furnaceFires);
@@ -164,6 +193,7 @@ export class ChunkRenderer {
         this.positionChunkRoot(triple.bg, chunk.coord);
         this.positionChunkRoot(triple.fgShadow, chunk.coord);
         this.positionChunkRoot(triple.fg, chunk.coord);
+        this.positionChunkRoot(triple.leafDeco, chunk.coord);
         this.positionChunkRoot(triple.fgWater, chunk.coord);
         chunk.dirty = false;
         chunk.renderDirty = false;
@@ -175,17 +205,19 @@ export class ChunkRenderer {
     if (added > 0 || seenCount !== this.meshes.size) {
       for (const key of this.meshes.keys()) {
         if (!seen.has(key)) {
-          const { bg, fgShadow, fg, fgWater } = this.meshes.get(key)!;
+          const { bg, fgShadow, fg, leafDeco, fgWater } = this.meshes.get(key)!;
           this._windyForegroundMeshes.delete(fg);
           this._furnaceFireForegroundMeshes.delete(fg);
           this._wateryForegroundMeshes.delete(fgWater);
           layer.removeChild(bg);
           layer.removeChild(fgShadow);
           layer.removeChild(fg);
+          layer.removeChild(leafDeco);
           waterLayer.removeChild(fgWater);
           bg.destroy();
           fgShadow.destroy();
           fg.destroy();
+          leafDeco.destroy();
           fgWater.destroy();
           this.meshes.delete(key);
           removed += 1;
@@ -294,14 +326,16 @@ export class ChunkRenderer {
     this._waterRippleSamples.length = 0;
     const layer = this.pipeline.layerTilesBack;
     const waterLayer = this.pipeline.layerWaterOverEntities;
-    for (const { bg, fgShadow, fg, fgWater } of this.meshes.values()) {
+    for (const { bg, fgShadow, fg, leafDeco, fgWater } of this.meshes.values()) {
       layer.removeChild(bg);
       layer.removeChild(fgShadow);
       layer.removeChild(fg);
+      layer.removeChild(leafDeco);
       waterLayer.removeChild(fgWater);
       bg.destroy();
       fgShadow.destroy();
       fg.destroy();
+      leafDeco.destroy();
       fgWater.destroy();
     }
     this.meshes.clear();

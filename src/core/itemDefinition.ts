@@ -63,6 +63,13 @@ export interface ItemDefinition {
    */
   readonly eatRestoreHealth?: number;
 
+  /**
+   * When set, {@link eatRestoreHealth} is applied as **temporary** HP (not permanent max health).
+   * Temporary HP is shown as pink/pulsing hearts and expires after this many seconds.
+   * Omitted: `eatRestoreHealth` adds permanent HP (cooked food) as before.
+   */
+  readonly eatTemporaryDurationSec?: number;
+
   /** Optional second line under the display name in inventory slot tooltips. */
   readonly inventoryTooltip?: string;
 

@@ -87,6 +87,7 @@ import {
 
 export type { HostArrowStrikeResult } from "../entities/ArrowProjectile";
 import { DroppedItem } from "../entities/DroppedItem";
+import { spawnQueuedSmeltInputDrops } from "./furnace/furnaceQueueRefund";
 import {
   createEmptyFurnaceTileState,
   furnaceCellKey,
@@ -235,6 +236,7 @@ export class World {
         vx: number;
         vy: number;
         damage: number;
+        pickupDelayMs: number;
       }) => void)
     | null = null;
   /** When set (multiplayer host), spawned arrows use net ids `a{id}` and invoke this hook. */
@@ -280,6 +282,8 @@ export class World {
 
   /** Required to (de)serialize chest/furnace tiles with stable item keys; set before {@link init}. */
   private _itemRegistry: ItemRegistry | null = null;
+  /** Used to refund queued smelt inputs when a furnace breaks; set from {@link Game} with {@link setItemRegistry}. */
+  private _smeltingRegistryForQueueRefund: SmeltingRegistry | null = null;
 
   private _waterSimTick = 0;
   private _waterBlockId: number | null = null;
@@ -377,6 +381,11 @@ export class World {
     this._itemRegistry = registry;
   }
 
+  /** Enables queued-ingredient drops when the furnace block is destroyed (solo/host). */
+  setSmeltingRegistryForQueueRefund(r: SmeltingRegistry): void {
+    this._smeltingRegistryForQueueRefund = r;
+  }
+
   /** Multiplayer client: load missing chunks from host instead of {@link WorldGenerator}. */
   setAuthoritativeChunkFetcher(
     fetch: ((cx: number, cy: number) => Promise<void>) | null,
@@ -396,6 +405,7 @@ export class World {
           vx: number;
           vy: number;
           damage: number;
+          pickupDelayMs: number;
         }) => void)
       | null,
   ): void {
@@ -429,11 +439,14 @@ export class World {
     vx: number;
     vy: number;
     damage: number;
+    pickupDelayMs?: number;
   }): void {
     const id = `n${p.netId}`;
     if (this._droppedItems.has(id)) {
       return;
     }
+    const delayMs = p.pickupDelayMs ?? 0;
+    const pickupDelaySec = Math.min(delayMs, 65535) / 1000;
     const drop = new DroppedItem(
       id,
       p.itemId as ItemId,
@@ -443,6 +456,7 @@ export class World {
       p.vx,
       p.vy,
       p.damage,
+      pickupDelaySec,
     );
     this._droppedItems.set(id, drop);
   }
@@ -976,7 +990,12 @@ export class World {
     vx = 0,
     vy = 0,
     damage = 0,
+    pickupDelaySec = 0,
   ): void {
+    const pickupDelayMs = Math.min(
+      65535,
+      Math.max(0, Math.round(pickupDelaySec * 1000)),
+    );
     let id: string;
     if (this._netDropReplicate !== null) {
       const netId = this._nextNetDropId++;
@@ -990,11 +1009,22 @@ export class World {
         vx,
         vy,
         damage,
+        pickupDelayMs,
       });
     } else {
       id = `drop-${++this._dropSeq}`;
     }
-    const drop = new DroppedItem(id, itemId, count, x, y, vx, vy, damage);
+    const drop = new DroppedItem(
+      id,
+      itemId,
+      count,
+      x,
+      y,
+      vx,
+      vy,
+      damage,
+      pickupDelaySec,
+    );
     this._droppedItems.set(id, drop);
   }
 
@@ -1005,7 +1035,10 @@ export class World {
   updateDroppedItems(
     dt: number,
     playerPos: { x: number; y: number },
-    inventory: { addItemStack(stack: ItemStack): ItemStack | null },
+    inventory: {
+      addItemStack(stack: ItemStack): ItemStack | null;
+      simulateAddItemStack(stack: ItemStack): ItemStack | null;
+    },
     onItemPickedUp?: () => void,
     /** When set, replicated drops (`n*`) request host pickup instead of local inventory. */
     networkPickupRequest?: (netId: number) => void,
@@ -1015,7 +1048,22 @@ export class World {
     hostReplicatedPickupDespawn?: (netId: number) => void,
   ): void {
     for (const [id, item] of [...this._droppedItems.entries()]) {
-      const collected = item.update(dt, this, playerPos, this._dropSolidScratch);
+      const pendingStack: ItemStack = {
+        itemId: item.itemId,
+        count: item.count,
+        ...(item.damage > 0 ? { damage: item.damage } : {}),
+      };
+      const simulatedOverflow = inventory.simulateAddItemStack(pendingStack);
+      const canAbsorbAny =
+        simulatedOverflow === null ||
+        simulatedOverflow.count < pendingStack.count;
+      const collected = item.update(
+        dt,
+        this,
+        playerPos,
+        this._dropSolidScratch,
+        canAbsorbAny,
+      );
       if (!collected) {
         continue;
       }
@@ -2653,13 +2701,18 @@ export class World {
   }
 
   /**
-   * Spawn drops for furnace buffer (fuel + 10 output slots). Queued smelt jobs are not refunded
-   * (ingredients were already consumed at enqueue).
+   * Spawn drops for furnace buffer (fuel + 10 output slots) and any queued smelt inputs
+   * (when smelting registry was wired from {@link Game}).
    */
   spawnFurnaceItemDropsAt(wx: number, wy: number): void {
     const st = this._furnaceTiles.get(furnaceCellKey(wx, wy));
     if (st === undefined) {
       return;
+    }
+    const sm = this._smeltingRegistryForQueueRefund;
+    const ir = this._itemRegistry;
+    if (sm !== null && ir !== null && st.queue.length > 0) {
+      spawnQueuedSmeltInputDrops(this, wx, wy, st.queue, sm, ir);
     }
     const px = (wx + 0.5) * BLOCK_SIZE;
     const py = (wy + 0.5) * BLOCK_SIZE;

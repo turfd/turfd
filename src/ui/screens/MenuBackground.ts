@@ -3,13 +3,13 @@
  *
  * Layers (back to front):
  *  1. CSS canvas — sky gradient (+ sun)
- *  2. PixiJS — blurred procedural parallax tile strip, then lit foreground terrain + composite
+ *  2. PixiJS — procedural cloud filter (under parallax), blurred parallax tile strip, lit terrain + composite
  *  3. DOM overlay (MainMenu)
  *
  * Zoom matches the game's adaptive formula (~20 blocks on the shorter viewport edge).
  * Lighting uses the full composite shader (OcclusionTexture + IndirectLightTexture).
  */
-import { Application, Container, RenderTexture, Texture } from "pixi.js";
+import { Application, Container, RenderTexture } from "pixi.js";
 import {
   BACKGROUND_PARALLAX_X,
   BLOCK_SIZE,
@@ -43,11 +43,18 @@ import { WorldGenerator } from "../../world/gen/WorldGenerator";
 import type { Chunk } from "../../world/chunk/Chunk";
 import { chunkKey, chunkToWorldOrigin } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
+import type { WorldLightingParams } from "../../world/lighting/WorldTime";
 import {
+  MENU_SKY_BOTTOM,
   MENU_SKY_FALLBACK_GRADIENT,
+  MENU_SKY_HORIZON,
+  MENU_SKY_TOP,
   paintMenuSky,
   paintMenuSkyToFit,
 } from "./menuSkyPaint";
+import { SpriteCloudLayer } from "../../renderer/sky/SpriteCloudLayer";
+import { TonemapFilter } from "../../renderer/lighting/TonemapFilter";
+import { getVideoPrefs } from "../settings/videoPrefs";
 
 // ---------------------------------------------------------------------------
 // Layout / world constants
@@ -66,6 +73,11 @@ const MENU_VIEW_OFFSET_X_BLOCKS = 100;
  */
 const DEFAULT_MIN_ZOOM = 2;
 
+function tonemapperModeFromPrefs(): 0 | 1 | 2 | 3 {
+  const tm = getVideoPrefs().tonemapper;
+  return tm === "aces" ? 1 : tm === "agx" ? 2 : tm === "reinhard" ? 3 : 0;
+}
+
 function computeZoom(
   screenW: number,
   screenH: number,
@@ -73,16 +85,21 @@ function computeZoom(
   minZoom: number,
 ): number {
   const minDim = Math.min(screenW, screenH);
-  return Math.max(
+  const rawZoom = Math.max(
     minZoom,
     minDim / (maxVisibleBlocksOnMinAxis * BLOCK_SIZE),
   );
+  // Keep block size on an integer pixel grid for stable nearest-neighbor scrolling.
+  const snappedPpb = Math.max(1, Math.round(rawZoom * BLOCK_SIZE));
+  return snappedPpb / BLOCK_SIZE;
 }
 
 const PAN_SPEED_X       = 0.040;  // rad/s
 const PAN_RANGE_X_BLOCKS = 16;    // ±blocks
 const PAN_SPEED_Y       = 0.022;  // rad/s
 const PAN_RANGE_Y_PX    = 24;     // ±screen-pixels (vertical bob)
+const MENU_CLOUD_ATTACH_X = 0.035;
+const MENU_CLOUD_ATTACH_Y = 0.028;
 
 /** Intro: terrain + parallax start this far down-screen (fraction of viewport height) and ease up. */
 const MENU_INTRO_SLIDE_MS = 920;
@@ -101,19 +118,33 @@ function easeOutCubic(t: number): number {
 
 /** Daytime lighting params passed to the composite shader. */
 const DAYTIME_LIGHTING = {
-  sunDir:       [0.45,  0.89]          as [number, number],
   ambient:      1.0,
   ambientTint:  [1.0, 1.0, 1.0]       as [number, number, number],
   skyLightTint: [1.0, 0.98, 0.95]     as [number, number, number],
   sunIntensity: 0.82,
   sunTint:      [1.0, 0.98, 0.92]     as [number, number, number],
-  moonDir:      [-0.45, -0.89]        as [number, number],
   moonIntensity: 0.0,
   moonTint:     [0.6, 0.7, 1.0]       as [number, number, number],
   heldTorch:    null,
-  placedTorches: [] as [number, number][],
+  placedTorches: [] as [number, number, number?][],
   placedTorchCount: 0,
 } as const;
+
+const MENU_DAYTIME_WORLD_LIGHTING: WorldLightingParams = {
+  sunDir: [0.45, 0.89],
+  moonDir: [0, 0],
+  sunIntensity: DAYTIME_LIGHTING.sunIntensity,
+  moonIntensity: 0,
+  ambient: DAYTIME_LIGHTING.ambient,
+  ambientTint: [1, 1, 1],
+  sunTint: [1, 0.98, 0.92],
+  sky: {
+    top: MENU_SKY_TOP,
+    horizon: MENU_SKY_HORIZON,
+    bottom: MENU_SKY_BOTTOM,
+  },
+  skyLightTint: [1, 0.98, 0.95],
+};
 
 // ---------------------------------------------------------------------------
 // Minimal World adapter
@@ -323,6 +354,8 @@ export class MenuBackground {
   private skyCtx: CanvasRenderingContext2D | null = null;
 
   private parallaxStrip: ParallaxTileStripRenderer | null = null;
+  private parallaxTonemap: TonemapFilter | null = null;
+  private spriteCloud: SpriteCloudLayer | null = null;
   private atlasLoader: AtlasLoader | null = null;
   private menuSeed = 0;
 
@@ -546,6 +579,9 @@ export class MenuBackground {
       atlas,
       chestBlockId,
     });
+    const parallaxTonemap = new TonemapFilter();
+    this.parallaxTonemap = parallaxTonemap;
+    parallaxStrip.displayRoot.filters = [parallaxTonemap.filter];
     this.parallaxStrip = parallaxStrip;
 
     const menuGenMap = new Map<string, Chunk>();
@@ -603,13 +639,20 @@ export class MenuBackground {
       occlusion,
       indirect,
       emptyBloomMaskSource(),
-      Texture.EMPTY.source,
     );
     composite.resize(screenW, screenH);
     this.occlusion = occlusion;
     this.indirect  = indirect;
     this.composite = composite;
 
+    const spriteCloud = new SpriteCloudLayer();
+    await spriteCloud.init();
+    spriteCloud.resize(screenW, screenH);
+    spriteCloud.applyWorldLighting(MENU_DAYTIME_WORLD_LIGHTING);
+    this.spriteCloud = spriteCloud;
+    parallaxStrip.applyWorldLighting(MENU_DAYTIME_WORLD_LIGHTING);
+
+    app.stage.addChild(spriteCloud.displayRoot);
     app.stage.addChild(parallaxStrip.displayRoot);
     app.stage.addChild(worldContainer);
     app.stage.addChild(composite.displayObject);
@@ -715,6 +758,7 @@ export class MenuBackground {
     const screenW = rw / dpr;
     const screenH = rh / dpr;
     composite.resize(screenW, screenH);
+    this.spriteCloud?.resize(screenW, screenH);
 
     const zoom = computeZoom(
       screenW,
@@ -788,6 +832,7 @@ export class MenuBackground {
     if (this.destroyed || !this.app || !this.worldContainer) return;
 
     this.syncLayoutFromRenderer();
+    this.spriteCloud?.updateTime(now);
 
     const app            = this.app;
     const worldContainer = this.worldContainer;
@@ -812,15 +857,25 @@ export class MenuBackground {
       ? 0
       : (introDy * MENU_INTRO_PARALLAX_DEEPEN);
 
-    worldContainer.x =
+    const worldX =
       this.baseX +
       this.userPanXPx +
       (this.disableMotion ? 0 : Math.sin(t * PAN_SPEED_X) * this.panRangeXPx);
-    worldContainer.y =
+    const worldY =
       this.baseY +
       this.userPanYPx +
       (this.disableMotion ? 0 : Math.sin(t * PAN_SPEED_Y) * PAN_RANGE_Y_PX) +
       introDy;
+    worldContainer.x = Math.round(worldX);
+    worldContainer.y = Math.round(worldY);
+    if (this.spriteCloud !== null) {
+      const cloudDx = worldContainer.x - this.baseX;
+      const cloudDy = worldContainer.y - this.baseY;
+      this.spriteCloud.displayRoot.position.set(
+        Math.round(cloudDx * MENU_CLOUD_ATTACH_X),
+        Math.round(cloudDy * MENU_CLOUD_ATTACH_Y),
+      );
+    }
 
     // -- Sky (CSS canvas) ---------------------------------------------------
     this.paintSky(worldContainer.x, worldContainer.y);
@@ -832,11 +887,13 @@ export class MenuBackground {
     const strip = this.parallaxStrip;
     if (strip !== null) {
       strip.updateParallax(localCX, BACKGROUND_PARALLAX_X);
-      strip.displayRoot.y = parallaxDy;
+      strip.displayRoot.y = Math.round(parallaxDy);
     }
 
     // -- Lighting uniforms --------------------------------------------------
     if (occlusion && indirect && composite && chunkMap) {
+      const tm = tonemapperModeFromPrefs();
+      this.parallaxTonemap?.setTonemapper(tm);
       const localCY = (sh / 2 - worldContainer.y) / this.zoom;
       const centerChunkX = Math.floor(localCX / (BLOCK_SIZE * CHUNK_SIZE));
       const centerChunkY = Math.floor(-localCY / (BLOCK_SIZE * CHUNK_SIZE));
@@ -860,16 +917,15 @@ export class MenuBackground {
         blockPixels:     BLOCK_SIZE * this.zoom,
         occlusionOrigin: [occlusion.originX, occlusion.originY],
         occlusionSize:   OcclusionTexture.REGION_BLOCKS,
-        tonemapper:      1,
+        tonemapper:      tm,
         bloomEnabled:    true,
         bloomMaskActive: false,
-        normalStrength:  0,
-        debugNormals:    false,
-        normalOffsetPx:  [0, 0],
-        normalUvScale:   1,
-        sunLightZ:       0.22,
-        moonLightZ:      0.22,
-        torchLightZ:     12,
+        playerBloomUvBoundsActive: false,
+        playerBloomUvMin: [0, 0],
+        playerBloomUvMax: [0, 0],
+        uvBaseOffset:    [0, 0],
+        uvScale:         [1, 1],
+        uvSubpixelOffset:[0, 0],
       });
     }
 
@@ -898,7 +954,7 @@ export class MenuBackground {
 
   /**
    * True when Pixi init finished successfully and {@link destroy} has not run.
-   * Lets the app keep the same procedural backdrop when transitioning to the world loading overlay.
+   * Lets the app keep the same animated backdrop when transitioning to the world loading overlay.
    */
   isLive(): boolean {
     return !this.destroyed && this.app !== null;
@@ -922,6 +978,10 @@ export class MenuBackground {
     this.chunkMap      = null;
     this.parallaxStrip?.dispose();
     this.parallaxStrip = null;
+    this.parallaxTonemap?.destroy();
+    this.parallaxTonemap = null;
+    this.spriteCloud?.destroy();
+    this.spriteCloud = null;
     this.atlasLoader = null;
 
     if (this.app) {

@@ -7,6 +7,7 @@ import type { GameEvent } from "../core/types";
 import { resolveRosterPeer } from "../network/ChatHostController";
 
 const CMD_HINTS: Record<string, string> = {
+  version: "/version — App version and multiplayer wire protocol (for support)",
   kick: "/kick <player> — Remove a player from the game",
   ban: "/ban <player> — Ban by name and account (when signed in)",
   unban: "/unban <player|uuid> — Remove a ban",
@@ -31,6 +32,7 @@ const CMD_ORDER = [
   "summon",
   "unban",
   "unmute",
+  "version",
 ] as const;
 
 const MAX_LOG_LINES = 120;

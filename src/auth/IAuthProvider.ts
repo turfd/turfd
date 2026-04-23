@@ -14,6 +14,13 @@ export interface IAuthProvider {
 
   getSession(): AuthSession | null;
 
+  /**
+   * Resolves after the first persisted-session restore attempt has finished
+   * (Supabase) or immediately (offline guest). Call before relying on
+   * {@link getSession} for world entry (skins, account id, display name).
+   */
+  ensureAuthHydrated(): Promise<void>;
+
   /** Guest label or signed-in username for HUD-style display. */
   getDisplayLabel(): string;
 

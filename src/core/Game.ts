@@ -28,6 +28,8 @@ import {
   ARMOR_SLOT_COUNT,
   ARMOR_UI_SLOT_BASE,
   ITEM_PICKUP_SFX_MIN_INTERVAL_MS,
+  ITEM_PLAYER_THROW_PICKUP_DELAY_SEC,
+  ITEM_THROW_INHERIT_PLAYER_VEL_X,
   ITEM_THROW_SPAWN_OFFSET_PX,
   ITEM_THROW_SPEED_PX,
   PLAYER_DEATH_ANIM_DURATION_SEC,
@@ -45,7 +47,7 @@ import {
 } from "./constants";
 import { EventBus } from "./EventBus";
 import { GameLoop } from "./GameLoop";
-import type { GameEvent } from "./types";
+import type { DynamicLightEmitter, GameEvent } from "./types";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import {
   CraftingSystem,
@@ -66,9 +68,13 @@ import {
 } from "../entities/mobs/spawnViewRect";
 import { MobManager } from "../entities/mobs/MobManager";
 import { MobType } from "../entities/mobs/mobTypes";
-import type { PlayerState } from "../entities/Player";
 import {
-  getAimUnitVectorFromFeet,
+  feetToScreenAABB,
+  type PlayerState,
+} from "../entities/Player";
+import {
+  clampItemThrowVelocity,
+  getItemThrowUnitVectorFromFeet,
   getReachCrosshairDisplayPos,
 } from "../input/aimDirection";
 import { InputManager } from "../input/InputManager";
@@ -101,6 +107,7 @@ import { IndexedDBStore } from "../persistence/IndexedDBStore";
 import type { WorldMetadata, WorkshopModRef } from "../persistence/IndexedDBStore";
 import { SaveGame } from "../persistence/SaveGame";
 import { resolveWorldWorkshopStacks } from "../persistence/worldWorkshopStacks";
+import { formatStratumBuildLine } from "../versionInfo";
 import { ChunkSyncManager } from "../network/ChunkSyncManager";
 import type { HostPeerId } from "../network/hostPeerId";
 import type { PeerId } from "../network/INetworkAdapter";
@@ -121,6 +128,8 @@ import {
 } from "./textureManifest";
 import { AtlasLoader } from "../renderer/AtlasLoader";
 import { BlockBreakParticles } from "../renderer/BlockBreakParticles";
+import { ButterflyAmbientParticles } from "../renderer/ButterflyAmbientParticles";
+import { FireflyAmbientParticles } from "../renderer/FireflyAmbientParticles";
 import { LeafFallParticles } from "../renderer/LeafFallParticles";
 import { BreakOverlay } from "../renderer/BreakOverlay";
 import { ChunkRenderer } from "../renderer/chunk/ChunkRenderer";
@@ -178,6 +187,7 @@ import {
   tryEnqueueFurnaceSmelt,
   validateFurnaceEnqueue,
 } from "../world/furnace/furnaceEnqueue";
+import { removeFurnaceQueueEntriesForRecipe } from "../world/furnace/furnaceCancelQueuedRecipe";
 import { createEmptyFurnaceTileState } from "../world/furnace/FurnaceTileState";
 import { SmeltingRegistry } from "../world/SmeltingRegistry";
 import { registerSmeltingRecipesInRegistry } from "../world/smeltingAsCraftingRecipes";
@@ -191,6 +201,10 @@ import {
 } from "../network/protocol/messages";
 import type { HeldTorchLighting } from "../renderer/lighting/LightingComposer";
 import type { ItemId } from "./itemDefinition";
+import {
+  meleeBaseKnockbackFromHeldItemId,
+  meleeDamageFromHeldItemId,
+} from "./meleeWeaponStats";
 import type { RecipeDefinition } from "./recipe";
 import type { ArmorSlot, PlayerInventory } from "../items/PlayerInventory";
 import { isNearBlockOfId, isNearCraftingTableBlock } from "../world/craftingProximity";
@@ -204,6 +218,8 @@ const PEERJS_CLOUD = {
 
 const WORLD_TIME_BROADCAST_INTERVAL_MS = 5_000;
 const RAIN_GROWTH_MUL = 1.35;
+const TOOL_SWING_SFX_VOLUME = 0.72;
+const TOOL_SWING_SFX_PITCH_VARIANCE_CENTS = 210;
 
 const HOST_DISABLED_MULTIPLAYER_REASON =
   "The host closed the room. Return to the main menu to continue.";
@@ -344,6 +360,9 @@ export class Game {
   private breakOverlay: BreakOverlay | null = null;
   private blockBreakParticles: BlockBreakParticles | null = null;
   private leafFallParticles: LeafFallParticles | null = null;
+  private butterflyParticles: ButterflyAmbientParticles | null = null;
+  private fireflyParticles: FireflyAmbientParticles | null = null;
+  private readonly _fireflyLightingScratch: DynamicLightEmitter[] = [];
   private readonly _remotePlayerMovementSfx = new RemotePlayerMovementSfx();
   private saveGame: SaveGame | null = null;
   private _blockInteractions: BlockInteractions | null = null;
@@ -391,6 +410,9 @@ export class Game {
   private _localDeathNotified = false;
 
   private lastRenderWallMs = 0;
+  /** Last non-zero walk sign for foliage body-bend while overlapping plants (−1/0/+1). */
+  private _foliageBendLatchLocal = 0;
+  private readonly _foliageBendLatchRemote = new Map<string, number>();
   private _lastMouseWorldPosUpdateTime = 0;
   private started = false;
   private _windowResizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -437,6 +459,8 @@ export class Game {
    * arrives for the same chunk key.
    */
   private readonly _chunkFetchWaitLists = new Map<string, Array<() => void>>();
+  /** Client: `performance.now()` when {@link MsgType.CHUNK_REQUEST} was sent (dev RTT logging). */
+  private readonly _chunkRequestSentAtMs = new Map<string, number>();
   /** `performance.now()` until which lightning sky flash decays. */
   private _lightningAnimEndMs = 0;
   /** Tracks dual-loop rain ambience ({@link AudioEngine.startSfxRainDualAmbient}). */
@@ -834,6 +858,7 @@ export class Game {
     this.world = world;
     this._itemRegistry = itemRegistry;
     world.setItemRegistry(itemRegistry);
+    world.setSmeltingRegistryForQueueRefund(this._smeltingRegistry);
     if (registry.isRegistered("stratum:furnace")) {
       world.setFurnaceBlockId(registry.getByIdentifier("stratum:furnace").id);
     }
@@ -907,6 +932,7 @@ export class Game {
             vx: p.vx,
             vy: p.vy,
             damage: p.damage,
+            pickupDelayMs: p.pickupDelayMs,
           });
         }
       });
@@ -1291,7 +1317,7 @@ export class Game {
           return;
         }
         const st = em.getPlayer().state;
-        const { dirX, dirY } = getAimUnitVectorFromFeet(
+        const { dirX, dirY } = getItemThrowUnitVectorFromFeet(
           st.position.x,
           st.position.y,
           input.mouseWorldPos.x,
@@ -1299,8 +1325,10 @@ export class Game {
           st.facingRight,
         );
         const spd = ITEM_THROW_SPEED_PX;
-        const vx = dirX * spd;
-        const vy = dirY * spd;
+        let vx =
+          dirX * spd + st.velocity.x * ITEM_THROW_INHERIT_PLAYER_VEL_X;
+        let vy = dirY * spd;
+        ({ vx, vy } = clampItemThrowVelocity(vx, vy));
         const chestY = st.position.y + PLAYER_HEIGHT * 0.5;
         const off = ITEM_THROW_SPAWN_OFFSET_PX;
         const sx = st.position.x + dirX * off;
@@ -1330,7 +1358,16 @@ export class Game {
           vx,
           vy,
           stack.damage ?? 0,
+          ITEM_PLAYER_THROW_PICKUP_DELAY_SEC,
         );
+      },
+      (slot) => {
+        const em = this.entityManager;
+        if (em === null) {
+          return;
+        }
+        em.getPlayer().state.hotbarSlot = slot;
+        this.bus.emit({ type: "player:hotbarChanged", slot } satisfies GameEvent);
       },
     );
     await inventoryUI.loadTextureIcons();
@@ -1467,6 +1504,11 @@ export class Game {
         this._handleFurnaceOutputSlotClick(e.slotIndex, e.button);
       }),
     );
+    this.networkUnsubs.push(
+      this.bus.on("furnace:cancel-queue-request", (e) => {
+        this._handleFurnaceCancelQueueRequest(e.smeltingRecipeId);
+      }),
+    );
 
     this._wirePauseNetworkHandlers();
     this._emitNetworkRoleForUi();
@@ -1513,6 +1555,20 @@ export class Game {
       pipeline,
     );
     this.leafFallParticles.init();
+
+    this.butterflyParticles = new ButterflyAmbientParticles(
+      this._worldSeed,
+      world,
+      registry,
+      pipeline,
+    );
+    await this.butterflyParticles.init();
+
+    this.fireflyParticles = new FireflyAmbientParticles(
+      this._worldSeed,
+      world,
+      pipeline,
+    );
 
     this.bus.on("game:block-changed", (e) => {
       const state = this.adapter.state;
@@ -1769,6 +1825,10 @@ export class Game {
     this.blockBreakParticles = null;
     this.leafFallParticles?.destroy();
     this.leafFallParticles = null;
+    this.butterflyParticles?.destroy();
+    this.butterflyParticles = null;
+    this.fireflyParticles?.destroy();
+    this.fireflyParticles = null;
     this._mobManager?.clear();
     this._mobManager = null;
     this._sheepAmbientSfxById.clear();
@@ -1782,6 +1842,8 @@ export class Game {
     this.chunkRenderer?.destroy();
     this.chunkRenderer = null;
     this.lastRenderWallMs = 0;
+    this._foliageBendLatchLocal = 0;
+    this._foliageBendLatchRemote.clear();
     this.pipeline?.destroy();
     this.pipeline = null;
     this.blockAtlasLoader?.destroy();
@@ -1944,6 +2006,17 @@ export class Game {
           return;
         }
         if (msg.type === MsgType.CHUNK_DATA) {
+          const ck = `${msg.cx},${msg.cy}`;
+          const tReq = this._chunkRequestSentAtMs.get(ck);
+          if (tReq !== undefined) {
+            this._chunkRequestSentAtMs.delete(ck);
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console -- dev-only multiplayer chunk latency probe
+              console.debug(
+                `[net] chunk ${ck} RTT ${Math.round(performance.now() - tReq)}ms`,
+              );
+            }
+          }
           const blocks = msg.blocks.slice();
           const background = msg.background?.slice();
           const furnaces = msg.furnaces?.map((f) => ({ ...f }));
@@ -1991,6 +2064,7 @@ export class Game {
               vx: msg.vx,
               vy: msg.vy,
               damage: msg.damage,
+              pickupDelayMs: msg.pickupDelayMs,
             });
           }
           return;
@@ -2054,7 +2128,8 @@ export class Game {
           }
           const heldItemId =
             msg.heldItemId !== undefined ? msg.heldItemId : 0;
-          const dmg = this._meleeDamageFromHeldItemId(heldItemId);
+          const def = this._itemRegistry?.getById(heldItemId as ItemId);
+          const dmg = meleeDamageFromHeldItemId(def, heldItemId);
           const hitResult = this._mobManager.damageMobFromHost(
             msg.entityId,
             rng,
@@ -2062,7 +2137,7 @@ export class Game {
             dmg,
             {
               style: "melee",
-              baseKnockback: this._meleeTerrariaKnockbackFromHeldItemId(heldItemId),
+              baseKnockback: meleeBaseKnockbackFromHeldItemId(def, heldItemId),
             },
             { emitDamageFx: !remoteAttacker },
           );
@@ -2087,6 +2162,57 @@ export class Game {
               });
             }
           }
+          return;
+        }
+        if (
+          msg.type === MsgType.PLAYER_HIT_REQUEST &&
+          stNet.status === "connected" &&
+          stNet.role === "host" &&
+          this.world !== null &&
+          this.entityManager !== null
+        ) {
+          if (msg.targetPeerId === e.peerId) {
+            return;
+          }
+          const localPeer = this.adapter.getLocalPeerId();
+          let attackerFeetX = this.entityManager.getPlayer().state.position.x;
+          let attackerFeetY = this.entityManager.getPlayer().state.position.y;
+          if (localPeer !== null && e.peerId !== localPeer) {
+            const attacker = this.world.getRemotePlayers().get(e.peerId);
+            if (attacker === undefined) {
+              return;
+            }
+            const f = attacker.getAuthorityFeet();
+            attackerFeetX = f.x;
+            attackerFeetY = f.y;
+          }
+          let targetFeetX = 0;
+          let targetFeetY = 0;
+          if (localPeer !== null && msg.targetPeerId === localPeer) {
+            targetFeetX = this.entityManager.getPlayer().state.position.x;
+            targetFeetY = this.entityManager.getPlayer().state.position.y;
+          } else {
+            const target = this.world.getRemotePlayers().get(msg.targetPeerId);
+            if (target === undefined) {
+              return;
+            }
+            const f = target.getAuthorityFeet();
+            targetFeetX = f.x;
+            targetFeetY = f.y;
+          }
+          const maxReachPx = (REACH_BLOCKS + 0.75) * BLOCK_SIZE;
+          const dx = targetFeetX - attackerFeetX;
+          const dy = targetFeetY - attackerFeetY;
+          if (dx * dx + dy * dy > maxReachPx * maxReachPx) {
+            return;
+          }
+          const heldItemId = msg.heldItemId !== undefined ? msg.heldItemId : 0;
+          const def = this._itemRegistry?.getById(heldItemId as ItemId);
+          const dmg = meleeDamageFromHeldItemId(def, heldItemId);
+          if (dmg <= 0) {
+            return;
+          }
+          this._hostApplyPlayerDamageByPeerId(msg.targetPeerId, dmg);
           return;
         }
         if (
@@ -2804,6 +2930,10 @@ export class Game {
                 vx: d.vx,
                 vy: d.vy,
                 damage: d.damage,
+                pickupDelayMs: Math.min(
+                  65535,
+                  Math.max(0, Math.round(d.pickupDelayRemainSec * 1000)),
+                ),
               });
             }
             for (const [arrowId, ar] of world.getArrows()) {
@@ -3475,6 +3605,14 @@ export class Game {
       }
       return;
     }
+    if (trimmed === "/version") {
+      this.bus.emit({
+        type: "ui:chat-line",
+        kind: "system",
+        text: formatStratumBuildLine(),
+      } satisfies GameEvent);
+      return;
+    }
     const giveMatch = /^\/give(\s+.*)?$/i.exec(trimmed);
     if (giveMatch !== null && st.status !== "connected") {
       const rest = (giveMatch[1] ?? "").trim();
@@ -3636,6 +3774,76 @@ export class Game {
     this._syncWorldInputBlocked();
   }
 
+  private _hostApplyPlayerDamageByPeerId(targetPeerId: string, damage: number): void {
+    if (damage <= 0) {
+      return;
+    }
+    const em = this.entityManager;
+    if (em === null) {
+      return;
+    }
+    const localPeer = this.adapter.getLocalPeerId();
+    const st = this.adapter.state;
+    if (localPeer !== null && targetPeerId === localPeer) {
+      em.getPlayer().takeDamage(damage);
+      return;
+    }
+    if (st.status === "connected" && st.role === "host") {
+      this.adapter.send(targetPeerId as PeerId, {
+        type: MsgType.PLAYER_DAMAGE_APPLIED,
+        damage,
+      });
+    }
+  }
+
+  private _findMeleeRemotePlayerTargetPeerId(
+    attackerFeetX: number,
+    attackerFeetY: number,
+    aimDisplayX: number,
+    aimDisplayY: number,
+    reachBlocks: number,
+  ): string | null {
+    const w = this.world;
+    if (w === null) {
+      return null;
+    }
+    const maxReachPx = (reachBlocks + 0.75) * BLOCK_SIZE;
+    const maxReachSq = maxReachPx * maxReachPx;
+    const reticlePadPx = BLOCK_SIZE * 0.32;
+    let bestPeerId: string | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const [peerId, rp] of w.getRemotePlayers()) {
+      const feet = rp.getAuthorityFeet();
+      const dxAtk = feet.x - attackerFeetX;
+      const dyAtk = feet.y - attackerFeetY;
+      if (dxAtk * dxAtk + dyAtk * dyAtk > maxReachSq) {
+        continue;
+      }
+      const aabb = feetToScreenAABB({ x: feet.x, y: feet.y });
+      const minX = aabb.x - reticlePadPx;
+      const minY = aabb.y - reticlePadPx;
+      const maxX = aabb.x + aabb.width + reticlePadPx;
+      const maxY = aabb.y + aabb.height + reticlePadPx;
+      const px = Math.max(minX, Math.min(maxX, aimDisplayX));
+      const py = Math.max(minY, Math.min(maxY, aimDisplayY));
+      const dAimX = aimDisplayX - px;
+      const dAimY = aimDisplayY - py;
+      if (dAimX * dAimX + dAimY * dAimY > reticlePadPx * reticlePadPx) {
+        continue;
+      }
+      const centerX = aabb.x + aabb.width * 0.5;
+      const centerY = aabb.y + aabb.height * 0.5;
+      const scoreX = centerX - aimDisplayX;
+      const scoreY = centerY - aimDisplayY;
+      const score = scoreX * scoreX + scoreY * scoreY;
+      if (score < bestScore) {
+        bestScore = score;
+        bestPeerId = peerId;
+      }
+    }
+    return bestPeerId;
+  }
+
   private _maybeMeleeMob(): void {
     const mm = this._mobManager;
     const input = this.input;
@@ -3676,103 +3884,97 @@ export class Game {
       cell.identifier !== "stratum:air" && cell.hardness !== 999;
 
     const tid = mm.findMeleeTarget(px, py, aimX, aimY, REACH_BLOCKS);
-    if (tid === null) {
+    const targetPeerId = this._findMeleeRemotePlayerTargetPeerId(
+      px,
+      py,
+      aimX,
+      aimY,
+      REACH_BLOCKS,
+    );
+    let attackKind: "mob" | "player" | null = null;
+    if (tid !== null && targetPeerId !== null) {
+      const mob = mm.getById(tid);
+      const rp = w.getRemotePlayers().get(targetPeerId);
+      if (mob !== undefined && rp !== undefined) {
+        const mobCenterX = mob.x;
+        const mobCenterY = mob.y + mobHitboxSizePx(mob.kind).h * 0.5;
+        const mobDx = mobCenterX - aimX;
+        const mobDy = mobCenterY - aimPhysY;
+        const mobD2 = mobDx * mobDx + mobDy * mobDy;
+        const rpFeet = rp.getAuthorityFeet();
+        const playerCenterX = rpFeet.x;
+        const playerCenterY = rpFeet.y + PLAYER_HEIGHT * 0.5;
+        const playerDx = playerCenterX - aimX;
+        const playerDy = playerCenterY - aimPhysY;
+        const playerD2 = playerDx * playerDx + playerDy * playerDy;
+        attackKind = playerD2 < mobD2 ? "player" : "mob";
+      } else {
+        attackKind = tid !== null ? "mob" : "player";
+      }
+    } else if (tid !== null) {
+      attackKind = "mob";
+    } else if (targetPeerId !== null) {
+      attackKind = "player";
+    }
+    if (attackKind === null) {
       if (!mineableCell) {
         pl.swingHand();
-      }
-      return;
-    }
-    pl.swingHand();
-    // Ensure the click that hits a mob doesn't also start mining until mouse-up.
-    input.suppressBreakUntilMouseUp();
-    const heldSlot = pl.state.hotbarSlot % HOTBAR_SIZE;
-    const heldItemId = pl.inventory.getStack(heldSlot)?.itemId ?? 0;
-    const net = this.adapter.state;
-    if (net.status === "connected" && net.role === "client") {
-      const hid = net.lanHostPeerId;
-      if (hid !== null) {
-        this.adapter.send(hid as PeerId, {
-          type: MsgType.ENTITY_HIT_REQUEST,
-          entityId: tid,
-          heldItemId,
+        this.audio?.playSfx("tool_swing", {
+          volume: TOOL_SWING_SFX_VOLUME,
+          pitchVariance: TOOL_SWING_SFX_PITCH_VARIANCE_CENTS,
         });
       }
       return;
     }
-    const rng = w.forkMobRng();
-    const dmg = this._meleeDamageFromHeldItemId(heldItemId);
-    const hitR = mm.damageMobFromHost(tid, rng, px, dmg, {
-      style: "melee",
-      baseKnockback: this._meleeTerrariaKnockbackFromHeldItemId(heldItemId),
+    pl.swingHand();
+    this.audio?.playSfx("tool_swing", {
+      volume: TOOL_SWING_SFX_VOLUME,
+      pitchVariance: TOOL_SWING_SFX_PITCH_VARIANCE_CENTS,
     });
-    if (hitR.ok && hitR.dealt > 0) {
-      this._playMobHurtVocalSfx(tid);
-      em.bumpMobHealthBar(tid);
+    // Ensure the click that hits a mob doesn't also start mining until mouse-up.
+    input.suppressBreakUntilMouseUp();
+    const heldSlot = pl.state.hotbarSlot % HOTBAR_SIZE;
+    const heldItemId = pl.inventory.getStack(heldSlot)?.itemId ?? 0;
+    const def = this._itemRegistry?.getById(heldItemId as ItemId);
+    const dmg = meleeDamageFromHeldItemId(def, heldItemId);
+    if (dmg <= 0) {
+      return;
     }
-  }
-
-  private _meleeDamageFromHeldItemId(heldItemId: number): number {
-    if (heldItemId === 0) {
-      return 1;
-    }
-    const ir = this._itemRegistry;
-    if (ir === null) {
-      return 1;
-    }
-    const def = ir.getById(heldItemId as ItemId);
-    const key = def?.key ?? "";
-    // Sword scaling: mods may add sword items; base damage scales with tier when present.
-    if (key.includes("sword")) {
-      const tier = def?.toolTier;
-      if (tier === 0) return 4; // wood
-      if (tier === 1) return 5; // stone
-      if (tier === 2) return 6; // iron
-      if (tier === 3) return 7; // diamond
-      return 5;
-    }
-    // Axe scaling: make axes viable melee weapons, tiered by material.
-    if (def?.toolType === "axe" || key.includes("axe")) {
-      const tier = def?.toolTier;
-      if (tier === 0) return 5; // wood
-      if (tier === 1) return 6; // stone
-      if (tier === 2) return 7; // iron/gold
-      if (tier === 3) return 9; // diamond
-      return 6;
-    }
-    // Non-weapon tools keep light damage.
-    return 1;
-  }
-
-  /**
-   * Terraria weapon knockback stat (tooltip scale, wiki.gg/Knockback) before `StrikeNPC` resist/caps.
-   */
-  private _meleeTerrariaKnockbackFromHeldItemId(heldItemId: number): number {
-    if (heldItemId === 0) {
-      return 2.85;
-    }
-    const ir = this._itemRegistry;
-    if (ir === null) {
-      return 2.85;
-    }
-    const def = ir.getById(heldItemId as ItemId);
-    const key = def?.key ?? "";
-    if (key.includes("sword")) {
-      const tier = def?.toolTier;
-      if (tier === 0) {
-        return 5.2;
+    const net = this.adapter.state;
+    if (net.status === "connected" && net.role === "client") {
+      const hid = net.lanHostPeerId;
+      if (hid !== null) {
+        if (attackKind === "mob" && tid !== null) {
+          this.adapter.send(hid as PeerId, {
+            type: MsgType.ENTITY_HIT_REQUEST,
+            entityId: tid,
+            heldItemId,
+          });
+        } else if (attackKind === "player" && targetPeerId !== null) {
+          this.adapter.send(hid as PeerId, {
+            type: MsgType.PLAYER_HIT_REQUEST,
+            targetPeerId,
+            heldItemId,
+          });
+        }
       }
-      if (tier === 1) {
-        return 5.85;
-      }
-      if (tier === 2) {
-        return 6.5;
-      }
-      if (tier === 3) {
-        return 7.75;
-      }
-      return 5.85;
+      return;
     }
-    return 3.35;
+    if (attackKind === "mob" && tid !== null) {
+      const rng = w.forkMobRng();
+      const hitR = mm.damageMobFromHost(tid, rng, px, dmg, {
+        style: "melee",
+        baseKnockback: meleeBaseKnockbackFromHeldItemId(def, heldItemId),
+      });
+      if (hitR.ok && hitR.dealt > 0) {
+        this._playMobHurtVocalSfx(tid);
+        em.bumpMobHealthBar(tid);
+      }
+      return;
+    }
+    if (attackKind === "player" && targetPeerId !== null) {
+      this._hostApplyPlayerDamageByPeerId(targetPeerId, dmg);
+    }
   }
 
   private _tickLocalPlayerDeath(dtSec: number): void {
@@ -4551,6 +4753,75 @@ export class Game {
     this._broadcastFurnaceSnapshotNow(cell.wx, cell.wy);
   }
 
+  private _handleFurnaceCancelQueueRequest(smeltingRecipeId: string): void {
+    const net = this.adapter.state;
+    if (net.status === "connected" && net.role === "client") {
+      return;
+    }
+    const crafting = this._craftingSystem;
+    const w = this.world;
+    const em = this.entityManager;
+    if (crafting === null || w === null || em === null) {
+      return;
+    }
+    const cell = this._nearestFurnaceCell();
+    if (cell === null) {
+      return;
+    }
+    const recipe = this._recipeRegistry
+      .all()
+      .find(
+        (r) =>
+          r.station === RECIPE_STATION_FURNACE &&
+          r.smeltingSourceId === smeltingRecipeId,
+      );
+    if (recipe === undefined) {
+      return;
+    }
+    const tile =
+      w.getFurnaceTile(cell.wx, cell.wy) ??
+      createEmptyFurnaceTileState(this._worldTime.ms);
+    const removedEntries = tile.queue.filter(
+      (e) => e.smeltingRecipeId === smeltingRecipeId,
+    );
+    const batchesRemoved = removedEntries.reduce((s, e) => s + e.batches, 0);
+    if (batchesRemoved <= 0) {
+      return;
+    }
+    const nextTile = removeFurnaceQueueEntriesForRecipe(tile, smeltingRecipeId);
+    if (nextTile === null) {
+      return;
+    }
+    w.setFurnaceTile(cell.wx, cell.wy, nextTile);
+    this._broadcastFurnaceSnapshotNow(cell.wx, cell.wy);
+    const inv = em.getPlayer().inventory;
+    const overflow = crafting.refundFurnaceBatchesToInventory(
+      recipe,
+      batchesRemoved,
+      inv,
+    );
+    const st = em.getPlayer().state;
+    const sy = st.position.y + PLAYER_HEIGHT * 0.5;
+    for (const rest of overflow) {
+      w.spawnItem(
+        rest.itemId,
+        rest.count,
+        st.position.x,
+        sy,
+        0,
+        0,
+        rest.damage ?? 0,
+      );
+    }
+    this.bus.emit({
+      type: "craft:result",
+      ok: true,
+      crafted: 0,
+      recipeId: recipe.id,
+      shiftKey: false,
+    } satisfies GameEvent);
+  }
+
   private _resolveChunkFetchIfPending(cx: number, cy: number): void {
     const key = `${cx},${cy}`;
     const list = this._chunkFetchWaitLists.get(key);
@@ -4601,6 +4872,7 @@ export class Game {
       };
       list.push(done);
       if (list.length === 1) {
+        this._chunkRequestSentAtMs.set(key, performance.now());
         this.adapter.send(st.lanHostPeerId as PeerId, {
           type: MsgType.CHUNK_REQUEST,
           cx,
@@ -4882,6 +5154,7 @@ export class Game {
       msg.vx,
       msg.vy,
       msg.damage,
+      ITEM_PLAYER_THROW_PICKUP_DELAY_SEC,
     );
   }
 
@@ -6208,6 +6481,29 @@ export class Game {
       this.blockBreakParticles?.update(dtSec);
       const pl = entityManager.getPlayer().state.position;
       this.leafFallParticles?.update(dtSec, pl.x, pl.y);
+      {
+        const pipe = this.pipeline;
+        if (pipe !== null) {
+          const { width: sw, height: sh } = pipe.pixiApp.renderer.screen;
+          this.butterflyParticles?.update(
+            dtSec,
+            pl.x,
+            pl.y,
+            pipe.getCamera(),
+            sw,
+            sh,
+          );
+          this.fireflyParticles?.update(
+            dtSec,
+            pl.x,
+            pl.y,
+            pipe.getCamera(),
+            sw,
+            sh,
+            this._isNightForSleep(),
+          );
+        }
+      }
       this._playerStateBroadcastPhase += 1;
       if (this._playerStateBroadcastPhase >= 2) {
         this._playerStateBroadcastPhase = 0;
@@ -6775,11 +7071,46 @@ export class Game {
             s.prevPosition.x + (s.position.x - s.prevPosition.x) * alpha;
           const iy =
             s.prevPosition.y + (s.position.y - s.prevPosition.y) * alpha;
-          bodies.push({ feetX: ix, feetY: iy, vx: s.velocity.x });
+          const rawVx = s.velocity.x;
+          if (Math.abs(rawVx) >= 9) {
+            this._foliageBendLatchLocal = Math.sign(rawVx);
+          }
+          const hb = feetToScreenAABB({ x: ix, y: iy });
+          bodies.push({
+            feetX: ix,
+            feetY: iy,
+            vx: rawVx,
+            hitboxX: hb.x,
+            hitboxY: hb.y,
+            hitboxW: hb.width,
+            hitboxH: hb.height,
+            bendSignLatch: this._foliageBendLatchLocal,
+          });
+        } else {
+          this._foliageBendLatchLocal = 0;
         }
-        for (const rp of this.world.getRemotePlayers().values()) {
+        const remotes = this.world.getRemotePlayers();
+        for (const [peerId, rp] of remotes) {
           const d = rp.getDisplayPose(now);
-          bodies.push({ feetX: d.x, feetY: d.y, vx: d.vx });
+          if (Math.abs(d.vx) >= 9) {
+            this._foliageBendLatchRemote.set(peerId, Math.sign(d.vx));
+          }
+          const hbR = feetToScreenAABB({ x: d.x, y: d.y });
+          bodies.push({
+            feetX: d.x,
+            feetY: d.y,
+            vx: d.vx,
+            hitboxX: hbR.x,
+            hitboxY: hbR.y,
+            hitboxW: hbR.width,
+            hitboxH: hbR.height,
+            bendSignLatch: this._foliageBendLatchRemote.get(peerId) ?? 0,
+          });
+        }
+        for (const id of this._foliageBendLatchRemote.keys()) {
+          if (!remotes.has(id)) {
+            this._foliageBendLatchRemote.delete(id);
+          }
         }
         if (bodies.length > 0) {
           foliageWindBodies = bodies;
@@ -6862,6 +7193,8 @@ export class Game {
         pl.state.hotbarSlot,
         pl.state.health,
         pl.state.bowDrawSec,
+        pl.state.temporaryHealth,
+        pl.state.temporaryHealthRemainSec,
       );
       this._craftingPanel?.update(pl.inventory);
       this._chestPanel?.update();
@@ -6876,7 +7209,7 @@ export class Game {
       this.breakOverlay.syncRemotes(this.world.getRemotePlayers());
     }
     if (this.entityManager !== null) {
-      this.uiShell?.setBackgroundEditMode(
+      this.inventoryUI?.setBackgroundEditMode(
         this.entityManager.getPlayer().state.backgroundEditMode,
       );
     }
@@ -6931,11 +7264,23 @@ export class Game {
             heldTorch = ht;
           }
         }
+        const dynamicLightEmitters = this._fireflyLightingScratch;
+        dynamicLightEmitters.length = 0;
+        const playerCenterWx =
+          (player.state.position.x + PLAYER_WIDTH * 0.5) / BLOCK_SIZE;
+        const playerCenterWy =
+          (player.state.position.y + PLAYER_HEIGHT * 0.5) / BLOCK_SIZE;
+        this.fireflyParticles?.collectDynamicLightEmitters(
+          playerCenterWx,
+          playerCenterWy,
+          dynamicLightEmitters,
+        );
         this.pipeline.lightingComposer.update(
           lightingParams,
           pos.x,
           pos.y,
           heldTorch,
+          dynamicLightEmitters,
         );
       }
     }

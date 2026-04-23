@@ -73,7 +73,10 @@ export class InputManager {
   private canvasResizeObserver: ResizeObserver | null = null;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
-    if (e.code === "Space" || e.code === "Tab") {
+    if (
+      (e.code === "Space" || e.code === "Tab") &&
+      !isEditableDocumentFocus(document.activeElement)
+    ) {
       e.preventDefault();
     }
     if (e.repeat) {

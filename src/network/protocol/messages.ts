@@ -95,6 +95,8 @@ export enum MessageType {
   BOW_FIRE_REQUEST = 0x2a,
   /** Host → clients: replicated arrow projectile spawn. */
   ARROW_SPAWN = 0x2b,
+  /** Client → host: melee hit request on a player peer id. */
+  PLAYER_HIT_REQUEST = 0x2c,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -199,6 +201,8 @@ export type DropSpawnMsg = {
   vx: number;
   vy: number;
   damage: number;
+  /** Milliseconds of pickup delay remaining (player throws); 0 for block/mob drops. */
+  pickupDelayMs?: number;
 };
 
 export type DropDespawnMsg = {
@@ -445,6 +449,14 @@ export type EntityHitRequestMsg = {
   facingRight?: boolean;
 };
 
+export type PlayerHitRequestMsg = {
+  type: MessageType.PLAYER_HIT_REQUEST;
+  /** Target player peer id to damage (host validates reach/visibility). */
+  targetPeerId: string;
+  /** Optional: held item id at attack time (0 when empty). */
+  heldItemId?: number;
+};
+
 /** Host → client: authoritative damage to the receiving player (e.g. zombie melee). */
 export type PlayerDamageAppliedMsg = {
   type: MessageType.PLAYER_DAMAGE_APPLIED;
@@ -546,6 +558,7 @@ export type NetworkMessage =
   | EntityDespawnMsg
   | EntityStateMsg
   | EntityHitRequestMsg
+  | PlayerHitRequestMsg
   | PlayerDamageAppliedMsg
   | ChatMsg
   | SystemMessageMsg
@@ -1052,7 +1065,7 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
     }
 
     case MessageType.DROP_SPAWN: {
-      const buf = new ArrayBuffer(39);
+      const buf = new ArrayBuffer(41);
       const v = new DataView(buf);
       v.setUint8(0, MessageType.DROP_SPAWN);
       v.setUint32(1, msg.netId >>> 0, LE);
@@ -1063,6 +1076,8 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       v.setFloat32(29, msg.vx, LE);
       v.setFloat32(33, msg.vy, LE);
       v.setUint16(37, msg.damage & 0xffff, LE);
+      const pdm = Math.min(65535, Math.max(0, msg.pickupDelayMs ?? 0));
+      v.setUint16(39, pdm & 0xffff, LE);
       return buf;
     }
 
@@ -1124,6 +1139,20 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       v.setUint16(5, held & 0xffff, LE);
       v.setUint8(7, flags & 0xff);
       v.setUint8(8, msg.facingRight === true ? 1 : 0);
+      return buf;
+    }
+
+    case MessageType.PLAYER_HIT_REQUEST: {
+      const target = textEnc.encode(msg.targetPeerId);
+      if (target.byteLength > CHAT_PEER_ID_MAX) {
+        throw new Error("PLAYER_HIT_REQUEST: targetPeerId too long");
+      }
+      const buf = new ArrayBuffer(1 + 2 + target.byteLength + 2);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.PLAYER_HIT_REQUEST);
+      v.setUint16(1, target.byteLength, LE);
+      new Uint8Array(buf, 3, target.byteLength).set(target);
+      v.setUint16(3 + target.byteLength, (msg.heldItemId ?? 0) & 0xffff, LE);
       return buf;
     }
 
@@ -1722,6 +1751,7 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         vx: v.getFloat32(29, LE),
         vy: v.getFloat32(33, LE),
         damage: v.getUint16(37, LE),
+        pickupDelayMs: v.byteLength >= 41 ? v.getUint16(39, LE) : 0,
       };
     }
 
@@ -1794,6 +1824,23 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         ...(heldItemId !== 0 ? { heldItemId } : {}),
         ...(attackFlags !== 0 ? { attackFlags } : {}),
         ...(v.byteLength >= 9 ? { facingRight: v.getUint8(8) !== 0 } : {}),
+      };
+    }
+
+    case MessageType.PLAYER_HIT_REQUEST: {
+      if (v.byteLength < 5) {
+        throw new Error("PLAYER_HIT_REQUEST: buffer too short");
+      }
+      const targetLen = v.getUint16(1, LE);
+      if (targetLen > CHAT_PEER_ID_MAX || v.byteLength < 3 + targetLen + 2) {
+        throw new Error("PLAYER_HIT_REQUEST: invalid target length");
+      }
+      const targetPeerId = textDec.decode(new Uint8Array(buf, 3, targetLen));
+      const heldItemId = v.getUint16(3 + targetLen, LE);
+      return {
+        type: MessageType.PLAYER_HIT_REQUEST,
+        targetPeerId,
+        ...(heldItemId !== 0 ? { heldItemId } : {}),
       };
     }
 

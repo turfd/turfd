@@ -17,6 +17,8 @@
       "stratum:light_absorption": 0,
       "stratum:material": "grass",
       "stratum:loot_table": "stratum:oak_leaves",
+      "stratum:random_flip_x": true,
+      "stratum:decoration_leaves": true,
       "stratum:numeric_id": 19
     }
   }

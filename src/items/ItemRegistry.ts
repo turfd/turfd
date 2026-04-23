@@ -39,6 +39,7 @@ export class ItemRegistry {
       maxDurability: def.maxDurability,
       fuelBurnSeconds: def.fuelBurnSeconds,
       eatRestoreHealth: def.eatRestoreHealth,
+      eatTemporaryDurationSec: def.eatTemporaryDurationSec,
       inventoryTooltip: def.inventoryTooltip,
       stairItemIconClip: def.stairItemIconClip,
     };

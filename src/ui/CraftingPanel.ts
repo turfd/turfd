@@ -987,6 +987,31 @@ export class CraftingPanel {
         row.appendChild(progWrap);
       }
 
+      if (
+        cat === "Furnace" &&
+        qRow > 0 &&
+        recipe.smeltingSourceId !== undefined
+      ) {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "inv-craft-cancel-queue";
+        cancel.textContent = "Cancel";
+        const smid = recipe.smeltingSourceId;
+        cancel.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        });
+        cancel.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          this.bus.emit({
+            type: "furnace:cancel-queue-request",
+            smeltingRecipeId: smid,
+          } satisfies GameEvent);
+        });
+        row.appendChild(cancel);
+      }
+
       this.listEl.appendChild(row);
     }
 

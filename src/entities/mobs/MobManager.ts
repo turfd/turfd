@@ -118,7 +118,7 @@ import { applyDuckPanic, tickDuckPhysics } from "./duckPhysics";
 import { applyPigPanic, tickPigPhysics } from "./pigPhysics";
 import {
   tickZombiePhysics,
-  zombieFeetInMeleeRangeOfPlayerFeet,
+  zombieFeetOverlapPlayerFeet,
 } from "./zombiePhysics";
 import {
   applySlimePanic,
@@ -2217,7 +2217,7 @@ export class MobManager {
           let bestD = Number.POSITIVE_INFINITY;
           for (const t of chaseTargets) {
             if (
-              !zombieFeetInMeleeRangeOfPlayerFeet(
+              !zombieFeetOverlapPlayerFeet(
                 m.x,
                 m.y,
                 t.x,

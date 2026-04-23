@@ -392,7 +392,7 @@ export async function mountSettingsPanel(
   });
   panelPacks.appendChild(texBtn);
 
-  // --- Video (minimal: normal maps, tonemapper, bloom) ---
+  // --- Video (tonemapper, bloom) ---
   const videoTitle = document.createElement("div");
   videoTitle.className = "st-settings-section";
   videoTitle.style.marginTop = "0";
@@ -400,32 +400,6 @@ export async function mountSettingsPanel(
   panelVideo.appendChild(videoTitle);
 
   const vpVideo = getVideoPrefs();
-
-  // Normal maps
-  {
-    const row = document.createElement("div");
-    row.className = "st-settings-toggle-row";
-    const lbl = document.createElement("label");
-    lbl.textContent = "Normal maps";
-    const toggleId = "st-toggle-ssn";
-    lbl.htmlFor = toggleId;
-    const toggle = document.createElement("span");
-    toggle.className = "st-toggle";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.id = toggleId;
-    input.checked = vpVideo.screenSpaceNormals;
-    input.addEventListener("change", () => {
-      setVideoPrefs({ screenSpaceNormals: input.checked });
-    });
-    const track = document.createElement("span");
-    track.className = "st-toggle-track";
-    toggle.appendChild(input);
-    toggle.appendChild(track);
-    row.appendChild(lbl);
-    row.appendChild(toggle);
-    panelVideo.appendChild(row);
-  }
 
   // Tonemapper: none | reinhard only
   {

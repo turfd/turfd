@@ -10,8 +10,13 @@ import {
   INVENTORY_SIZE,
   PLAYER_HEART_COUNT,
   PLAYER_MAX_HEALTH,
+  PLAYER_TEMP_HEART_FADE_START_SEC,
+  PLAYER_TEMP_PULSE_MAX_SEC,
+  PLAYER_TEMP_PULSE_MIN_SEC,
+  PLAYER_TEMP_PULSE_REMAIN_REF_SEC,
 } from "../core/constants";
 import type { ItemDefinition, ItemId, ItemStack } from "../core/itemDefinition";
+import { getMeleeStatsForSwordOrAxeTooltip } from "../core/meleeWeaponStats";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { ArmorSlot, PlayerInventory } from "../items/PlayerInventory";
 import { fetchItemIconUrlMapForRegistry } from "../core/textureManifest";
@@ -28,6 +33,9 @@ export type ShiftQuickMoveFromOverlayHandler = (
   slotIndex: number,
   slotElement: HTMLElement,
 ) => void;
+
+/** HUD hotbar click when inventory is closed (select active slot). */
+export type HudHotbarSelectHandler = (slotIndex: number) => void;
 
 const INV_FONT_STYLE_ID = "stratum-inventory-fonts";
 
@@ -86,10 +94,11 @@ export class InventoryUI {
   private readonly hotbarItemNameEl: HTMLDivElement;
   private readonly heartsRowEl: HTMLDivElement;
   private readonly heartClipEls: HTMLDivElement[] = [];
+  private readonly heartTempClipEls: HTMLDivElement[] = [];
   private readonly armorHudRowEl: HTMLDivElement;
   /** HUD armor shields beside hearts (one clip per {@link PLAYER_HEART_COUNT}). */
   private readonly armorHudClipEls: HTMLDivElement[] = [];
-  private prevHealthForAria = -1;
+  private prevHeartAriaLabel = "";
   private prevArmorHudPointsTen = -1;
   private readonly itemTooltipEl: HTMLDivElement;
   private tooltipActiveSlot: number | null = null;
@@ -101,6 +110,13 @@ export class InventoryUI {
   private prevSelectedHotbarSlot = -1;
   private hotbarNameHideTimer: ReturnType<typeof setTimeout> | null = null;
   private hotbarNameClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private readonly layerModeIndicatorEl: HTMLDivElement;
+  private readonly layerModeStatusTextEl: HTMLDivElement;
+  private readonly layerModeBackSquareEl: HTMLDivElement;
+  private readonly layerModeFrontSquareEl: HTMLDivElement;
+  private layerModeHideTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastLayerModeActive: boolean | null = null;
 
   private pointerDownSlot: number | null = null;
   private pointerDownSlotEl: HTMLElement | null = null;
@@ -117,6 +133,7 @@ export class InventoryUI {
   private readonly onDropCursorStackOutside:
     | ((stack: ItemStack) => void)
     | null;
+  private readonly onHudHotbarSelect: HudHotbarSelectHandler | null;
 
   private static slotKey(
     stack: { itemId: ItemId; count: number; damage?: number } | null,
@@ -184,6 +201,13 @@ export class InventoryUI {
       detail.textContent = tip;
       root.appendChild(detail);
     }
+    const combat = getMeleeStatsForSwordOrAxeTooltip(def);
+    if (combat !== null) {
+      const stats = document.createElement("div");
+      stats.className = "inv-item-tooltip__detail";
+      stats.textContent = `Attack: ${combat.damage} damage · Knockback: ${combat.knockback}`;
+      root.appendChild(stats);
+    }
   }
 
   private positionItemTooltip(clientX: number, clientY: number): void {
@@ -241,17 +265,99 @@ export class InventoryUI {
     });
   }
 
+  /** True when the event target is the dim overlay / world, not the inventory chrome row. */
+  private isDropOutsideInventoryChrome(target: Node | null): boolean {
+    return target === null || !this.overlayRowEl.contains(target);
+  }
+
   private readonly onWindowMouseUp = (e: MouseEvent): void => {
-    if (this.pointerDownSlot === null) {
+    if (!this.inventoryOpen) {
       return;
     }
-    if (this.pointerDownButton !== e.button) {
+    const inv = this.getInventory();
+    const target = e.target as Node | null;
+    const outside = this.isDropOutsideInventoryChrome(target);
+    const cur = inv.getCursorStack();
+
+    // Started on a slot but released outside without crossing another slot: never run slot click
+    // handlers (they use the mousedown slot index and would mis-handle an outside release).
+    if (
+      this.pointerDownSlot !== null &&
+      outside &&
+      !this.dragOccurred &&
+      cur === null
+    ) {
+      this.pointerDownSlotEl = null;
+      this.pointerDownSlot = null;
+      this.pointerDownButton = null;
+      this.rmbPlacedOnDown = false;
+      if (e.button === 2) {
+        e.preventDefault();
+      }
+      return;
+    }
+
+    const dropHandler = this.onDropCursorStackOutside;
+    const canDropCursorOutside =
+      cur !== null &&
+      outside &&
+      dropHandler !== null &&
+      (e.button === 0 || e.button === 2) &&
+      (this.pointerDownSlot === null ||
+        this.dragOccurred ||
+        (this.pointerDownButton === e.button));
+
+    if (canDropCursorOutside) {
+      if (e.button === 0) {
+        dropHandler(cur);
+        inv.replaceCursorStack(null);
+      } else {
+        const dmg = cur.damage ?? 0;
+        const one: ItemStack =
+          dmg > 0
+            ? { itemId: cur.itemId, count: 1, damage: dmg }
+            : { itemId: cur.itemId, count: 1 };
+        dropHandler(one);
+        if (cur.count <= 1) {
+          inv.replaceCursorStack(null);
+        } else {
+          inv.replaceCursorStack({
+            itemId: cur.itemId,
+            count: cur.count - 1,
+            ...(dmg > 0 ? { damage: dmg } : {}),
+          });
+        }
+      }
+      this.pointerDownSlotEl = null;
+      this.pointerDownSlot = null;
+      this.pointerDownButton = null;
+      this.dragOccurred = false;
+      this.rmbPlacedOnDown = false;
+      e.preventDefault();
+      return;
+    }
+
+    if (
+      this.pointerDownSlot !== null &&
+      this.pointerDownButton !== e.button
+    ) {
+      this.pointerDownSlotEl = null;
+      this.pointerDownSlot = null;
+      this.pointerDownButton = null;
+      this.dragOccurred = false;
+      this.rmbPlacedOnDown = false;
+      if (e.button === 2) {
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (this.pointerDownSlot === null) {
       return;
     }
     const slot = this.pointerDownSlot;
     const downEl = this.pointerDownSlotEl;
     this.pointerDownSlotEl = null;
-    const inv = this.getInventory();
     if (e.button === 0) {
       if (!this.dragOccurred) {
         if (e.shiftKey) {
@@ -273,18 +379,6 @@ export class InventoryUI {
         } else {
           this.getInventory().handleLmbClick(slot);
         }
-      } else {
-        // Dropping on the dim backdrop hits `.inv-overlay` (still under #inventory-ui-root).
-        // Only the panel/chest/crafting row should count as "inside" the UI chrome.
-        const cur = inv.getCursorStack();
-        const target = e.target as Node | null;
-        const droppedOutside =
-          cur !== null &&
-          (target === null || !this.overlayRowEl.contains(target));
-        if (droppedOutside && this.onDropCursorStackOutside !== null) {
-          this.onDropCursorStackOutside(cur);
-          inv.replaceCursorStack(null);
-        }
       }
     } else if (e.button === 2) {
       if (!this.dragOccurred && !this.rmbPlacedOnDown) {
@@ -303,12 +397,14 @@ export class InventoryUI {
     getInventory: GetInventory,
     onShiftQuickMoveFromOverlay: ShiftQuickMoveFromOverlayHandler | null = null,
     onDropCursorStackOutside: ((stack: ItemStack) => void) | null = null,
+    onHudHotbarSelect: HudHotbarSelectHandler | null = null,
   ) {
     ensureInventoryFonts();
     this.itemRegistry = itemRegistry;
     this.getInventory = getInventory;
     this.onShiftQuickMoveFromOverlay = onShiftQuickMoveFromOverlay;
     this.onDropCursorStackOutside = onDropCursorStackOutside;
+    this.onHudHotbarSelect = onHudHotbarSelect;
 
     const root = document.createElement("div");
     root.id = "inventory-ui-root";
@@ -351,10 +447,19 @@ export class InventoryUI {
       full.className = "fa-solid fa-heart inv-heart inv-heart--full";
       full.setAttribute("aria-hidden", "true");
       clip.appendChild(full);
+      const tClip = document.createElement("div");
+      tClip.className = "inv-heart-temp-clip inv-heart-temp-clip--off";
+      tClip.setAttribute("aria-hidden", "true");
+      const tFull = document.createElement("i");
+      tFull.className = "fa-solid fa-heart inv-heart inv-heart--temp";
+      tFull.setAttribute("aria-hidden", "true");
+      tClip.appendChild(tFull);
       slot.appendChild(empty);
       slot.appendChild(clip);
+      slot.appendChild(tClip);
       heartsRow.appendChild(slot);
       this.heartClipEls.push(clip);
+      this.heartTempClipEls.push(tClip);
     }
 
     const armorHudRow = document.createElement("div");
@@ -389,6 +494,43 @@ export class InventoryUI {
     const hotbarChrome = document.createElement("div");
     hotbarChrome.className = "inv-hotbar-chrome";
 
+    const layerModeIndicator = document.createElement("div");
+    layerModeIndicator.className = "inv-layer-mode-indicator";
+    layerModeIndicator.setAttribute("aria-hidden", "true");
+    layerModeIndicator.setAttribute("title", "Build layer");
+
+    const layerModeSquares = document.createElement("div");
+    layerModeSquares.className = "inv-layer-mode-squares";
+
+    const layerModeSquareBack = document.createElement("div");
+    layerModeSquareBack.className =
+      "inv-layer-mode-square inv-layer-mode-square--back";
+
+    const layerModeSquareFront = document.createElement("div");
+    layerModeSquareFront.className =
+      "inv-layer-mode-square inv-layer-mode-square--front";
+    layerModeSquareFront.style.background = "rgba(242,242,247,0.95)";
+    layerModeSquareBack.style.background = "transparent";
+
+    const layerModeStatusText = document.createElement("div");
+    layerModeStatusText.className = "inv-layer-mode-label";
+    layerModeStatusText.textContent = "foreground";
+
+    layerModeSquares.appendChild(layerModeSquareBack);
+    layerModeSquares.appendChild(layerModeSquareFront);
+    layerModeIndicator.appendChild(layerModeSquares);
+    layerModeIndicator.appendChild(layerModeStatusText);
+    this.layerModeIndicatorEl = layerModeIndicator;
+    this.layerModeStatusTextEl = layerModeStatusText;
+    this.layerModeBackSquareEl = layerModeSquareBack;
+    this.layerModeFrontSquareEl = layerModeSquareFront;
+
+    const hotbarBottomRow = document.createElement("div");
+    hotbarBottomRow.className = "inv-hotbar-bottom-row";
+
+    const hotbarAnchor = document.createElement("div");
+    hotbarAnchor.className = "inv-hotbar-anchor";
+
     const hotbarWrap = document.createElement("div");
     hotbarWrap.className = "inv-hotbar-wrap";
 
@@ -419,10 +561,32 @@ export class InventoryUI {
       this.hotbarDurabilityFills.push(durFill);
       this.bindSlotElement(slot, i);
       this.bindSlotTooltip(slot, i);
+      const onHudHotbarSelect = this.onHudHotbarSelect;
+      if (onHudHotbarSelect !== null) {
+        const slotIdx = i;
+        slot.addEventListener(
+          "mousedown",
+          (e: MouseEvent) => {
+            if (this.inventoryOpen || e.button !== 0) {
+              return;
+            }
+            const t = e.target as Node | null;
+            if (t === null || !slot.contains(t)) {
+              return;
+            }
+            e.preventDefault();
+            onHudHotbarSelect(slotIdx);
+          },
+          true,
+        );
+      }
     }
     hotbarWrap.appendChild(hotbarRow);
+    hotbarAnchor.appendChild(layerModeIndicator);
+    hotbarAnchor.appendChild(hotbarWrap);
+    hotbarBottomRow.appendChild(hotbarAnchor);
     hotbarChrome.appendChild(hudStatusRow);
-    hotbarChrome.appendChild(hotbarWrap);
+    hotbarChrome.appendChild(hotbarBottomRow);
     hotbarStack.appendChild(hotbarName);
     hotbarStack.appendChild(hotbarChrome);
     root.appendChild(hotbarStack);
@@ -736,19 +900,21 @@ export class InventoryUI {
     }
   }
 
-  private syncHearts(health: number): void {
+  private syncHearts(health: number, temp: number, tempRemainSec: number): void {
     const h = Math.max(
       0,
       Math.min(PLAYER_MAX_HEALTH, Math.floor(health)),
     );
-    if (h === this.prevHealthForAria) {
-      return;
+    const t = Math.max(0, Math.min(PLAYER_MAX_HEALTH, Math.floor(temp)));
+    const ar =
+      t > 0
+        ? `Health: ${h} of ${PLAYER_MAX_HEALTH}, ${t} temporary`
+        : `Health: ${h} of ${PLAYER_MAX_HEALTH}`;
+    if (ar !== this.prevHeartAriaLabel) {
+      this.prevHeartAriaLabel = ar;
+      this.heartsRowEl.setAttribute("aria-label", ar);
     }
-    this.prevHealthForAria = h;
-    this.heartsRowEl.setAttribute(
-      "aria-label",
-      `Health: ${h} of ${PLAYER_MAX_HEALTH}`,
-    );
+    let tLeft = t;
     for (let i = 0; i < PLAYER_HEART_COUNT; i++) {
       const clip = this.heartClipEls[i]!;
       const hpThis = h - i * 2;
@@ -761,6 +927,48 @@ export class InventoryUI {
         level = "empty";
       }
       clip.className = `inv-heart-clip inv-heart-clip--${level}`;
+
+      const r = Math.max(0, Math.min(2, h - 2 * i));
+      const capT = 2 - r;
+      const tI = tLeft > 0 ? Math.min(tLeft, capT) : 0;
+      tLeft -= tI;
+      const tEl = this.heartTempClipEls[i]!;
+      let tClass: "off" | "full" | "halfL" | "halfR";
+      if (tI <= 0) {
+        tClass = "off";
+      } else if (tI === 2) {
+        tClass = "full";
+      } else if (r === 0) {
+        tClass = "halfL";
+      } else {
+        tClass = "halfR";
+      }
+      tEl.className = `inv-heart-temp-clip inv-heart-temp-clip--${tClass}`;
+      const tIcon = tEl.firstElementChild;
+      if (tIcon !== null) {
+        tIcon.classList.toggle("inv-temp-slice-r", tClass === "halfR");
+      }
+    }
+    const hasTempHud = t > 0 && tempRemainSec > 0;
+    this.heartsRowEl.classList.toggle("inv-hearts-row--has-temp", hasTempHud);
+    if (hasTempHud) {
+      const rawFade = Math.min(1, tempRemainSec / PLAYER_TEMP_HEART_FADE_START_SEC);
+      const eased = rawFade * rawFade * rawFade;
+      this.heartsRowEl.style.setProperty(
+        "--inv-temp-op",
+        eased.toFixed(3),
+      );
+      const u = Math.min(1, tempRemainSec / PLAYER_TEMP_PULSE_REMAIN_REF_SEC);
+      const p =
+        PLAYER_TEMP_PULSE_MIN_SEC +
+        (PLAYER_TEMP_PULSE_MAX_SEC - PLAYER_TEMP_PULSE_MIN_SEC) * u;
+      this.heartsRowEl.style.setProperty(
+        "--inv-temp-pulse-sec",
+        `${p.toFixed(3)}s`,
+      );
+    } else {
+      this.heartsRowEl.style.removeProperty("--inv-temp-op");
+      this.heartsRowEl.style.removeProperty("--inv-temp-pulse-sec");
     }
   }
 
@@ -799,12 +1007,14 @@ export class InventoryUI {
     selectedHotbarSlot: number,
     health: number,
     bowDrawSec: number,
+    temporaryHealth: number = 0,
+    temporaryHealthRemainSec: number = 0,
   ): void {
     const urlLookup = this.iconUrlLookup;
     const displayPx = INVENTORY_ITEM_ICON_DISPLAY_PX;
     const sel = Math.min(selectedHotbarSlot, HOTBAR_SIZE - 1);
 
-    this.syncHearts(health);
+    this.syncHearts(health, temporaryHealth, temporaryHealthRemainSec);
     this.syncArmorHud(inventory);
 
     const initialSync = this.prevInventoryKeys === null;
@@ -1072,9 +1282,58 @@ export class InventoryUI {
     this.hotbarStackEl.style.visibility = visible ? "visible" : "hidden";
   }
 
+  /** Tab foreground vs background build layer: brief flash beside the hotbar (same behavior as legacy HUD chip). */
+  setBackgroundEditMode(active: boolean): void {
+    if (this.lastLayerModeActive === active) {
+      return;
+    }
+    this.lastLayerModeActive = active;
+
+    const back = this.layerModeBackSquareEl;
+    const front = this.layerModeFrontSquareEl;
+    // Foreground mode: front square is solid. Background mode: back square is solid.
+    back.style.background = active ? "rgba(242,242,247,0.95)" : "transparent";
+    front.style.background = active ? "transparent" : "rgba(242,242,247,0.95)";
+    back.animate(
+      [
+        { transform: "scale(0.9)", opacity: 0.72 },
+        { transform: "scale(1.08)", opacity: 1 },
+        { transform: "scale(1)", opacity: 1 },
+      ],
+      { duration: 170, easing: "cubic-bezier(0.22,1,0.36,1)" },
+    );
+    front.animate(
+      [
+        { transform: "scale(0.9)", opacity: 0.72 },
+        { transform: "scale(1.08)", opacity: 1 },
+        { transform: "scale(1)", opacity: 1 },
+      ],
+      { duration: 170, easing: "cubic-bezier(0.22,1,0.36,1)" },
+    );
+
+    this.layerModeStatusTextEl.textContent = active ? "background" : "foreground";
+    const indicator = this.layerModeIndicatorEl;
+    indicator.setAttribute(
+      "title",
+      active ? "Building in background (Tab)" : "Building in foreground (Tab)",
+    );
+    indicator.style.opacity = "0.95";
+    if (this.layerModeHideTimer !== null) {
+      clearTimeout(this.layerModeHideTimer);
+    }
+    this.layerModeHideTimer = setTimeout(() => {
+      indicator.style.opacity = "0";
+      this.layerModeHideTimer = null;
+    }, 900);
+  }
+
   destroy(): void {
     this.hideItemTooltip();
     this.clearHotbarNameTimers();
+    if (this.layerModeHideTimer !== null) {
+      clearTimeout(this.layerModeHideTimer);
+      this.layerModeHideTimer = null;
+    }
     this.panelResizeObserver.disconnect();
     window.removeEventListener("resize", this.onInvWindowResizeForSidePanels, true);
     window.removeEventListener("mouseup", this.onWindowMouseUp, true);

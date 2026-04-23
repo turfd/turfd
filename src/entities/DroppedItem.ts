@@ -38,6 +38,8 @@ export class DroppedItem {
   vx: number;
   /** World downward velocity (px/s); +down (same convention as player gravity). */
   vy: number;
+  /** While positive, no player pull or pickup (player-throw cooldown). */
+  pickupDelayRemainSec: number;
   private _pulling = false;
 
   constructor(
@@ -49,6 +51,7 @@ export class DroppedItem {
     vx = 0,
     vy = 0,
     damage = 0,
+    pickupDelaySec = 0,
   ) {
     this.id = id;
     this.itemId = itemId;
@@ -58,10 +61,47 @@ export class DroppedItem {
     this.y = y;
     this.vx = vx;
     this.vy = vy;
+    this.pickupDelayRemainSec = Math.max(0, pickupDelaySec);
   }
 
   get pulling(): boolean {
     return this._pulling;
+  }
+
+  private integrateFreefall(
+    dt: number,
+    world: WorldCollisionReader,
+    solidScratch: AABB[],
+  ): void {
+    const pad = 4;
+    this.vy += ITEM_GRAVITY * BLOCK_SIZE * dt;
+    const vmax = ITEM_MAX_FALL_SPEED * BLOCK_SIZE;
+    if (this.vy > vmax) {
+      this.vy = vmax;
+    }
+    const screenDx = this.vx * dt;
+    const screenDy = this.vy * dt;
+    const mover = itemWorldCenterToScreen(this.x, this.y);
+    const query = createAABB(
+      Math.min(mover.x, mover.x + screenDx) - pad,
+      Math.min(mover.y, mover.y + screenDy) - pad,
+      Math.abs(screenDx) + mover.width + pad * 2,
+      Math.abs(screenDy) + mover.height + pad * 2,
+    );
+    world.querySolidAABBs(query, solidScratch);
+    const { hitX, hitY } = sweepAABB(mover, screenDx, screenDy, solidScratch);
+    const c = itemScreenToWorldCenter(mover);
+    this.x = c.x;
+    this.y = c.y;
+    if (hitX) {
+      this.vx = 0;
+    }
+    if (hitY) {
+      this.vy = 0;
+      if (screenDy > 0) {
+        this.vx *= ITEM_DROP_LANDING_FRICTION;
+      }
+    }
   }
 
   /**
@@ -72,7 +112,20 @@ export class DroppedItem {
     world: WorldCollisionReader,
     playerPos: { x: number; y: number },
     solidScratch: AABB[],
+    canPullTowardPlayer = true,
   ): boolean {
+    if (this.pickupDelayRemainSec > 0) {
+      this.pickupDelayRemainSec = Math.max(0, this.pickupDelayRemainSec - dt);
+      this._pulling = false;
+      this.integrateFreefall(dt, world, solidScratch);
+      return false;
+    }
+    if (!canPullTowardPlayer) {
+      this._pulling = false;
+      this.integrateFreefall(dt, world, solidScratch);
+      return false;
+    }
+
     const dxp = playerPos.x - this.x;
     const dyp = playerPos.y - this.y;
     const dist = Math.hypot(dxp, dyp);
@@ -108,34 +161,7 @@ export class DroppedItem {
       this.x = c.x;
       this.y = c.y;
     } else {
-      this.vy += ITEM_GRAVITY * BLOCK_SIZE * dt;
-      const vmax = ITEM_MAX_FALL_SPEED * BLOCK_SIZE;
-      if (this.vy > vmax) {
-        this.vy = vmax;
-      }
-      const screenDx = this.vx * dt;
-      const screenDy = this.vy * dt;
-      let mover = itemWorldCenterToScreen(this.x, this.y);
-      const query = createAABB(
-        Math.min(mover.x, mover.x + screenDx) - pad,
-        Math.min(mover.y, mover.y + screenDy) - pad,
-        Math.abs(screenDx) + mover.width + pad * 2,
-        Math.abs(screenDy) + mover.height + pad * 2,
-      );
-      world.querySolidAABBs(query, solidScratch);
-      const { hitX, hitY } = sweepAABB(mover, screenDx, screenDy, solidScratch);
-      const c = itemScreenToWorldCenter(mover);
-      this.x = c.x;
-      this.y = c.y;
-      if (hitX) {
-        this.vx = 0;
-      }
-      if (hitY) {
-        this.vy = 0;
-        if (screenDy > 0) {
-          this.vx *= ITEM_DROP_LANDING_FRICTION;
-        }
-      }
+      this.integrateFreefall(dt, world, solidScratch);
     }
 
     const d2 = Math.hypot(playerPos.x - this.x, playerPos.y - this.y);

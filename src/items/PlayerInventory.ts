@@ -228,10 +228,12 @@ export class PlayerInventory {
 
   /**
    * Same merge / empty-slot order as {@link add}, without mutating this inventory.
-   * @returns Count that would not fit (overflow).
+   * Returns overflow stack, or null when all items would fit.
    */
-  simulateAddOverflow(itemId: ItemId, count: number): number {
-    if (count <= 0) return 0;
+  simulateAddItemStack(stack: ItemStack): ItemStack | null {
+    if (stack.count <= 0) {
+      return null;
+    }
     const slots: (ItemStack | null)[] = [];
     for (let i = 0; i < INVENTORY_SIZE; i++) {
       const s = this._slots[i];
@@ -245,7 +247,16 @@ export class PlayerInventory {
     for (let i = 0; i < INVENTORY_SIZE; i++) {
       inv._slots[i] = slots[i] ?? null;
     }
-    const rest = inv.addItemStack({ itemId, count });
+    return inv.addItemStack(this.copyStack(stack));
+  }
+
+  /**
+   * Same merge / empty-slot order as {@link add}, without mutating this inventory.
+   * @returns Count that would not fit (overflow).
+   */
+  simulateAddOverflow(itemId: ItemId, count: number): number {
+    if (count <= 0) return 0;
+    const rest = this.simulateAddItemStack({ itemId, count });
     return rest === null ? 0 : rest.count;
   }
 

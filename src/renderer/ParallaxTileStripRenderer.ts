@@ -12,6 +12,7 @@ import {
   BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_MIN_SCALE,
   BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_TINT_WHITEN,
   BACKGROUND_TILE_STRIP_ORIGIN_BLOCK_X,
+  BACKGROUND_TILE_STRIP_SKY_FOG_BLEND,
   BACKGROUND_TILE_STRIP_VISUAL_SCALE,
   BACKGROUND_TILE_STRIP_WIDTH_SCALE,
   BLOCK_SIZE,
@@ -293,7 +294,7 @@ export class ParallaxTileStripRenderer {
     this.applyStripLayout();
   }
 
-  /** Match blurred backdrop to day/night (world ambient + tint). */
+  /** Match blurred backdrop to day/night (world ambient + tint + sky-coloured distance fog). */
   applyWorldLighting(lighting: WorldLightingParams): void {
     const a = lighting.ambient;
     const att = BACKGROUND_TILE_STRIP_LIGHT_ATTENUATION;
@@ -316,9 +317,40 @@ export class ParallaxTileStripRenderer {
       tg = tg + (1 - tg) * w;
       tb = tb + (1 - tb) * w;
     }
-    const r = Math.min(255, Math.max(0, Math.round(255 * scale * tr)));
-    const g = Math.min(255, Math.max(0, Math.round(255 * scale * tg)));
-    const b = Math.min(255, Math.max(0, Math.round(255 * scale * tb)));
+
+    /**
+     * Base multiplicative tint (0–1 per channel). The parallax strip sits near the
+     * horizon band of the sky gradient, so we pull this toward the sky colour at
+     * that height to fake atmospheric perspective: distant terrain reads in the
+     * same hue as the sky behind it.
+     *
+     * Using `lerp(horizon, bottom, 0.5)` aligns with the middle of the parallax
+     * strip's on-screen height (it renders in the lower half of the viewport).
+     * The sky colour is normalised so its brightest channel is ≈1 before blending,
+     * which keeps daytime strips bright — otherwise multiplying by a sunset-pink
+     * (≈0.9, 0.3, 0.4) sky would crush terrain lightness.
+     */
+    let mr = scale * tr;
+    let mg = scale * tg;
+    let mb = scale * tb;
+
+    const fogHex = lerpColor01(lighting.sky.horizon, lighting.sky.bottom, 0.5);
+    const skyR = ((fogHex >> 16) & 0xff) / 255;
+    const skyG = ((fogHex >> 8) & 0xff) / 255;
+    const skyB = (fogHex & 0xff) / 255;
+    const maxSky = Math.max(skyR, skyG, skyB, 1 / 255);
+    const normR = skyR / maxSky;
+    const normG = skyG / maxSky;
+    const normB = skyB / maxSky;
+
+    const fogT = BACKGROUND_TILE_STRIP_SKY_FOG_BLEND;
+    mr = mr * (1 - fogT) + normR * fogT;
+    mg = mg * (1 - fogT) + normG * fogT;
+    mb = mb * (1 - fogT) + normB * fogT;
+
+    const r = Math.min(255, Math.max(0, Math.round(255 * mr)));
+    const g = Math.min(255, Math.max(0, Math.round(255 * mg)));
+    const b = Math.min(255, Math.max(0, Math.round(255 * mb)));
     this.displayRoot.tint = (r << 16) | (g << 8) | b;
   }
 
@@ -551,4 +583,18 @@ function chunkMeshPosition(coord: ChunkCoord): { x: number; y: number } {
     x: origin.wx * BLOCK_SIZE,
     y: -origin.wy * BLOCK_SIZE,
   };
+}
+
+/** Linear blend between two packed 0xRRGGBB colours. */
+function lerpColor01(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff;
+  const ag = (a >> 8) & 0xff;
+  const ab = a & 0xff;
+  const br = (b >> 16) & 0xff;
+  const bg = (b >> 8) & 0xff;
+  const bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
 }

@@ -8,6 +8,7 @@ import {
   TORCH_FLAME_TIP_OFFSET_X_BLOCKS,
   TORCH_FLAME_TIP_OFFSET_Y_BLOCKS,
 } from "../../core/constants";
+import type { DynamicLightEmitter } from "../../core/types";
 import type { Camera } from "../Camera";
 import { CompositePass } from "./CompositePass";
 import type { CompositeUniforms } from "./CompositePass";
@@ -45,12 +46,13 @@ export class LightingComposer {
   /** Max-heap by dist² (root = worst of the K nearest). Reused each frame. */
   private readonly _torchHeapWx = new Float64Array(MAX_PLACED_TORCHES);
   private readonly _torchHeapWy = new Float64Array(MAX_PLACED_TORCHES);
+  private readonly _torchHeapStrength = new Float32Array(MAX_PLACED_TORCHES);
   private readonly _torchHeapD2 = new Float64Array(MAX_PLACED_TORCHES);
   private _torchHeapSize = 0;
 
-  private readonly _placedTorchPairs: [number, number][] = Array.from(
+  private readonly _placedTorchTriples: [number, number, number][] = Array.from(
     { length: MAX_PLACED_TORCHES },
-    () => [0, 0] as [number, number],
+    () => [0, 0, 1] as [number, number, number],
   );
 
   private _camera: Camera | null = null;
@@ -59,8 +61,6 @@ export class LightingComposer {
   private _composite: CompositePass | null = null;
 
   private readonly _compositeU: CompositeUniforms = {
-    sunDir: [0, 0],
-    moonDir: [0, 0],
     ambient: 0,
     ambientTint: [1, 1, 1],
     skyLightTint: [1, 1, 1],
@@ -78,14 +78,17 @@ export class LightingComposer {
     tonemapper: 1,
     bloomEnabled: true,
     bloomMaskActive: true,
-    normalStrength: 0,
-    sunLightZ: 0.22,
-    moonLightZ: 0.22,
-    torchLightZ: 12,
-    debugNormals: false,
-    normalOffsetPx: [0, 0],
-    normalUvScale: 1,
+    playerBloomUvBoundsActive: false,
+    playerBloomUvMin: [0, 0],
+    playerBloomUvMax: [0, 0],
+    uvBaseOffset: [0, 0],
+    uvScale: [1, 1],
+    uvSubpixelOffset: [0, 0],
   };
+
+  private _playerBloomUvBoundsActive = false;
+  private readonly _playerBloomUvMinScratch: [number, number] = [0, 0];
+  private readonly _playerBloomUvMaxScratch: [number, number] = [0, 0];
 
   constructor(world: World, bus: EventBus, stage: Container) {
     this._world = world;
@@ -120,7 +123,6 @@ export class LightingComposer {
     albedoRT: RenderTexture,
     camera: Camera,
     playerBloomMaskSource: TextureSource,
-    normalMapSource: TextureSource,
   ): void {
     if (this._composite !== null) {
       return;
@@ -133,7 +135,6 @@ export class LightingComposer {
       this._occlusion,
       this._indirect,
       playerBloomMaskSource,
-      normalMapSource,
     );
     this._stage.addChild(this._composite.displayObject);
     this._composite.resize(this._screenW, this._screenH);
@@ -148,6 +149,7 @@ export class LightingComposer {
     _cameraX: number,
     _cameraY: number,
     heldTorch: HeldTorchLighting | null,
+    dynamicEmitters?: readonly DynamicLightEmitter[],
   ): void {
     for (const key of this._dirty) {
       const tex = this._textures.get(key);
@@ -221,26 +223,34 @@ export class LightingComposer {
     }
 
     this._torchHeapReset();
+    if (dynamicEmitters !== undefined) {
+      for (const e of dynamicEmitters) {
+        const ddx = e.worldBlockX - viewCenterWx;
+        const ddy = e.worldBlockY - viewCenterWy;
+        this._torchHeapOffer(
+          e.worldBlockX,
+          e.worldBlockY,
+          e.strength,
+          ddx * ddx + ddy * ddy,
+        );
+      }
+    }
     for (let dy = -halfRegion; dy <= halfRegion; dy++) {
       for (let dx = -halfRegion; dx <= halfRegion; dx++) {
         const ccx = camCx + dx;
         const ccy = camCy + dy;
         const { wx, wy } = this._getChunkEmitterPositions(this._world, ccx, ccy);
         for (let i = 0; i < wx.length; i++) {
-          const wxi = wx[i]!;
-          const wyi = wy[i]!;
+          const wxi = wx[i]! + TORCH_FLAME_TIP_OFFSET_X_BLOCKS;
+          const wyi = wy[i]! + TORCH_FLAME_TIP_OFFSET_Y_BLOCKS;
           const ddx = wxi - viewCenterWx;
           const ddy = wyi - viewCenterWy;
-          this._torchHeapOffer(wxi, wyi, ddx * ddx + ddy * ddy);
+          this._torchHeapOffer(wxi, wyi, 1, ddx * ddx + ddy * ddy);
         }
       }
     }
 
     const u = this._compositeU;
-    u.sunDir[0] = lighting.sunDir[0];
-    u.sunDir[1] = lighting.sunDir[1];
-    u.moonDir[0] = lighting.moonDir[0];
-    u.moonDir[1] = lighting.moonDir[1];
     u.ambient = lighting.ambient;
     u.ambientTint[0] = lighting.ambientTint[0];
     u.ambientTint[1] = lighting.ambientTint[1];
@@ -272,16 +282,53 @@ export class LightingComposer {
             ? 3
             : 0;
     u.bloomEnabled = vp.bloom;
-    const ssnOn = vp.screenSpaceNormals;
-    u.normalStrength = ssnOn ? vp.normalMapStrength : 0;
-    u.debugNormals = ssnOn && vp.debugShowNormalMap;
-    u.normalOffsetPx[0] = ssnOn ? vp.ssnNormalOffsetXPx : 0;
-    u.normalOffsetPx[1] = ssnOn ? vp.ssnNormalOffsetYPx : 0;
-    u.normalUvScale = ssnOn ? vp.ssnNormalUvScale : 1;
-    u.sunLightZ = 0.22;
-    u.moonLightZ = 0.22;
-    u.torchLightZ = 12;
+    // Sub-pixel correction is now applied via RenderPipeline's `subPixelNudge` container.
+    // Keep composite UV sampling stable to avoid double-applying the same offset.
+    u.uvSubpixelOffset[0] = 0;
+    u.uvSubpixelOffset[1] = 0;
+    u.playerBloomUvBoundsActive = this._playerBloomUvBoundsActive;
+    u.playerBloomUvMin[0] = this._playerBloomUvMinScratch[0];
+    u.playerBloomUvMin[1] = this._playerBloomUvMinScratch[1];
+    u.playerBloomUvMax[0] = this._playerBloomUvMaxScratch[0];
+    u.playerBloomUvMax[1] = this._playerBloomUvMaxScratch[1];
     comp.updateUniforms(u);
+  }
+
+  /**
+   * UV rectangle in the same space as composite sampleUv (full albedo RT, including overscan pad).
+   * Suppresses placed/held torch bloom inside the box so the small HDR bloom kernel cannot sit
+   * on top of the local player when the RT mask misses soft sprite edges.
+   */
+  setLocalPlayerBloomUvBounds(
+    active: boolean,
+    minU: number,
+    minV: number,
+    maxU: number,
+    maxV: number,
+  ): void {
+    this._playerBloomUvBoundsActive = active;
+    this._playerBloomUvMinScratch[0] = minU;
+    this._playerBloomUvMinScratch[1] = minV;
+    this._playerBloomUvMaxScratch[0] = maxU;
+    this._playerBloomUvMaxScratch[1] = maxV;
+  }
+
+  setCompositeViewportMapping(params: {
+    viewWidth: number;
+    viewHeight: number;
+    renderWidth: number;
+    renderHeight: number;
+    overscanPadPx: number;
+  }): void {
+    const renderW = Math.max(1, Math.round(params.renderWidth));
+    const renderH = Math.max(1, Math.round(params.renderHeight));
+    const viewW = Math.max(1, Math.round(params.viewWidth));
+    const viewH = Math.max(1, Math.round(params.viewHeight));
+    const u = this._compositeU;
+    u.uvBaseOffset[0] = params.overscanPadPx / renderW;
+    u.uvBaseOffset[1] = params.overscanPadPx / renderH;
+    u.uvScale[0] = viewW / renderW;
+    u.uvScale[1] = viewH / renderH;
   }
 
   /** Sparse emissive positions for one chunk; cached until block edits or region prune. */
@@ -328,6 +375,7 @@ export class LightingComposer {
   private _torchHeapSwap(a: number, b: number): void {
     const h = this._torchHeapWx;
     const hy = this._torchHeapWy;
+    const hs = this._torchHeapStrength;
     const hd = this._torchHeapD2;
     let t = h[a]!;
     h[a] = h[b]!;
@@ -335,6 +383,9 @@ export class LightingComposer {
     t = hy[a]!;
     hy[a] = hy[b]!;
     hy[b] = t;
+    t = hs[a]!;
+    hs[a] = hs[b]!;
+    hs[b] = t;
     t = hd[a]!;
     hd[a] = hd[b]!;
     hd[b] = t;
@@ -374,15 +425,17 @@ export class LightingComposer {
   }
 
   /** Max-heap of up to K smallest dist² (root holds the worst among the kept set). */
-  private _torchHeapOffer(wx: number, wy: number, d2: number): void {
+  private _torchHeapOffer(wx: number, wy: number, strength: number, d2: number): void {
     const h = this._torchHeapWx;
     const hy = this._torchHeapWy;
+    const hs = this._torchHeapStrength;
     const hd = this._torchHeapD2;
     const cap = MAX_PLACED_TORCHES;
     let sz = this._torchHeapSize;
     if (sz < cap) {
       h[sz] = wx;
       hy[sz] = wy;
+      hs[sz] = strength;
       hd[sz] = d2;
       sz += 1;
       this._torchHeapSize = sz;
@@ -394,6 +447,7 @@ export class LightingComposer {
     }
     h[0] = wx;
     hy[0] = wy;
+    hs[0] = strength;
     hd[0] = d2;
     this._torchHeapSiftDown(0);
   }
@@ -401,18 +455,18 @@ export class LightingComposer {
   private _fillPlacedTorchUniforms(u: CompositeUniforms): void {
     const h = this._torchHeapWx;
     const hy = this._torchHeapWy;
+    const hs = this._torchHeapStrength;
     const sz = this._torchHeapSize;
-    const pairs = this._placedTorchPairs;
-    const ox = TORCH_FLAME_TIP_OFFSET_X_BLOCKS;
-    const oy = TORCH_FLAME_TIP_OFFSET_Y_BLOCKS;
+    const triplets = this._placedTorchTriples;
     for (let i = 0; i < sz; i++) {
-      const p = pairs[i]!;
-      p[0] = h[i]! + ox;
-      p[1] = hy[i]! + oy;
+      const p = triplets[i]!;
+      p[0] = h[i]!;
+      p[1] = hy[i]!;
+      p[2] = hs[i]!;
     }
-    // Do not set pairs.length = sz — truncating removes slots and causes undefined on the next frame.
+    // Do not set triplets.length = sz — truncating removes slots and causes undefined on the next frame.
     u.placedTorchCount = sz;
-    u.placedTorches = pairs;
+    u.placedTorches = triplets;
   }
 
   getLightTexture(cx: number, cy: number): LightTexture {

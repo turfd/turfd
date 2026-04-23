@@ -518,6 +518,197 @@ async function tryFetchPlayerBodyAtlasRects(): Promise<
   }
 }
 
+type BodySliceRect = Readonly<{ x: number; y: number; w: number; h: number }>;
+
+/** Seven equal columns × full sheet height (same rule as the Skins menu preview). */
+function uniformHorizontalBodyStripRects(
+  sheetW: number,
+  sheetH: number,
+): readonly BodySliceRect[] | null {
+  if (
+    sheetW <= 0 ||
+    sheetH <= 0 ||
+    sheetW % PLAYER_BODY_REQUIRED_FRAME_COUNT !== 0
+  ) {
+    return null;
+  }
+  const fw = Math.floor(sheetW / PLAYER_BODY_REQUIRED_FRAME_COUNT);
+  return Array.from({ length: PLAYER_BODY_REQUIRED_FRAME_COUNT }, (_, i) => ({
+    x: i * fw,
+    y: 0,
+    w: fw,
+    h: sheetH,
+  }));
+}
+
+/**
+ * Use resource-pack / default rects only when they cover this sheet’s pixel
+ * bounds; otherwise assume a single horizontal strip like custom uploads
+ * ({@link validateSkinBlob} only requires width divisible by 7).
+ */
+function resolveBodySliceRectsForSheet(
+  sheet: Texture,
+  candidateRects: readonly BodySliceRect[],
+): readonly BodySliceRect[] | null {
+  const w = sheet.width;
+  const h = sheet.height;
+  const eps = 0.5;
+  if (candidateRects.length < PLAYER_BODY_REQUIRED_FRAME_COUNT) {
+    return uniformHorizontalBodyStripRects(w, h);
+  }
+  const take = candidateRects.slice(0, PLAYER_BODY_REQUIRED_FRAME_COUNT);
+  let maxX = 0;
+  let maxY = 0;
+  for (const r of take) {
+    maxX = Math.max(maxX, r.x + r.w);
+    maxY = Math.max(maxY, r.y + r.h);
+  }
+  const bboxMatches =
+    Math.abs(w - maxX) <= eps && Math.abs(h - maxY) <= eps;
+  if (bboxMatches) {
+    for (const r of take) {
+      if (
+        r.x < 0 ||
+        r.y < 0 ||
+        r.w <= 0 ||
+        r.h <= 0 ||
+        r.x + r.w > w + eps ||
+        r.y + r.h > h + eps
+      ) {
+        return uniformHorizontalBodyStripRects(w, h);
+      }
+    }
+    return take;
+  }
+  return uniformHorizontalBodyStripRects(w, h);
+}
+
+/** Rows matching top-left (within tolerance) or nearly transparent count as empty padding. */
+async function detectVerticalContentRangeForImageUrl(
+  sheetUrl: string,
+  expectW: number,
+  expectH: number,
+): Promise<{ top: number; height: number } | null> {
+  let bmp: ImageBitmap | null = null;
+  try {
+    const res = await fetch(sheetUrl);
+    if (!res.ok) {
+      return null;
+    }
+    bmp = await createImageBitmap(await res.blob());
+    if (bmp.width !== expectW || bmp.height !== expectH) {
+      return null;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = expectW;
+    canvas.height = expectH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (ctx === null) {
+      return null;
+    }
+    ctx.drawImage(bmp, 0, 0);
+    const img = ctx.getImageData(0, 0, expectW, expectH);
+    const d = img.data;
+    const tol = 14;
+    const bgR = d[0]!;
+    const bgG = d[1]!;
+    const bgB = d[2]!;
+
+    const isPaddingPixel = (i: number): boolean => {
+      const a = d[i + 3]!;
+      if (a < 12) {
+        return true;
+      }
+      const r = d[i]!;
+      const g = d[i + 1]!;
+      const b = d[i + 2]!;
+      return (
+        Math.abs(r - bgR) <= tol &&
+        Math.abs(g - bgG) <= tol &&
+        Math.abs(b - bgB) <= tol &&
+        a > 235
+      );
+    };
+
+    const rowIsPadding = (y: number): boolean => {
+      const rowStart = y * expectW * 4;
+      for (let x = 0; x < expectW; x++) {
+        if (!isPaddingPixel(rowStart + x * 4)) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    let minY = -1;
+    let maxY = -1;
+    for (let y = 0; y < expectH; y++) {
+      if (!rowIsPadding(y)) {
+        if (minY < 0) {
+          minY = y;
+        }
+        maxY = y;
+      }
+    }
+    if (minY < 0 || maxY < 0) {
+      return null;
+    }
+    return { top: minY, height: maxY - minY + 1 };
+  } catch {
+    return null;
+  } finally {
+    bmp?.close();
+  }
+}
+
+/**
+ * Strips uniform top/bottom margins (e.g. blank header above a 7×1 strip) so
+ * feet alignment and hitbox scaling match compact sheets like 140×40.
+ */
+async function trimVerticalMarginsOnUniformStrip(
+  sheetUrl: string,
+  sheet: Texture,
+  rects: readonly BodySliceRect[],
+): Promise<readonly BodySliceRect[] | null> {
+  if (rects.length !== PLAYER_BODY_REQUIRED_FRAME_COUNT) {
+    return null;
+  }
+  const sh = sheet.height;
+  const sw = sheet.width;
+  if (sh <= 1 || sw <= 1) {
+    return null;
+  }
+  const r0 = rects[0]!;
+  if (r0.y !== 0 || Math.abs(r0.h - sh) > 0.5) {
+    return null;
+  }
+  const fw = r0.w;
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i]!;
+    if (
+      Math.abs(r.x - i * fw) > 0.5 ||
+      r.y !== 0 ||
+      Math.abs(r.w - fw) > 0.5 ||
+      Math.abs(r.h - sh) > 0.5
+    ) {
+      return null;
+    }
+  }
+  const yRange = await detectVerticalContentRangeForImageUrl(sheetUrl, sw, sh);
+  if (yRange === null || yRange.height < 1) {
+    return null;
+  }
+  if (yRange.top <= 0.5 && yRange.top + yRange.height >= sh - 0.5) {
+    return null;
+  }
+  return rects.map((r) => ({
+    x: r.x,
+    y: yRange.top,
+    w: r.w,
+    h: yRange.height,
+  }));
+}
+
 /**
  * Load a player body sprite sheet from a URL, slice it, and return a full
  * {@link SkinTextureSet}. Returns `null` on any load / validation failure.
@@ -525,10 +716,10 @@ async function tryFetchPlayerBodyAtlasRects(): Promise<
 async function loadSkinTextureSet(
   sheetUrl: string,
 ): Promise<SkinTextureSet | null> {
-  const rects =
-    (await tryFetchPlayerBodyAtlasRects()) ?? PLAYER_BODY_ATLAS_FRAMES;
-  const sheet =
-    (await Assets.load<Texture>(sheetUrl)) ?? Assets.get<Texture>(sheetUrl);
+  const [sheet, jsonRects] = await Promise.all([
+    Assets.load<Texture>(sheetUrl).then((t) => t ?? Assets.get<Texture>(sheetUrl)),
+    tryFetchPlayerBodyAtlasRects(),
+  ]);
   if (
     sheet === undefined ||
     sheet === Texture.EMPTY ||
@@ -538,6 +729,15 @@ async function loadSkinTextureSet(
   }
   sheet.source.scaleMode = "nearest";
   sheet.source.autoGenerateMipmaps = false;
+  const candidateRects = jsonRects ?? PLAYER_BODY_ATLAS_FRAMES;
+  let rects = resolveBodySliceRectsForSheet(sheet, candidateRects);
+  if (rects === null) {
+    return null;
+  }
+  const trimmed = await trimVerticalMarginsOnUniformStrip(sheetUrl, sheet, rects);
+  if (trimmed !== null) {
+    rects = trimmed;
+  }
   const frames = sliceBodyFrames(sheet, rects);
   if (frames.length < PLAYER_BODY_REQUIRED_FRAME_COUNT) {
     return null;
@@ -867,6 +1067,11 @@ type SlimeClientAnim = {
   jellyWobblePhase: number;
 };
 
+type UpStepVisualSmoothingState = {
+  prevTargetY: number;
+  lagPx: number;
+};
+
 type ZombieRig = {
   root: Container;
   base: AnimatedSprite;
@@ -902,6 +1107,15 @@ const DEATH_BITS_GROUND_STOP_SPEED = 7.5;
 const DEATH_BITS_MAX_BOUNCES = 2;
 const DEATH_BITS_MIN_COUNT = 4;
 const DEATH_BITS_MAX_COUNT = 16;
+/**
+ * Render-only smoothing for one-tick "step up" snaps.
+ * Physics remains authoritative; this just eases the visual lift over a short window.
+ */
+const STEP_UP_VISUAL_MIN_DELTA_PX = 3;
+const STEP_UP_VISUAL_MAX_DELTA_PX = BLOCK_SIZE * 1.35;
+const STEP_UP_VISUAL_MAX_ABS_VY_PX_PER_SEC = 74;
+const STEP_UP_VISUAL_MAX_LAG_PX = BLOCK_SIZE * 1.5;
+const STEP_UP_VISUAL_CATCHUP_PX_PER_SEC = BLOCK_SIZE * 11;
 
 function darkenHexColor(color: number, amount: number): number {
   const t = Math.min(1, Math.max(0, amount));
@@ -1112,6 +1326,7 @@ export class EntityManager {
   private readonly deathBits: DeathBit[] = [];
   private readonly deathBitsSpawned = new Set<string>();
   private readonly deathBitSolidScratch: AABB[] = [];
+  private readonly upStepVisualSmoothing = new Map<string, UpStepVisualSmoothingState>();
 
   /** Sliced iron armor overlay frames (same layout as {@link PLAYER_BODY_ATLAS_FRAMES}); null if asset missing. */
   private ironArmorHelmetFrames: Texture[] | null = null;
@@ -1151,8 +1366,9 @@ export class EntityManager {
   initVisual(pipeline: RenderPipeline): void {
     const root = new Container();
     root.sortableChildren = true;
-    // Draw above mobs/remotes (their roots use zIndex -2) so torch bloom masks the visible sprite.
-    root.zIndex = 100;
+    // Above water quads in layerWaterOverEntities; above mobs/remotes in entities (zIndex -2) so
+    // torch bloom + the bloom mask match the on-screen body (incl. when overlapping water).
+    root.zIndex = 1000;
     // Sprite extends past the 14×28 hitbox; don’t let world cull clip the edges while mining.
     root.cullable = false;
     root.cullableChildren = false;
@@ -1160,7 +1376,7 @@ export class EntityManager {
     placeholder.rect(0, 0, PLAYER_WIDTH, PLAYER_HEIGHT);
     placeholder.fill({ color: 0x00ffff });
     root.addChild(placeholder);
-    pipeline.layerEntities.addChild(root);
+    pipeline.layerWaterOverEntities.addChild(root);
     this.playerGraphic = root;
     this.localPlayerPlaceholder = placeholder;
     this.localPlayerAnim = null;
@@ -1182,7 +1398,7 @@ export class EntityManager {
     // Remote players are added lazily in syncPlayerGraphic when their state appears in World.
   }
 
-  /** Root container for the local player in {@link RenderPipeline.layerEntities} (bloom mask, etc.). */
+  /** Root for the local player in {@link RenderPipeline.layerWaterOverEntities} (drawn above water; bloom mask). */
   getPlayerGraphic(): Container | null {
     return this.playerGraphic;
   }
@@ -1500,6 +1716,49 @@ export class EntityManager {
     this.world.refreshDoorProximityMeshDirty();
   }
 
+  private mobStepSmoothingKey(mobType: MobType, id: number): string {
+    return `mob:${mobType}:${id}`;
+  }
+
+  private smoothEntityStepUpScreenY(
+    key: string,
+    targetY: number,
+    vy: number,
+    dtSec: number,
+    allow: boolean,
+  ): number {
+    let state = this.upStepVisualSmoothing.get(key);
+    if (!allow || !Number.isFinite(targetY)) {
+      if (state !== undefined) {
+        state.prevTargetY = targetY;
+        state.lagPx = 0;
+      }
+      return targetY;
+    }
+    if (state === undefined) {
+      state = { prevTargetY: targetY, lagPx: 0 };
+      this.upStepVisualSmoothing.set(key, state);
+      return targetY;
+    }
+    const dyTarget = targetY - state.prevTargetY;
+    const absVy = Math.abs(vy);
+    const isLikelyStepUp =
+      dyTarget <= -STEP_UP_VISUAL_MIN_DELTA_PX &&
+      dyTarget >= -STEP_UP_VISUAL_MAX_DELTA_PX &&
+      absVy <= STEP_UP_VISUAL_MAX_ABS_VY_PX_PER_SEC;
+    if (isLikelyStepUp) {
+      state.lagPx = Math.min(STEP_UP_VISUAL_MAX_LAG_PX, state.lagPx + -dyTarget);
+    } else if (dyTarget > 0 || absVy > STEP_UP_VISUAL_MAX_ABS_VY_PX_PER_SEC * 1.7) {
+      state.lagPx = 0;
+    }
+    const clampedDt = Math.max(0, Math.min(0.05, dtSec));
+    if (state.lagPx > 0) {
+      state.lagPx = Math.max(0, state.lagPx - STEP_UP_VISUAL_CATCHUP_PX_PER_SEC * clampedDt);
+    }
+    state.prevTargetY = targetY;
+    return targetY + state.lagPx;
+  }
+
   /** Sync placeholder rects to player + remote player world positions (call each render). */
   syncPlayerGraphic(alpha: number, dtSec: number, nowMs: number): void {
     const root = this.playerGraphic;
@@ -1508,6 +1767,8 @@ export class EntityManager {
       const x = s.prevPosition.x + (s.position.x - s.prevPosition.x) * alpha;
       const y = s.prevPosition.y + (s.position.y - s.prevPosition.y) * alpha;
       const deathT = s.deathAnimT;
+      let targetRootX = x;
+      let targetRootY = -y;
       const feetInWater =
         deathT === null &&
         !s.sleeping &&
@@ -1515,22 +1776,33 @@ export class EntityManager {
       if (deathT !== null) {
         const t = Math.min(1, Math.max(0, deathT));
         root.pivot.set(PLAYER_WIDTH * 0.5, PLAYER_HEIGHT);
-        root.position.set(x, -y);
+        targetRootX = x;
+        targetRootY = -y;
         const sign = s.facingRight ? 1 : -1;
         root.rotation = sign * t * (Math.PI * 0.5);
         root.alpha = 1 - t;
       } else if (s.sleeping) {
         // Bed sleep pose: rotate the whole body root (local-only).
         root.pivot.set(PLAYER_WIDTH * 0.5, PLAYER_HEIGHT * 0.55);
-        root.position.set(x, -y);
+        targetRootX = x;
+        targetRootY = -y;
         root.rotation = -Math.PI * 0.5;
         root.alpha = 1;
       } else {
         root.pivot.set(0, 0);
         root.rotation = 0;
         root.alpha = 1;
-        root.position.set(x - PLAYER_WIDTH / 2, -y - PLAYER_HEIGHT);
+        targetRootX = x - PLAYER_WIDTH / 2;
+        targetRootY = -y - PLAYER_HEIGHT;
       }
+      const localRootY = this.smoothEntityStepUpScreenY(
+        "player:local",
+        targetRootY,
+        s.velocity.y,
+        dtSec,
+        deathT === null && !s.sleeping,
+      );
+      root.position.set(targetRootX, localRootY);
 
       const anim = this.localPlayerAnim;
       if (anim !== null) {
@@ -1666,6 +1938,7 @@ export class EntityManager {
         sprite.parent?.removeChild(sprite);
         sprite.destroy({ children: true });
         this.remoteGraphics.delete(peerId);
+        this.upStepVisualSmoothing.delete(`remote:${peerId}`);
         this.remoteWalkAnimMode.delete(peerId);
         this.remoteSurfaceMode.delete(peerId);
         this.remoteAnimVelX.delete(peerId);
@@ -1693,7 +1966,15 @@ export class EntityManager {
         PLAYER_WIDTH,
         PLAYER_HEIGHT,
       );
-      remoteRoot.position.set(disp.x - PLAYER_WIDTH / 2, -disp.y - PLAYER_HEIGHT);
+      const remoteTargetY = -disp.y - PLAYER_HEIGHT;
+      const remoteRootY = this.smoothEntityStepUpScreenY(
+        `remote:${peerId}`,
+        remoteTargetY,
+        disp.vy,
+        dtSec,
+        true,
+      );
+      remoteRoot.position.set(disp.x - PLAYER_WIDTH / 2, remoteRootY);
 
       let remoteBody: AnimatedSprite | null = null;
       let remoteHeld: Sprite | null = null;
@@ -3337,9 +3618,17 @@ export class EntityManager {
         wool.scale.set(flipX, 1);
       }
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
+      const sheepTargetY = -v.y + SHEEP_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx;
+      const sheepRootY = this.smoothEntityStepUpScreenY(
+        this.mobStepSmoothingKey(MobType.Sheep, v.id),
+        sheepTargetY,
+        v.vy,
+        _dtSec,
+        v.deathAnimRemainSec <= 0,
+      );
       root.position.set(
         Math.round(v.x),
-        Math.round(-v.y + SHEEP_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx),
+        Math.round(sheepRootY),
       );
       if (v.deathAnimRemainSec > 0) {
         let deathBitTex: Texture = base.texture;
@@ -3401,6 +3690,7 @@ export class EntityManager {
           rig.root.parent?.removeChild(rig.root);
           rig.root.destroy({ children: true });
         }
+        this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Sheep, id));
         this.sheepSprites.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
       }
@@ -3483,14 +3773,21 @@ export class EntityManager {
       root.scale.set(baseScale, baseScale);
       base.scale.set(flipX, 1);
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
+      const pigTargetY =
+        -v.y +
+        PIG_FEET_SPRITE_NUDGE_Y_PX +
+        PIG_VISUAL_FEET_DROP_PX +
+        extraNudgeDownPx;
+      const pigRootY = this.smoothEntityStepUpScreenY(
+        this.mobStepSmoothingKey(MobType.Pig, v.id),
+        pigTargetY,
+        v.vy,
+        _dtSec,
+        v.deathAnimRemainSec <= 0,
+      );
       root.position.set(
         Math.round(v.x),
-        Math.round(
-          -v.y +
-            PIG_FEET_SPRITE_NUDGE_Y_PX +
-            PIG_VISUAL_FEET_DROP_PX +
-            extraNudgeDownPx,
-        ),
+        Math.round(pigRootY),
       );
       if (v.deathAnimRemainSec > 0) {
         this.spawnDeathBitsIfNeeded(
@@ -3530,6 +3827,7 @@ export class EntityManager {
           rig.root.parent?.removeChild(rig.root);
           rig.root.destroy({ children: true });
         }
+        this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Pig, id));
         this.pigSprites.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
       }
@@ -3622,9 +3920,17 @@ export class EntityManager {
       // Keep duck sprite origin fixed across animation frames to avoid visible popping/jitter.
       base.position.set(0, 0);
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
+      const duckTargetY = -v.y + DUCK_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx;
+      const duckRootY = this.smoothEntityStepUpScreenY(
+        this.mobStepSmoothingKey(MobType.Duck, v.id),
+        duckTargetY,
+        v.vy,
+        _dtSec,
+        v.deathAnimRemainSec <= 0,
+      );
       root.position.set(
         Math.round(v.x),
-        Math.round(-v.y + DUCK_FEET_SPRITE_NUDGE_Y_PX + extraNudgeDownPx),
+        Math.round(duckRootY),
       );
       if (v.deathAnimRemainSec > 0) {
         this.spawnDeathBitsIfNeeded(
@@ -3663,6 +3969,7 @@ export class EntityManager {
           rig.root.parent?.removeChild(rig.root);
           rig.root.destroy({ children: true });
         }
+        this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Duck, id));
         this.duckSprites.delete(id);
         this.duckClientAnim.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
@@ -3864,7 +4171,14 @@ export class EntityManager {
         SLIME_FEET_SPRITE_NUDGE_Y_PX +
         extraNudgeDownPx +
         SLIME_VISUAL_FEET_DROP_PX;
-      root.position.set(Math.round(v.x), Math.round(slimeRootY));
+      const smoothedSlimeRootY = this.smoothEntityStepUpScreenY(
+        this.mobStepSmoothingKey(MobType.Slime, v.id),
+        slimeRootY,
+        v.vy,
+        dtSec,
+        v.deathAnimRemainSec <= 0,
+      );
+      root.position.set(Math.round(v.x), Math.round(smoothedSlimeRootY));
       if (v.deathAnimRemainSec > 0) {
         this.spawnDeathBitsIfNeeded(
           MobType.Slime,
@@ -3909,6 +4223,7 @@ export class EntityManager {
           rig.root.parent?.removeChild(rig.root);
           rig.root.destroy({ children: true });
         }
+        this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Slime, id));
         this.slimeSprites.delete(id);
         this.slimeClientAnim.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
@@ -4022,13 +4337,20 @@ export class EntityManager {
       // Also bias 1px left to avoid a subtle jitter when toggling attack pose.
       base.position.x = useAttack ? (v.facingRight ? -hitBackPx : hitBackPx) - 1 : 0;
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
+      const zombieTargetY =
+        -v.y +
+        ZOMBIE_FEET_SPRITE_NUDGE_Y_PX +
+        (extraNudgeDownPx - 3);
+      const zombieRootY = this.smoothEntityStepUpScreenY(
+        this.mobStepSmoothingKey(MobType.Zombie, v.id),
+        zombieTargetY,
+        v.vy,
+        _dtSec,
+        v.deathAnimRemainSec <= 0,
+      );
       root.position.set(
         Math.round(v.x),
-        Math.round(
-          -v.y +
-            ZOMBIE_FEET_SPRITE_NUDGE_Y_PX +
-            (extraNudgeDownPx - 3),
-        ),
+        Math.round(zombieRootY),
       );
 
       const burning = v.burning && this.zombieFireTextures !== null;
@@ -4088,6 +4410,7 @@ export class EntityManager {
           rig.root.parent?.removeChild(rig.root);
           rig.root.destroy({ children: true });
         }
+        this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Zombie, id));
         this.zombieSprites.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
       }
@@ -4115,6 +4438,7 @@ export class EntityManager {
     this.localSurfaceMode.v = "ground";
     this.remoteWalkAnimMode.clear();
     this.remoteSurfaceMode.clear();
+    this.upStepVisualSmoothing.clear();
     if (this.aimGraphic !== null) {
       this.aimGraphic.parent?.removeChild(this.aimGraphic);
       this.aimGraphic.destroy();

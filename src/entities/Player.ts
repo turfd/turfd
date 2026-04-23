@@ -24,6 +24,8 @@ import {
   BOW_DRAW_MOVE_SPEED_MULT,
   BOW_MAX_DRAW_SEC,
   HOTBAR_SIZE,
+  ITEM_PLAYER_THROW_PICKUP_DELAY_SEC,
+  ITEM_THROW_INHERIT_PLAYER_VEL_X,
   ITEM_THROW_SPAWN_OFFSET_PX,
   ITEM_THROW_SPEED_PX,
   PLAYER_HEIGHT,
@@ -53,7 +55,11 @@ import {
 } from "../core/constants";
 import { getBreakTimeSeconds, canHarvestDrops } from "../core/mining";
 import type { InputAction } from "../input/bindings";
-import { getAimUnitVectorFromFeet } from "../input/aimDirection";
+import {
+  getAimUnitVectorFromFeet,
+  getItemThrowUnitVectorFromFeet,
+  clampItemThrowVelocity,
+} from "../input/aimDirection";
 import type { InputManager } from "../input/InputManager";
 import type { ItemDefinition } from "../core/itemDefinition";
 import type { ItemRegistry } from "../items/ItemRegistry";
@@ -171,8 +177,24 @@ export type PlayerState = {
   hotbarSlot: number;
   /** Integer HP in `[0, PLAYER_MAX_HEALTH]`. */
   health: number;
+  /**
+   * Extra HP that absorbs damage first and is removed when
+   * {@link temporaryHealthRemainSec} hits 0 (e.g. raw food). With {@link health} must
+   * not exceed {@link PLAYER_MAX_HEALTH} combined.
+   */
+  temporaryHealth: number;
+  /**
+   * Countdown; when 0, {@link temporaryHealth} is cleared. Eating more may refresh
+   * this and add any remaining “room” in the bar.
+   */
+  temporaryHealthRemainSec: number;
   /** Tab: edit back-wall tiles (place/break) instead of foreground. */
   backgroundEditMode: boolean;
+  /**
+   * Cell under the crosshair for passive outline (when not actively mining that cell).
+   * Shown for air as well as blocks; same layer as {@link backgroundEditMode} implies.
+   */
+  aimOutlineTarget: { wx: number; wy: number; layer: BreakTargetLayer } | null;
   breakTarget: { wx: number; wy: number; layer: BreakTargetLayer } | null;
   breakProgress: number;
   breakAccum: number;
@@ -205,7 +227,8 @@ export type PlayerState = {
   bowDrawSec: number;
 };
 
-function feetToScreenAABB(pos: { x: number; y: number }): AABB {
+/** Feet world coords (Y up) → same root space as foreground chunk meshes (Pixi Y down). */
+export function feetToScreenAABB(pos: { x: number; y: number }): AABB {
   const x = pos.x - PLAYER_WIDTH * 0.5;
   const y = -(pos.y + PLAYER_HEIGHT);
   return createAABB(x, y, PLAYER_WIDTH, PLAYER_HEIGHT);
@@ -237,7 +260,10 @@ function isOnGround(mover: AABB, solids: ReadonlyArray<AABB>): boolean {
   return false;
 }
 
-function playerAabbOverlapsWater(world: World, pos: { x: number; y: number }): boolean {
+export function playerAabbOverlapsWater(
+  world: World,
+  pos: { x: number; y: number },
+): boolean {
   if (!world.getRegistry().isRegistered("stratum:water")) {
     return false;
   }
@@ -262,7 +288,10 @@ function playerAabbOverlapsWater(world: World, pos: { x: number; y: number }): b
   return false;
 }
 
-function playerAabbOverlapsLadder(world: World, pos: { x: number; y: number }): boolean {
+export function playerAabbOverlapsLadder(
+  world: World,
+  pos: { x: number; y: number },
+): boolean {
   const reg = world.getRegistry();
   if (!reg.isRegistered("stratum:ladder")) {
     return false;
@@ -402,7 +431,10 @@ export class Player {
     facingRight: true,
     hotbarSlot: 0,
     health: PLAYER_MAX_HEALTH,
+    temporaryHealth: 0,
+    temporaryHealthRemainSec: 0,
     backgroundEditMode: false,
+    aimOutlineTarget: null,
     breakTarget: null,
     breakProgress: 0,
     breakAccum: 0,
@@ -432,6 +464,10 @@ export class Player {
   private prevBowRmbDown = false;
   /** Downward feet travel (blocks) while airborne; reset on ground. Landing includes this frame’s drop. */
   private fallDistanceBlocks = 0;
+  /** Previous physics tick ended overlapping a ladder (smooths one-frame AABB gaps for fall damage). */
+  private _prevLadderOverlap = false;
+  /** Throttle system chat hint when mining without correct tool (no drops). */
+  private _lastWrongToolNoDropHintMs = 0;
   /** Previous tick: AABB overlapped water (for enter/exit splash). */
   private wasInWater = false;
   /** Accumulator for periodic {@link WATER_SWIM_SFX_INTERVAL_SEC} swim strokes. */
@@ -530,6 +566,8 @@ export class Player {
     this.state.coyoteTimeRemaining = 0;
     this.state.jumpBufferRemaining = 0;
     this.state.health = PLAYER_MAX_HEALTH;
+    this.state.temporaryHealth = 0;
+    this.state.temporaryHealthRemainSec = 0;
     this.state.handSwingRemainSec = 0;
     this.state.dead = false;
     this.state.deathAnimT = null;
@@ -563,8 +601,19 @@ export class Player {
       this.state.damageTintRemainSec = PLAYER_DAMAGE_TINT_DURATION_SEC * 0.5;
       return;
     }
+    const { state } = this;
+    let dLeft = d;
+    if (state.temporaryHealth > 0) {
+      const fromTemp = Math.min(state.temporaryHealth, dLeft);
+      state.temporaryHealth -= fromTemp;
+      dLeft -= fromTemp;
+    }
+    if (dLeft <= 0) {
+      this.state.damageTintRemainSec = PLAYER_DAMAGE_TINT_DURATION_SEC * 0.5;
+      return;
+    }
     const prevHp = this.state.health;
-    this.state.health = Math.max(0, this.state.health - d);
+    this.state.health = Math.max(0, this.state.health - dLeft);
     if (this.state.health < prevHp) {
       this.state.damageTintRemainSec = PLAYER_DAMAGE_TINT_DURATION_SEC;
       const ax = this.state.position.x;
@@ -583,6 +632,8 @@ export class Player {
       });
     }
     if (this.state.health <= 0) {
+      this.state.temporaryHealth = 0;
+      this.state.temporaryHealthRemainSec = 0;
       this.state.dead = true;
       this.state.deathAnimT = 0;
     }
@@ -595,6 +646,75 @@ export class Player {
     }
     const h = Math.floor(amount);
     this.state.health = Math.min(PLAYER_MAX_HEALTH, this.state.health + h);
+  }
+
+  /**
+   * Add HP that absorbs damage before {@link state.health} and is lost when the timer elapses.
+   * Combined with {@link state.health} is capped to `PLAYER_MAX_HEALTH`.
+   */
+  addTemporaryHealth(amount: number, durationSec: number): void {
+    const { state } = this;
+    if (amount <= 0 || !Number.isFinite(durationSec) || durationSec <= 0) {
+      return;
+    }
+    const h = Math.floor(amount);
+    if (h <= 0) {
+      return;
+    }
+    const space = Math.max(0, PLAYER_MAX_HEALTH - state.health - state.temporaryHealth);
+    const toAdd = Math.min(h, space);
+    if (toAdd > 0) {
+      state.temporaryHealth += toAdd;
+    }
+    if (toAdd > 0 || state.temporaryHealth > 0) {
+      state.temporaryHealthRemainSec = Math.max(
+        state.temporaryHealthRemainSec,
+        durationSec,
+      );
+    }
+  }
+
+  canConsumeEdible(held: {
+    eatRestoreHealth?: number;
+    eatTemporaryDurationSec?: number;
+  }): boolean {
+    const eatHp = held.eatRestoreHealth;
+    if (eatHp === undefined || eatHp <= 0) {
+      return false;
+    }
+    const { health, temporaryHealth: temp } = this.state;
+    if (held.eatTemporaryDurationSec !== undefined) {
+      if (temp > 0) {
+        return true;
+      }
+      return health + temp < PLAYER_MAX_HEALTH;
+    }
+    return health < PLAYER_MAX_HEALTH;
+  }
+
+  private tryConsumeEdibleInWorld(hotbarSlot: number): void {
+    const stack = this.inventory.getStack(hotbarSlot);
+    const def =
+      stack !== null ? this.itemRegistry.getById(stack.itemId) : undefined;
+    if (def === undefined || !this.canConsumeEdible(def)) {
+      return;
+    }
+    const eatHp = def.eatRestoreHealth;
+    if (eatHp === undefined) {
+      return;
+    }
+    if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+      return;
+    }
+    if (def.eatTemporaryDurationSec !== undefined) {
+      this.addTemporaryHealth(eatHp, def.eatTemporaryDurationSec);
+    } else {
+      this.heal(eatHp);
+    }
+    this.startHandSwingVisual();
+    this.sfxSelf(getPlaceSound("generic"), {
+      pitchVariance: 18,
+    });
   }
 
   /** Same mining-style swing as breaking blocks (body + held item), for place / use feedback. */
@@ -615,6 +735,7 @@ export class Player {
     this.state.sleepRemainSec = d;
     if (this.state.sleeping) {
       this.state.breakTarget = null;
+      this.state.aimOutlineTarget = null;
       this.state.breakAccum = 0;
       this.state.breakProgress = 0;
       this.miningDigSoundAccum = 0;
@@ -645,6 +766,8 @@ export class Player {
     } else {
       this.state.health = PLAYER_MAX_HEALTH;
     }
+    this.state.temporaryHealth = 0;
+    this.state.temporaryHealthRemainSec = 0;
     if (inventory !== undefined) {
       this.inventory.restore(inventory);
     }
@@ -699,6 +822,13 @@ export class Player {
 
     if (state.damageTintRemainSec > 0) {
       state.damageTintRemainSec = Math.max(0, state.damageTintRemainSec - dt);
+    }
+
+    if (state.temporaryHealthRemainSec > 0) {
+      state.temporaryHealthRemainSec = Math.max(0, state.temporaryHealthRemainSec - dt);
+    }
+    if (state.temporaryHealthRemainSec <= 0) {
+      state.temporaryHealth = 0;
     }
 
     if (state.sleepRemainSec > 0) {
@@ -800,6 +930,9 @@ export class Player {
 
     const onLadder = !inWater && playerAabbOverlapsLadder(world, state.position);
     if (onLadder) {
+      if (!this._prevLadderOverlap && state.velocity.y > PLAYER_LADDER_MAX_DESCEND_VY) {
+        state.velocity.y = PLAYER_LADDER_MAX_DESCEND_VY;
+      }
       if (input.isDown("jump")) {
         state.velocity.y = PLAYER_LADDER_CLIMB_VY;
       } else if (state.velocity.y > PLAYER_LADDER_MAX_DESCEND_VY) {
@@ -865,8 +998,15 @@ export class Player {
      * Do not count vertical movement while submerged as falling — swimming/sinking would otherwise
      * inflate {@link fallDistanceBlocks} and cause bogus fall damage when walking onto shore.
      * Clear for either tick edge so one-frame surface gaps do not accumulate.
+     *
+     * Same for ladders: the ground check stays false while climbing, so slide distance would
+     * otherwise accumulate bogus fall distance and hurt on dismount.
      */
+    const ladderOverlap =
+      onLadderAfterMove || onLadder || this._prevLadderOverlap;
     if (inWaterAfterMove || inWater) {
+      this.fallDistanceBlocks = 0;
+    } else if (ladderOverlap) {
       this.fallDistanceBlocks = 0;
     } else if (!onGroundAfterCollision) {
       this.fallDistanceBlocks += downBlocksThisTick;
@@ -926,6 +1066,8 @@ export class Player {
     } else {
       this.fallDistanceBlocks = 0;
     }
+
+    this._prevLadderOverlap = onLadderAfterMove || onLadder;
 
     if (state.onGround || wasOnGround) {
       state.coyoteTimeRemaining = COYOTE_TIME_SEC;
@@ -1076,8 +1218,17 @@ export class Player {
       const dropSlot = state.hotbarSlot % HOTBAR_SIZE;
       const dropStack = this.inventory.getStack(dropSlot);
       if (dropStack !== null && dropStack.count > 0) {
-        this.inventory.setStack(dropSlot, null);
-        const { dirX, dirY } = getAimUnitVectorFromFeet(
+        const dmg = dropStack.damage ?? 0;
+        if (dropStack.count <= 1) {
+          this.inventory.setStack(dropSlot, null);
+        } else {
+          this.inventory.setStack(dropSlot, {
+            itemId: dropStack.itemId,
+            count: dropStack.count - 1,
+            ...(dmg > 0 ? { damage: dmg } : {}),
+          });
+        }
+        const { dirX, dirY } = getItemThrowUnitVectorFromFeet(
           state.position.x,
           state.position.y,
           input.mouseWorldPos.x,
@@ -1085,20 +1236,23 @@ export class Player {
           state.facingRight,
         );
         const spd = ITEM_THROW_SPEED_PX;
-        const vx = dirX * spd;
-        const vy = dirY * spd;
+        let vx =
+          dirX * spd + state.velocity.x * ITEM_THROW_INHERIT_PLAYER_VEL_X;
+        let vy = dirY * spd;
+        ({ vx, vy } = clampItemThrowVelocity(vx, vy));
         const chestY = state.position.y + PLAYER_HEIGHT * 0.5;
         const off = ITEM_THROW_SPAWN_OFFSET_PX;
         const sx = state.position.x + dirX * off;
         const sy = chestY - dirY * off;
         world.spawnItem(
           dropStack.itemId,
-          dropStack.count,
+          1,
           sx,
           sy,
           vx,
           vy,
-          dropStack.damage ?? 0,
+          dmg,
+          ITEM_PLAYER_THROW_PICKUP_DELAY_SEC,
         );
       }
     }
@@ -1188,6 +1342,21 @@ export class Player {
               this.startHandSwingVisual();
             } else {
             const dropsLoot = canHarvestDrops(def, heldItemDef);
+            if (
+              !dropsLoot &&
+              def.requiresToolForDrops &&
+              layer === "fg"
+            ) {
+              const now = performance.now();
+              if (now - this._lastWrongToolNoDropHintMs > 3500) {
+                this._lastWrongToolNoDropHintMs = now;
+                this.bus.emit({
+                  type: "ui:chat-line",
+                  kind: "system",
+                  text: "Wrong tool — no drops from this block.",
+                } satisfies GameEvent);
+              }
+            }
             if (layer === "bg") {
               if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
               world.setBackgroundBlock(wx, wy, 0);
@@ -1321,6 +1490,25 @@ export class Player {
       state.breakAccum = 0;
       state.breakProgress = 0;
       this.miningDigSoundAccum = 0;
+    }
+
+    if (
+      input.isDown("break") &&
+      state.breakTarget !== null &&
+      state.breakProgress < 1
+    ) {
+      state.aimOutlineTarget = null;
+    } else if (
+      !input.isWorldInputBlocked() &&
+      !state.dead &&
+      !state.sleeping &&
+      inReach
+    ) {
+      const aimLayer: BreakTargetLayer = state.backgroundEditMode ? "bg" : "fg";
+      // Always show the cell outline at the crosshair (air, unbreakable, etc.), not only on solid blocks.
+      state.aimOutlineTarget = { wx, wy, layer: aimLayer };
+    } else {
+      state.aimOutlineTarget = null;
     }
 
     const placeEdgeWithInventoryOpen =
@@ -2162,18 +2350,8 @@ export class Player {
         const stack = this.inventory.getStack(hotbarSlot);
         const heldEdible =
           stack !== null ? this.itemRegistry.getById(stack.itemId) : undefined;
-        const eatHp = heldEdible?.eatRestoreHealth;
-        if (
-          eatHp !== undefined &&
-          eatHp > 0 &&
-          state.health < PLAYER_MAX_HEALTH &&
-          this.inventory.consumeOneFromSlot(hotbarSlot)
-        ) {
-          this.heal(eatHp);
-          this.startHandSwingVisual();
-          this.sfxSelf(getPlaceSound("generic"), {
-            pitchVariance: 18,
-          });
+        if (heldEdible !== undefined && this.canConsumeEdible(heldEdible)) {
+          this.tryConsumeEdibleInWorld(hotbarSlot);
         }
       }
       }
@@ -2190,18 +2368,8 @@ export class Player {
       const stack = this.inventory.getStack(hotbarSlot);
       const heldFar =
         stack !== null ? this.itemRegistry.getById(stack.itemId) : undefined;
-      const eatHpFar = heldFar?.eatRestoreHealth;
-      if (
-        eatHpFar !== undefined &&
-        eatHpFar > 0 &&
-        state.health < PLAYER_MAX_HEALTH &&
-        this.inventory.consumeOneFromSlot(hotbarSlot)
-      ) {
-        this.heal(eatHpFar);
-        this.startHandSwingVisual();
-        this.sfxSelf(getPlaceSound("generic"), {
-          pitchVariance: 18,
-        });
+      if (heldFar !== undefined && this.canConsumeEdible(heldFar)) {
+        this.tryConsumeEdibleInWorld(hotbarSlot);
       }
     }
 
