@@ -118,7 +118,7 @@ import { applyDuckPanic, tickDuckPhysics } from "./duckPhysics";
 import { applyPigPanic, tickPigPhysics } from "./pigPhysics";
 import {
   tickZombiePhysics,
-  zombieFeetOverlapPlayerFeet,
+  zombieFeetInMeleeRangeOfPlayerFeet,
 } from "./zombiePhysics";
 import {
   applySlimePanic,
@@ -1907,6 +1907,68 @@ export class MobManager {
   }
 
   /**
+   * Soft separation pass for hostiles (zombies/slimes): no hard body-blocking while pathing,
+   * but also no visible "stacking" into the same space near players.
+   */
+  private resolveHostileInterpenetration(): void {
+    const hostiles: Array<MobZombieState | MobSlimeState> = [];
+    for (const m of this.mobs.values()) {
+      if (m.deathAnimRemainSec > 0 || m.hp <= 0) {
+        continue;
+      }
+      if (m.kind === "zombie" || m.kind === "slime") {
+        hostiles.push(m);
+      }
+    }
+    if (hostiles.length < 2) {
+      return;
+    }
+
+    for (let i = 0; i < hostiles.length - 1; i++) {
+      const a = hostiles[i]!;
+      const aSize = mobHitboxSizePx(a.kind);
+      const aHalfW = aSize.w * 0.5;
+      const aTop = a.y - aSize.h;
+      const aBot = a.y;
+      for (let j = i + 1; j < hostiles.length; j++) {
+        const b = hostiles[j]!;
+        const bSize = mobHitboxSizePx(b.kind);
+        const bHalfW = bSize.w * 0.5;
+        const bTop = b.y - bSize.h;
+        const bBot = b.y;
+
+        const overlapY = Math.min(aBot, bBot) - Math.max(aTop, bTop);
+        if (overlapY <= 0) {
+          continue;
+        }
+
+        const dx = a.x - b.x;
+        const overlapX = aHalfW + bHalfW - Math.abs(dx);
+        if (overlapX <= 0) {
+          continue;
+        }
+
+        // Horizontal-only de-overlap keeps hostiles from body-blocking one another,
+        // while still preventing same-space stacking.
+        const dir = dx !== 0 ? (dx > 0 ? 1 : -1) : (a.id > b.id ? 1 : -1);
+        const sep = overlapX + 0.001;
+        const push = sep * 0.5;
+        a.x += dir * push;
+        b.x -= dir * push;
+
+        a.vx = 0;
+        b.vx = 0;
+        if (a.kind === "slime") {
+          a.slimeAirHorizVx = 0;
+        }
+        if (b.kind === "slime") {
+          b.slimeAirHorizVx = 0;
+        }
+      }
+    }
+  }
+
+  /**
    * Returns true if any living mob overlaps the given AABB.
    * Used to prevent block placement inside mobs.
    */
@@ -2226,7 +2288,7 @@ export class MobManager {
           let bestD = Number.POSITIVE_INFINITY;
           for (const t of chaseTargets) {
             if (
-              !zombieFeetOverlapPlayerFeet(
+              !zombieFeetInMeleeRangeOfPlayerFeet(
                 m.x,
                 m.y,
                 t.x,
@@ -2262,6 +2324,8 @@ export class MobManager {
         this.startSlimeDeath(m, rng);
       }
     }
+
+    this.resolveHostileInterpenetration();
 
     this.broadcastCooldown += dt;
   }
