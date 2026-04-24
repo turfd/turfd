@@ -3158,8 +3158,8 @@ function injectStyles(base: string): void {
 // ---------------------------------------------------------------------------
 
 const WHATS_NEW_HTML = `
-  A refined world-polish update: richer skies, ambient butterflies and fireflies, denser foliage, ladder support, and improved melee feel.
-  Plus furnace queue QoL and stronger multiplayer version-compatibility safeguards.
+  A performance-focused patch with smoother frame pacing, reduced stutter in heavy scenes, and better overall responsiveness.
+  Ambient effects, chunk processing, and rendering paths were optimized to lower CPU load and keep gameplay feeling stable.
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -3529,7 +3529,7 @@ export class MainMenu {
 
         const wnHeading = document.createElement("p");
         wnHeading.className = "mm-home-changelog-title";
-        wnHeading.textContent = "Stratum · Alpha 0.5";
+        wnHeading.textContent = "Stratum · Alpha 0.5.1";
         wnCopy.appendChild(wnHeading);
 
         const wnBody = document.createElement("div");
