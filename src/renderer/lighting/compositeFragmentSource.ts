@@ -323,7 +323,8 @@ void main() {
     vec4 placed = uPlacedTorchPositions[i];
     vec2 tp = placed.xy;
     float placedStrength = max(0.0, placed.z);
-    float g = torchBloomGain(worldPos, tp + bloomTipShift);
+    float bloomTipShiftScale = clamp(placed.w, 0.0, 1.0);
+    float g = torchBloomGain(worldPos, tp + bloomTipShift * bloomTipShiftScale);
     float shadow = placedTorchShadow(worldPos, tp);
     placedBloomAmt = max(placedBloomAmt, 0.42 * g * shadow * placedStrength);
   }

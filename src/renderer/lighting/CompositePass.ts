@@ -105,9 +105,9 @@ export type CompositeUniforms = {
   } | null;
   /**
    * Nearby placed/dynamic emitters (up to MAX_PLACED_TORCHES).
-   * Tuple: [worldX, worldY, strength(0..1+)].
+   * Tuple: [worldX, worldY, strength(0..1+), bloomTipShiftScale(0..1)].
    */
-  placedTorches: [number, number, number?][];
+  placedTorches: [number, number, number?, number?][];
   /**
    * How many entries in {@link placedTorches} are valid this frame. When set, preferred over
    * `placedTorches.length` so the buffer can stay preallocated without truncating.
@@ -346,12 +346,18 @@ export class CompositePass {
       const px = entry[0];
       const py = entry[1];
       const strength = entry[2] ?? 1;
+      const bloomTipShiftScale = entry[3] ?? 1;
       const b = i * 4;
-      if (ptBuf[b] !== px || ptBuf[b + 1] !== py || ptBuf[b + 2] !== strength) {
+      if (
+        ptBuf[b] !== px ||
+        ptBuf[b + 1] !== py ||
+        ptBuf[b + 2] !== strength ||
+        ptBuf[b + 3] !== bloomTipShiftScale
+      ) {
         ptBuf[b] = px;
         ptBuf[b + 1] = py;
         ptBuf[b + 2] = strength;
-        ptBuf[b + 3] = 0;
+        ptBuf[b + 3] = bloomTipShiftScale;
         dirty = true;
       }
     }

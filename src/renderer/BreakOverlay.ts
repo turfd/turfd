@@ -12,9 +12,12 @@ import type { RenderPipeline } from "./RenderPipeline";
 
 const DESTROY_STAGE_COUNT = 10;
 
-/** Mining / passive outline: bright (foreground) vs darker (back-wall edit mode). */
-const OUTLINE_BRIGHT = 0xffffff;
-const OUTLINE_BG_MODE = 0x3d4a58;
+/** Neutral outline when target is not a valid breakable block. */
+const OUTLINE_NEUTRAL = 0xffffff;
+/** Valid target hover in foreground edit mode. */
+const OUTLINE_VALID_FG = 0x3aa0ff;
+/** Valid target hover in background edit mode (darker than foreground). */
+const OUTLINE_VALID_BG = 0x1c3f73;
 
 function destroyStageUrls(): readonly string[] {
   return Array.from({ length: DESTROY_STAGE_COUNT }, (_, i) =>
@@ -88,15 +91,12 @@ export class BreakOverlay {
   }
 
   sync(state: PlayerState): void {
-    const dullOutline = state.backgroundEditMode;
-    const strokeColor = dullOutline ? OUTLINE_BG_MODE : OUTLINE_BRIGHT;
+    const modeStrokeColor = state.backgroundEditMode ? OUTLINE_VALID_BG : OUTLINE_VALID_FG;
 
     const mining =
       state.breakTarget !== null && state.breakProgress < 1;
 
     if (mining && state.breakTarget !== null) {
-      this.localPassiveOutline.visible = false;
-      this.localPassiveOutline.clear();
       const t = state.breakTarget;
       this.paintBreak(
         this.localRoot,
@@ -105,14 +105,35 @@ export class BreakOverlay {
         t.wx,
         t.wy,
         state.breakProgress,
-        strokeColor,
+        modeStrokeColor,
       );
+      if (state.backgroundEditMode) {
+        // Keep a persistent target frame in back-wall mode so layer state is always obvious.
+        const px = t.wx * BLOCK_SIZE;
+        const py = -(t.wy + 1) * BLOCK_SIZE;
+        this.localPassiveOutline.clear();
+        this.localPassiveOutline.position.set(px, py);
+        const w = BLOCK_SIZE;
+        this.localPassiveOutline.rect(0, 0, w, w);
+        this.localPassiveOutline.stroke({
+          width: 2.5,
+          color: modeStrokeColor,
+          alpha: 1,
+        });
+        this.localPassiveOutline.visible = true;
+      } else {
+        this.localPassiveOutline.visible = false;
+        this.localPassiveOutline.clear();
+      }
       return;
     }
 
     this.localRoot.visible = false;
     const aim = state.aimOutlineTarget;
     if (aim !== null) {
+      const strokeColor = state.aimOutlineValidBlock
+        ? modeStrokeColor
+        : OUTLINE_NEUTRAL;
       const px = aim.wx * BLOCK_SIZE;
       const py = -(aim.wy + 1) * BLOCK_SIZE;
       this.localPassiveOutline.clear();
@@ -122,7 +143,7 @@ export class BreakOverlay {
       this.localPassiveOutline.stroke({
         width: 2,
         color: strokeColor,
-        alpha: dullOutline ? 0.98 : 1,
+        alpha: 1,
       });
       this.localPassiveOutline.visible = true;
       return;
@@ -162,7 +183,7 @@ export class BreakOverlay {
         bm.wx,
         bm.wy,
         bm.progress,
-        OUTLINE_BRIGHT,
+        OUTLINE_VALID_FG,
       );
     }
     for (const id of this.remoteByPeer.keys()) {

@@ -953,6 +953,14 @@ export class Game {
           });
         }
       });
+      world.setNetDropDespawnReplicationHook((p) => {
+        if (this.adapter.state.status === "connected") {
+          this.adapter.broadcast({
+            type: MsgType.DROP_DESPAWN,
+            netId: p.netId,
+          });
+        }
+      });
     }
 
     this._blockInteractions = new BlockInteractions(world, registry, this.bus);
@@ -7264,8 +7272,11 @@ export class Game {
       this.breakOverlay.syncRemotes(this.world.getRemotePlayers());
     }
     if (this.entityManager !== null) {
+      const toggleBgCode =
+        this.input?.getKeyBindingsForAction("toggleBackgroundMode")[0] ?? null;
       this.inventoryUI?.setBackgroundEditMode(
         this.entityManager.getPlayer().state.backgroundEditMode,
+        toggleBgCode,
       );
     }
     this.pipeline?.prepareFrame();

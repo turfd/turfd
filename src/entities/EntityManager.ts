@@ -1047,6 +1047,8 @@ type SlimeRig = {
   /** One texture per frame — avoids multi-frame batch bleed from {@link AnimatedSprite}. */
   base: Sprite;
   hpBar: Graphics;
+  /** Icons of dropped items currently stuck to the slime gel shell. */
+  stuckIcons: Sprite[];
 };
 
 type DuckClientAnim = {
@@ -2485,13 +2487,16 @@ export class EntityManager {
     if (inReach) {
       const hovered = this.world.getBlock(hoverWx, hoverWy);
       if (hovered.id !== this.airId) {
+        const hoverOutlineColor = playerState.backgroundEditMode
+          ? 0x1c3f73
+          : 0x66ccff;
         aim.rect(
           hoverWx * BLOCK_SIZE,
           -(hoverWy + 1) * BLOCK_SIZE,
           BLOCK_SIZE,
           BLOCK_SIZE,
         );
-        aim.stroke({ color: 0x66ccff, alpha: 1, width: 2 });
+        aim.stroke({ color: hoverOutlineColor, alpha: 1, width: 2 });
       }
     }
   }
@@ -4028,7 +4033,7 @@ export class EntityManager {
         root.addChild(hpBar);
         parent.addChild(root);
         root.alpha = 1;
-        rig = { root, base, hpBar };
+        rig = { root, base, hpBar, stuckIcons: [] };
         this.slimeSprites.set(v.id, rig);
         this.slimeClientAnim.set(v.id, {
           prevOnGround: true,
@@ -4138,7 +4143,7 @@ export class EntityManager {
         frame = 0;
       }
 
-      const { root, base, hpBar } = rig;
+      const { root, base, hpBar, stuckIcons } = rig;
       const frameTex = strip[frame];
       if (frameTex !== undefined && base.texture !== frameTex) {
         base.texture = frameTex;
@@ -4165,6 +4170,66 @@ export class EntityManager {
       root.scale.set(baseScale * (1 + wobble), baseScale * (1 - wobble * 0.45));
       base.scale.set(flip, 1);
       base.position.set(0, 0);
+      const slimeState = mm.getById(v.id);
+      const stuck =
+        slimeState !== undefined && slimeState.kind === "slime"
+          ? slimeState.stuckItems
+          : [];
+      while (stuckIcons.length < stuck.length) {
+        const icon = new Sprite(Texture.EMPTY);
+        icon.anchor.set(0.5);
+        icon.zIndex = 1;
+        icon.roundPixels = true;
+        icon.visible = false;
+        root.addChild(icon);
+        stuckIcons.push(icon);
+      }
+      while (stuckIcons.length > stuck.length) {
+        const icon = stuckIcons.pop();
+        icon?.parent?.removeChild(icon);
+        icon?.destroy();
+      }
+      const rand01 = (seed: number): number => {
+        const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+        return x - Math.floor(x);
+      };
+      const centerY = -ch * 0.52;
+      const spreadX = cw * 0.72;
+      const spreadY = ch * 0.64;
+      for (let i = 0; i < stuck.length; i++) {
+        const icon = stuckIcons[i];
+        if (icon === undefined) {
+          continue;
+        }
+        const stuckItem = stuck[i]!;
+        const def = this.itemRegistry.getById(stuckItem.itemId);
+        const textureName = def?.textureName;
+        const tex =
+          textureName !== undefined
+            ? this.itemTextureAtlas.getTextureOrNull(textureName)
+            : null;
+        if (tex === null) {
+          icon.visible = false;
+          continue;
+        }
+        icon.visible = true;
+        if (icon.texture !== tex) {
+          icon.texture = tex;
+        }
+        icon.scale.set(0.34);
+        // Stable per-item jitter so icons look naturally stuck onto the slime body.
+        const seedBase = v.id * 1009 + i * 9176 + stuckItem.itemId * 313;
+        const rx = rand01(seedBase + 11);
+        const ry = rand01(seedBase + 23);
+        const rr = rand01(seedBase + 37);
+        const jitterX = (rx - 0.5) * spreadX;
+        const jitterY = (ry - 0.5) * spreadY;
+        icon.position.set(
+          jitterX,
+          centerY + jitterY,
+        );
+        icon.rotation = (rr - 0.5) * 1.3;
+      }
       root.tint = v.hurt && !useAttack ? 0xff6a6a : 0xffffff;
       const slimeRootY =
         -v.y +

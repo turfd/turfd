@@ -265,4 +265,9 @@ export type DynamicLightEmitter = {
   worldBlockY: number;
   /** Relative intensity scale (1 = regular placed torch contribution). */
   strength: number;
+  /**
+   * Multiplier for torch-specific bloom tip shift in the composite shader.
+   * 1 = keep default torch shift, 0 = no shift (centered glow).
+   */
+  bloomTipShiftScale?: number;
 };

@@ -217,70 +217,21 @@ function propagateSkyLight(chunkMap: ChunkMap, _registry: BlockRegistry): void {
   const wyMax = (CY_END + 1) * CHUNK_SIZE;
   const width  = wxMax - wxMin;
   const height = wyMax - wyMin;
-
+  // Menu-only fast approximation:
+  // scan each world column from sky to bedrock and attenuate vertically.
+  // This avoids the much heavier BFS flood fill while preserving similar
+  // daytime contrast in the visible surface band.
   const best = new Uint8Array(width * height);
-
-  const maxQueue = width * height * 2;
-  const qx = new Int32Array(maxQueue);
-  const qy = new Int32Array(maxQueue);
-  const ql = new Uint8Array(maxQueue);
-  let head = 0;
-  let tail = 0;
-
-  const tryPush = (wx: number, wy: number, level: number): void => {
-    const px = wx - wxMin;
-    const py = wy - wyMin;
-    if (px < 0 || px >= width || py < 0 || py >= height) return;
-    if (tail >= maxQueue) return;
-    const bi = py * width + px;
-    if (best[bi]! >= level) return;
-    best[bi] = level;
-    qx[tail] = wx;
-    qy[tail] = wy;
-    ql[tail] = level;
-    tail += 1;
-  };
-
   for (let wx = wxMin; wx < wxMax; wx++) {
+    let level = SKY_LIGHT_MAX;
     for (let wy = wyMax - 1; wy >= wyMin; wy--) {
-      if (chunkMap.getLightAbsorption(wx, wy) > 0) break;
-      tryPush(wx, wy, SKY_LIGHT_MAX);
-    }
-  }
-
-  while (head < tail) {
-    const wx    = qx[head]!;
-    const wy    = qy[head]!;
-    const level = ql[head]!;
-    head += 1;
-
-    // Down: no decay (sky light pours straight down)
-    {
-      const ny = wy - 1;
-      const abs = chunkMap.getLightAbsorption(wx, ny);
-      const next = level - abs;
-      if (next > 0) tryPush(wx, ny, Math.min(SKY_LIGHT_MAX, next));
-    }
-    // Up: decay by 1
-    {
-      const ny = wy + 1;
-      const abs = chunkMap.getLightAbsorption(wx, ny);
-      const next = level - 1 - abs;
-      if (next > 0) tryPush(wx, ny, Math.min(SKY_LIGHT_MAX, next));
-    }
-    // Left: decay by 1
-    {
-      const nx = wx - 1;
-      const abs = chunkMap.getLightAbsorption(nx, wy);
-      const next = level - 1 - abs;
-      if (next > 0) tryPush(nx, wy, Math.min(SKY_LIGHT_MAX, next));
-    }
-    // Right: decay by 1
-    {
-      const nx = wx + 1;
-      const abs = chunkMap.getLightAbsorption(nx, wy);
-      const next = level - 1 - abs;
-      if (next > 0) tryPush(nx, wy, Math.min(SKY_LIGHT_MAX, next));
+      const abs = chunkMap.getLightAbsorption(wx, wy);
+      if (abs > 0) {
+        level = Math.max(0, level - 1 - abs);
+      }
+      const px = wx - wxMin;
+      const py = wy - wyMin;
+      best[py * width + px] = level;
     }
   }
 

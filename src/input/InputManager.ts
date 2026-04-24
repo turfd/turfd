@@ -207,6 +207,10 @@ export class InputManager {
     );
   }
 
+  getKeyBindingsForAction(action: KeybindableAction): readonly string[] {
+    return this.keyBindings[action] ?? [];
+  }
+
   destroy(): void {
     this.worldInputBlocked = false;
     this.chatOpen = false;

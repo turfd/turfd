@@ -5,6 +5,7 @@ import type { GameEvent } from "../../core/types";
 import {
   DEFAULT_KEY_BINDINGS,
   formatKeyCode,
+  keyCodeToInputPromptGlyph,
   KEYBINDABLE_ACTION_ORDER,
   KEYBINDABLE_LABELS,
   type KeybindableAction,
@@ -277,7 +278,16 @@ export async function mountSettingsPanel(
         for (const code of bindingsState[action]) {
           const chip = document.createElement("span");
           chip.className = "st-bind-chip";
-          chip.appendChild(document.createTextNode(formatKeyCode(code)));
+          const keyLabel = document.createElement("span");
+          keyLabel.className = "st-bind-chip-key";
+          const glyph = keyCodeToInputPromptGlyph(code);
+          if (glyph !== null) {
+            keyLabel.classList.add("st-bind-chip-key--prompt");
+            keyLabel.textContent = glyph;
+          } else {
+            keyLabel.textContent = formatKeyCode(code);
+          }
+          chip.appendChild(keyLabel);
           const rm = document.createElement("button");
           rm.type = "button";
           rm.className = "st-bind-chip-remove";

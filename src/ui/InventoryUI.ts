@@ -17,6 +17,7 @@ import {
 } from "../core/constants";
 import type { ItemDefinition, ItemId, ItemStack } from "../core/itemDefinition";
 import { getMeleeStatsForSwordOrAxeTooltip } from "../core/meleeWeaponStats";
+import { formatKeyCode, keyCodeToInputPromptGlyph } from "../input/bindings";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { ArmorSlot, PlayerInventory } from "../items/PlayerInventory";
 import { fetchItemIconUrlMapForRegistry } from "../core/textureManifest";
@@ -52,6 +53,13 @@ function ensureInventoryFonts(): void {
       src: url('${base}assets/fonts/m5x7.ttf') format('truetype');
       font-weight: normal;
       font-style: normal;
+    }
+    @font-face {
+      font-family: 'KenneyInputKM';
+      src: url('${base}assets/mods/resource_packs/stratum-core/font/kenney_input_keyboard_mouse.ttf') format('truetype');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
     }
   `;
   document.head.appendChild(style);
@@ -113,9 +121,10 @@ export class InventoryUI {
 
   private readonly layerModeIndicatorEl: HTMLDivElement;
   private readonly layerModeStatusTextEl: HTMLDivElement;
+  private readonly layerModeKeybindTextEl: HTMLDivElement;
   private readonly layerModeBackSquareEl: HTMLDivElement;
   private readonly layerModeFrontSquareEl: HTMLDivElement;
-  private layerModeHideTimer: ReturnType<typeof setTimeout> | null = null;
+  private layerModeKeybindHint = "(tab)";
   private lastLayerModeActive: boolean | null = null;
 
   private pointerDownSlot: number | null = null;
@@ -515,13 +524,18 @@ export class InventoryUI {
     const layerModeStatusText = document.createElement("div");
     layerModeStatusText.className = "inv-layer-mode-label";
     layerModeStatusText.textContent = "foreground";
+    const layerModeKeybindText = document.createElement("div");
+    layerModeKeybindText.className = "inv-layer-mode-keybind";
+    layerModeKeybindText.textContent = this.layerModeKeybindHint;
 
     layerModeSquares.appendChild(layerModeSquareBack);
     layerModeSquares.appendChild(layerModeSquareFront);
     layerModeIndicator.appendChild(layerModeSquares);
     layerModeIndicator.appendChild(layerModeStatusText);
+    layerModeIndicator.appendChild(layerModeKeybindText);
     this.layerModeIndicatorEl = layerModeIndicator;
     this.layerModeStatusTextEl = layerModeStatusText;
+    this.layerModeKeybindTextEl = layerModeKeybindText;
     this.layerModeBackSquareEl = layerModeSquareBack;
     this.layerModeFrontSquareEl = layerModeSquareFront;
 
@@ -1282,8 +1296,31 @@ export class InventoryUI {
     this.hotbarStackEl.style.visibility = visible ? "visible" : "hidden";
   }
 
-  /** Tab foreground vs background build layer: brief flash beside the hotbar (same behavior as legacy HUD chip). */
-  setBackgroundEditMode(active: boolean): void {
+  /** Tab foreground vs background build layer: always-visible badge beside the hotbar. */
+  setBackgroundEditMode(active: boolean, toggleKeyCode: string | null = null): void {
+    if (toggleKeyCode !== null) {
+      const glyph = keyCodeToInputPromptGlyph(toggleKeyCode);
+      if (glyph !== null) {
+        this.layerModeKeybindTextEl.textContent = `(${glyph})`;
+        this.layerModeKeybindTextEl.classList.add("inv-layer-mode-keybind--prompt");
+        this.layerModeKeybindHint = `(${formatKeyCode(toggleKeyCode)})`;
+      } else {
+        this.layerModeKeybindHint = `(${formatKeyCode(toggleKeyCode).toLowerCase()})`;
+        this.layerModeKeybindTextEl.textContent = this.layerModeKeybindHint;
+        this.layerModeKeybindTextEl.classList.remove("inv-layer-mode-keybind--prompt");
+      }
+    } else {
+      this.layerModeKeybindTextEl.textContent = "(unbound)";
+      this.layerModeKeybindTextEl.classList.remove("inv-layer-mode-keybind--prompt");
+      this.layerModeKeybindHint = "(unbound)";
+    }
+    const indicator = this.layerModeIndicatorEl;
+    indicator.setAttribute(
+      "title",
+      active
+        ? `Building in background ${this.layerModeKeybindHint}`
+        : `Building in foreground ${this.layerModeKeybindHint}`,
+    );
     if (this.lastLayerModeActive === active) {
       return;
     }
@@ -1312,28 +1349,11 @@ export class InventoryUI {
     );
 
     this.layerModeStatusTextEl.textContent = active ? "background" : "foreground";
-    const indicator = this.layerModeIndicatorEl;
-    indicator.setAttribute(
-      "title",
-      active ? "Building in background (Tab)" : "Building in foreground (Tab)",
-    );
-    indicator.style.opacity = "0.95";
-    if (this.layerModeHideTimer !== null) {
-      clearTimeout(this.layerModeHideTimer);
-    }
-    this.layerModeHideTimer = setTimeout(() => {
-      indicator.style.opacity = "0";
-      this.layerModeHideTimer = null;
-    }, 900);
   }
 
   destroy(): void {
     this.hideItemTooltip();
     this.clearHotbarNameTimers();
-    if (this.layerModeHideTimer !== null) {
-      clearTimeout(this.layerModeHideTimer);
-      this.layerModeHideTimer = null;
-    }
     this.panelResizeObserver.disconnect();
     window.removeEventListener("resize", this.onInvWindowResizeForSidePanels, true);
     window.removeEventListener("mouseup", this.onWindowMouseUp, true);

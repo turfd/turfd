@@ -168,12 +168,12 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: 5px;
   width: max-content;
   min-width: 26px;
-  min-height: 52px;
+  min-height: 50px;
   pointer-events: none;
-  opacity: 0;
+  opacity: 0.95;
   transition: opacity 0.14s ease;
 }
 
@@ -207,7 +207,7 @@
 #inventory-ui-root .inv-layer-mode-label {
   line-height: 1;
   font-family: "M5x7", monospace;
-  font-size: 24px;
+  font-size: 22px;
   -webkit-font-smoothing: none;
   text-shadow: 1px 1px 0 #0d0d0d;
   text-transform: lowercase;
@@ -215,8 +215,37 @@
   color: #f2f2f7;
   opacity: 0.98;
   text-align: center;
-  min-width: 130px;
+  min-width: 120px;
   pointer-events: none;
+}
+
+#inventory-ui-root .inv-layer-mode-keybind {
+  line-height: 1;
+  font-family: "M5x7", monospace;
+  font-size: 13px;
+  -webkit-font-smoothing: none;
+  text-shadow: 1px 1px 0 #0d0d0d;
+  text-transform: lowercase;
+  letter-spacing: 0.01em;
+  color: #f2f2f7;
+  opacity: 0.95;
+  text-align: center;
+  min-width: 120px;
+  margin-top: 0;
+  pointer-events: none;
+}
+
+#inventory-ui-root .inv-layer-mode-keybind--prompt {
+  font-family: "KenneyInputKM", "M5x7", monospace;
+  font-size: 30px;
+  font-weight: normal;
+  color: #ffffff;
+  text-shadow:
+    0 1px 0 #0d0d0d,
+    0 0 5px rgba(0, 0, 0, 0.7);
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 #inventory-ui-root .inv-hud-status-row {

@@ -91,7 +91,6 @@ type FireflyParticle = {
 
 const FIREFLY_SIZE_PX = 2;
 const MIN_FIREFLY_SPACING_PX = BLOCK_SIZE * 3;
-const FIREFLY_LIGHT_Y_OFFSET_PX = 2;
 
 const fireflySpritePool = new ObjectPool<Sprite>(
   () => new Sprite(),
@@ -442,14 +441,13 @@ export class FireflyAmbientParticles {
       }
     }
 
-    const yBiasBlocks = FIREFLY_LIGHT_Y_OFFSET_PX / BLOCK_SIZE;
     for (let k = 0; k < bestIdx.length; k++) {
       const p = parts[bestIdx[k]!]!;
-      // Torch bloom path has a slight built-in downward tip shift; bias emitters up 2px.
       out.push({
         worldBlockX: p.x / BLOCK_SIZE,
-        worldBlockY: -p.y / BLOCK_SIZE + yBiasBlocks,
+        worldBlockY: -p.y / BLOCK_SIZE,
         strength: FIREFLY_LIGHT_STRENGTH * (0.7 + p.brightness * 0.3),
+        bloomTipShiftScale: 0,
       });
     }
   }

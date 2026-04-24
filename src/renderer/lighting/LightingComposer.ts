@@ -47,12 +47,13 @@ export class LightingComposer {
   private readonly _torchHeapWx = new Float64Array(MAX_PLACED_TORCHES);
   private readonly _torchHeapWy = new Float64Array(MAX_PLACED_TORCHES);
   private readonly _torchHeapStrength = new Float32Array(MAX_PLACED_TORCHES);
+  private readonly _torchHeapBloomShiftScale = new Float32Array(MAX_PLACED_TORCHES);
   private readonly _torchHeapD2 = new Float64Array(MAX_PLACED_TORCHES);
   private _torchHeapSize = 0;
 
-  private readonly _placedTorchTriples: [number, number, number][] = Array.from(
+  private readonly _placedTorchTriples: [number, number, number, number][] = Array.from(
     { length: MAX_PLACED_TORCHES },
-    () => [0, 0, 1] as [number, number, number],
+    () => [0, 0, 1, 1] as [number, number, number, number],
   );
 
   private _camera: Camera | null = null;
@@ -231,6 +232,7 @@ export class LightingComposer {
           e.worldBlockX,
           e.worldBlockY,
           e.strength,
+          e.bloomTipShiftScale ?? 1,
           ddx * ddx + ddy * ddy,
         );
       }
@@ -245,7 +247,7 @@ export class LightingComposer {
           const wyi = wy[i]! + TORCH_FLAME_TIP_OFFSET_Y_BLOCKS;
           const ddx = wxi - viewCenterWx;
           const ddy = wyi - viewCenterWy;
-          this._torchHeapOffer(wxi, wyi, 1, ddx * ddx + ddy * ddy);
+          this._torchHeapOffer(wxi, wyi, 1, 1, ddx * ddx + ddy * ddy);
         }
       }
     }
@@ -376,6 +378,7 @@ export class LightingComposer {
     const h = this._torchHeapWx;
     const hy = this._torchHeapWy;
     const hs = this._torchHeapStrength;
+    const hb = this._torchHeapBloomShiftScale;
     const hd = this._torchHeapD2;
     let t = h[a]!;
     h[a] = h[b]!;
@@ -386,6 +389,9 @@ export class LightingComposer {
     t = hs[a]!;
     hs[a] = hs[b]!;
     hs[b] = t;
+    t = hb[a]!;
+    hb[a] = hb[b]!;
+    hb[b] = t;
     t = hd[a]!;
     hd[a] = hd[b]!;
     hd[b] = t;
@@ -425,10 +431,17 @@ export class LightingComposer {
   }
 
   /** Max-heap of up to K smallest dist² (root holds the worst among the kept set). */
-  private _torchHeapOffer(wx: number, wy: number, strength: number, d2: number): void {
+  private _torchHeapOffer(
+    wx: number,
+    wy: number,
+    strength: number,
+    bloomShiftScale: number,
+    d2: number,
+  ): void {
     const h = this._torchHeapWx;
     const hy = this._torchHeapWy;
     const hs = this._torchHeapStrength;
+    const hb = this._torchHeapBloomShiftScale;
     const hd = this._torchHeapD2;
     const cap = MAX_PLACED_TORCHES;
     let sz = this._torchHeapSize;
@@ -436,6 +449,7 @@ export class LightingComposer {
       h[sz] = wx;
       hy[sz] = wy;
       hs[sz] = strength;
+      hb[sz] = bloomShiftScale;
       hd[sz] = d2;
       sz += 1;
       this._torchHeapSize = sz;
@@ -448,6 +462,7 @@ export class LightingComposer {
     h[0] = wx;
     hy[0] = wy;
     hs[0] = strength;
+    hb[0] = bloomShiftScale;
     hd[0] = d2;
     this._torchHeapSiftDown(0);
   }
@@ -456,6 +471,7 @@ export class LightingComposer {
     const h = this._torchHeapWx;
     const hy = this._torchHeapWy;
     const hs = this._torchHeapStrength;
+    const hb = this._torchHeapBloomShiftScale;
     const sz = this._torchHeapSize;
     const triplets = this._placedTorchTriples;
     for (let i = 0; i < sz; i++) {
@@ -463,6 +479,7 @@ export class LightingComposer {
       p[0] = h[i]!;
       p[1] = hy[i]!;
       p[2] = hs[i]!;
+      p[3] = hb[i]!;
     }
     // Do not set triplets.length = sz — truncating removes slots and causes undefined on the next frame.
     u.placedTorchCount = sz;

@@ -603,6 +603,11 @@ async function main(): Promise<void> {
   );
 
   mountEarlyMenuBackdrop(mount);
+  let prewarmedMenuBackground: MenuBackground | null = new MenuBackground();
+  void prewarmedMenuBackground.init(mount).catch((err: unknown) => {
+    console.warn("[main] Failed to prewarm menu background:", err);
+    prewarmedMenuBackground = null;
+  });
 
   const store = new IndexedDBStore();
   await store.openDB();
@@ -674,8 +679,12 @@ async function main(): Promise<void> {
       auth,
       workshopDeps,
       sharedAudio,
-      { playStartupIntro },
+      {
+        playStartupIntro,
+        prewarmedBackground: prewarmedMenuBackground ?? undefined,
+      },
     );
+    prewarmedMenuBackground = null;
     performance.mark("menu-cycle:ready");
     performance.measure("menu-cycle-ready", "menu-cycle:start", "menu-cycle:ready");
     playStartupIntro = false;

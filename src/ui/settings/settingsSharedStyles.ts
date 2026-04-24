@@ -23,6 +23,13 @@ export function injectSettingsSharedStyles(base: string): void {
       font-style: normal;
       font-display: swap;
     }
+    @font-face {
+      font-family: 'KenneyInputKM';
+      src: url('${base}assets/mods/resource_packs/stratum-core/font/kenney_input_keyboard_mouse.ttf') format('truetype');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
 
     .st-settings-root .mm-panel-title {
       font-family: 'BoldPixels', monospace;
@@ -230,7 +237,7 @@ export function injectSettingsSharedStyles(base: string): void {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 8px 4px 10px;
+      padding: 8px 12px 8px 12px;
       border-radius: 8px;
       corner-shape: squircle;
       background: var(--st-mm-surface-raised);
@@ -238,6 +245,21 @@ export function injectSettingsSharedStyles(base: string): void {
       font-family: 'M5x7', monospace;
       font-size: calc(17px + var(--st-mm-m5-nudge));
       color: var(--st-mm-ink);
+    }
+    .st-bind-chip-key {
+      display: inline-flex;
+      align-items: center;
+      line-height: 1;
+    }
+    .st-bind-chip-key--prompt {
+      font-family: 'KenneyInputKM', 'M5x7', monospace;
+      font-size: 56px;
+      font-weight: normal;
+      color: #f2f2f7;
+      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+      line-height: 1;
+      text-transform: none;
+      letter-spacing: 0;
     }
     .st-bind-chip-remove {
       padding: 0 4px;

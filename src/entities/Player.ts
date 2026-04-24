@@ -195,6 +195,8 @@ export type PlayerState = {
    * Shown for air as well as blocks; same layer as {@link backgroundEditMode} implies.
    */
   aimOutlineTarget: { wx: number; wy: number; layer: BreakTargetLayer } | null;
+  /** True when {@link aimOutlineTarget} points at a breakable block in the active edit layer. */
+  aimOutlineValidBlock: boolean;
   breakTarget: { wx: number; wy: number; layer: BreakTargetLayer } | null;
   breakProgress: number;
   breakAccum: number;
@@ -435,6 +437,7 @@ export class Player {
     temporaryHealthRemainSec: 0,
     backgroundEditMode: false,
     aimOutlineTarget: null,
+    aimOutlineValidBlock: false,
     breakTarget: null,
     breakProgress: 0,
     breakAccum: 0,
@@ -736,6 +739,7 @@ export class Player {
     if (this.state.sleeping) {
       this.state.breakTarget = null;
       this.state.aimOutlineTarget = null;
+      this.state.aimOutlineValidBlock = false;
       this.state.breakAccum = 0;
       this.state.breakProgress = 0;
       this.miningDigSoundAccum = 0;
@@ -1498,6 +1502,7 @@ export class Player {
       state.breakProgress < 1
     ) {
       state.aimOutlineTarget = null;
+      state.aimOutlineValidBlock = false;
     } else if (
       !input.isWorldInputBlocked() &&
       !state.dead &&
@@ -1507,8 +1512,21 @@ export class Player {
       const aimLayer: BreakTargetLayer = state.backgroundEditMode ? "bg" : "fg";
       // Always show the cell outline at the crosshair (air, unbreakable, etc.), not only on solid blocks.
       state.aimOutlineTarget = { wx, wy, layer: aimLayer };
+      if (aimLayer === "bg") {
+        const bid = world.getBackgroundId(wx, wy);
+        if (bid !== 0) {
+          const def = this.registry.getById(bid);
+          state.aimOutlineValidBlock = def.id !== this.airId && def.hardness !== 999;
+        } else {
+          state.aimOutlineValidBlock = false;
+        }
+      } else {
+        const def = world.getBlock(wx, wy);
+        state.aimOutlineValidBlock = def.id !== this.airId && def.hardness !== 999;
+      }
     } else {
       state.aimOutlineTarget = null;
+      state.aimOutlineValidBlock = false;
     }
 
     const placeEdgeWithInventoryOpen =

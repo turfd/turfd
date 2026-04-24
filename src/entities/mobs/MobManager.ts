@@ -10,6 +10,7 @@
  */
 import {
   BLOCK_SIZE,
+  ITEM_HALF_EXTENT_PX,
   CHUNK_SIZE,
   PLAYER_HEIGHT,
   PLAYER_MELEE_CRIT_CHANCE,
@@ -386,6 +387,7 @@ export class MobManager {
               slimeJumpDir: 0,
               slimeJumpCooldownRemainSec: 0,
               slimeChaseInvertRemainSec: 0,
+              stuckItems: [],
             }
           : p.type === MobType.Sheep
           ? {
@@ -632,6 +634,42 @@ export class MobManager {
     const bonus = this.lootResolver.resolveEntityLoot(MobType.Slime, rng);
     for (const s of bonus) {
       this.spawnItemStackAt(s, px, py);
+    }
+    for (const stuck of m.stuckItems) {
+      this.world.spawnItem(stuck.itemId, stuck.count, px, py, 0, 0, stuck.damage);
+    }
+    m.stuckItems.length = 0;
+  }
+
+  /** Slimes absorb overlapping dropped items; absorbed stacks are dropped when the slime dies. */
+  private absorbDroppedItemsForSlime(m: MobSlimeState): void {
+    if (m.deathAnimRemainSec > 0 || m.hp <= 0 || m.stuckItems.length >= 24) {
+      return;
+    }
+    const { w, h } = mobHitboxSizePx("slime");
+    const left = m.x - w * 0.5;
+    const right = m.x + w * 0.5;
+    const top = m.y - h;
+    const bottom = m.y;
+    for (const [id, item] of this.world.getDroppedItems()) {
+      const r = ITEM_HALF_EXTENT_PX;
+      if (
+        item.x + r < left ||
+        item.x - r > right ||
+        item.y + r < top ||
+        item.y - r > bottom
+      ) {
+        continue;
+      }
+      m.stuckItems.push({
+        itemId: item.itemId,
+        count: item.count,
+        damage: item.damage,
+      });
+      this.world.removeDroppedItemById(id);
+      if (m.stuckItems.length >= 24) {
+        break;
+      }
     }
   }
 
@@ -1039,6 +1077,7 @@ export class MobManager {
       slimeJumpDir: 0,
       slimeJumpCooldownRemainSec: 0,
       slimeChaseInvertRemainSec: 0,
+      stuckItems: [],
     };
     this.mobs.set(id, m);
     this.slimePerColumn.set(wx, (this.slimePerColumn.get(wx) ?? 0) + 1);
@@ -2166,6 +2205,7 @@ export class MobManager {
           slimeTarget,
           worldTimeSec,
         );
+        this.absorbDroppedItemsForSlime(m);
         if (slimeTarget !== null) {
           const { w: slimeW, h: slimeH } = mobHitboxSizePx("slime");
           const sHalfW = slimeW * 0.5;
@@ -2509,6 +2549,7 @@ export class MobManager {
         slimeJumpDir: 0,
         slimeJumpCooldownRemainSec: 0,
         slimeChaseInvertRemainSec: 0,
+        stuckItems: [],
       };
     } else {
       return;
@@ -2653,6 +2694,7 @@ export class MobManager {
                   slimeJumpDir: 0,
                   slimeJumpCooldownRemainSec: 0,
                   slimeChaseInvertRemainSec: 0,
+                  stuckItems: [],
                 }
               : {
                   kind: "zombie",

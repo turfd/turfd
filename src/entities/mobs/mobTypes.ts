@@ -1,3 +1,5 @@
+import type { ItemId } from "../../core/itemDefinition";
+
 /** Numeric wire ids for {@link MessageType.ENTITY_SPAWN} / ENTITY_STATE. */
 export enum MobType {
   None = 0,
@@ -168,4 +170,6 @@ export type MobSlimeState = {
   slimeJumpCooldownRemainSec: number;
   /** While positive, chase AI moves horizontally away from the player (after hitting a wall). */
   slimeChaseInvertRemainSec: number;
+  /** Ground items currently stuck in this slime; dropped when it dies. */
+  stuckItems: Array<{ itemId: ItemId; count: number; damage: number }>;
 };

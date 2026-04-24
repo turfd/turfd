@@ -241,6 +241,8 @@ export class World {
         pickupDelayMs: number;
       }) => void)
     | null = null;
+  /** Multiplayer host: replicate explicit drop removals (e.g. slime absorption) to clients. */
+  private _netDropDespawnReplicate: ((p: { netId: number }) => void) | null = null;
   /** When set (multiplayer host), spawned arrows use net ids `a{id}` and invoke this hook. */
   private _netArrowReplicate:
     | ((p: {
@@ -418,6 +420,13 @@ export class World {
     this._netDropReplicate = hook;
   }
 
+  /** Multiplayer host: replicate explicit drop despawns to clients. */
+  setNetDropDespawnReplicationHook(
+    hook: ((p: { netId: number }) => void) | null,
+  ): void {
+    this._netDropDespawnReplicate = hook;
+  }
+
   /** Multiplayer host: replicate every {@link spawnArrow} to clients. */
   setNetArrowReplicationHook(
     hook:
@@ -471,6 +480,24 @@ export class World {
   removeAuthoritativeDropByNetId(netId: number): void {
     this._dropPickupPending.delete(netId);
     this._droppedItems.delete(`n${netId}`);
+  }
+
+  /**
+   * Removes one dropped item by id.
+   * Host: replicated net drops (`n*`) broadcast DROP_DESPAWN.
+   */
+  removeDroppedItemById(id: string): void {
+    if (!this._droppedItems.has(id)) {
+      return;
+    }
+    this._droppedItems.delete(id);
+    if (id.startsWith("n") && id.length > 1) {
+      const netId = Number.parseInt(id.slice(1), 10);
+      if (Number.isFinite(netId)) {
+        this._dropPickupPending.delete(netId);
+        this._netDropDespawnReplicate?.({ netId });
+      }
+    }
   }
 
   /** Apply a host-authored arrow on clients (`ARROW_SPAWN`). */

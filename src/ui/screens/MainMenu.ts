@@ -3159,7 +3159,7 @@ function injectStyles(base: string): void {
 
 const WHATS_NEW_HTML = `
   A performance-focused patch with smoother frame pacing, reduced stutter in heavy scenes, and better overall responsiveness.
-  Ambient effects, chunk processing, and rendering paths were optimized to lower CPU load and keep gameplay feeling stable.
+  Ambient effects, chunk processing.
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -3180,19 +3180,25 @@ export class MainMenu {
     auth: IAuthProvider,
     workshop?: MainMenuWorkshopDeps,
     sharedAudio?: AudioEngine,
-    opts: { playStartupIntro?: boolean } = {},
+    opts: { playStartupIntro?: boolean; prewarmedBackground?: MenuBackground } = {},
   ): Promise<MainMenuExit> {
     const base = import.meta.env.BASE_URL;
     injectStyles(base);
 
     // On cold startup, let the cinematic intro have headroom before heavy menu world work.
-    const bg = new MenuBackground({
-      disableIntroSlide: opts.playStartupIntro === true,
-      deferHeavyInitMs: opts.playStartupIntro === true ? 1100 : 0,
-    });
-    const bgPromise = bg.init(mount).catch((err: unknown) => {
-      console.warn("[MainMenu] Background world failed to load:", err);
-    });
+    const prewarmedBackground = opts.prewarmedBackground;
+    const canReusePrewarmed = prewarmedBackground?.isLive() === true;
+    const bg = canReusePrewarmed
+      ? prewarmedBackground
+      : new MenuBackground({
+          disableIntroSlide: opts.playStartupIntro === true,
+          deferHeavyInitMs: opts.playStartupIntro === true ? 1100 : 0,
+        });
+    const bgPromise = canReusePrewarmed
+      ? Promise.resolve()
+      : bg.init(mount).catch((err: unknown) => {
+          console.warn("[MainMenu] Background world failed to load:", err);
+        });
 
     return new Promise<MainMenuExit>((resolve) => {
       const root = document.createElement("div");
