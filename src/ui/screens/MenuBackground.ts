@@ -715,7 +715,7 @@ export class MenuBackground {
         mesh.position.set(pos.x, pos.y);
         worldContainer.addChild(mesh);
         const leafDeco = buildLeafDecorationMesh(chunk, registry, atlas, {
-          sampleBlockId: fgShadowSampler,
+          sampleBlockId: (wx: number, wy: number) => chunkMap.getBlock(wx, wy),
         });
         leafDeco.position.set(pos.x, pos.y);
         worldContainer.addChild(leafDeco);
