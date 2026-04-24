@@ -6,7 +6,13 @@ export type ChunkCoord = {
   readonly cy: number;
 };
 
+const CHUNK_SIZE_IS_POWER_OF_TWO = (CHUNK_SIZE & (CHUNK_SIZE - 1)) === 0;
+const CHUNK_SIZE_MASK = CHUNK_SIZE - 1;
+
 function floorMod(n: number, m: number): number {
+  if (m === CHUNK_SIZE && CHUNK_SIZE_IS_POWER_OF_TWO) {
+    return n & CHUNK_SIZE_MASK;
+  }
   return ((n % m) + m) % m;
 }
 

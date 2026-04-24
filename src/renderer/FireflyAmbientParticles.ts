@@ -144,13 +144,42 @@ function getFireflyTextureBank(): Texture[] {
   return fireflyTextureBank;
 }
 
+/**
+ * Pack (wx, wy) into a unique Number key for per-tick caches.
+ * Safe for |wx|,|wy| up to ~1e6 (far exceeds FIREFLY spawn radius in practice).
+ */
+function packWxWyKey(wx: number, wy: number): number {
+  return ((wx + 1_048_576) * 2_097_152) + (wy + 1_048_576);
+}
+
+/** Spawn search runs at most every N fixed/render ticks (cheap throttle). */
+const FIREFLY_SPAWN_SEARCH_EVERY_N_TICKS = 2;
+/** If we recently ran a long frame, further reduce spawn work to recover. */
+const FIREFLY_HEAVY_FRAME_DT_SEC = 1 / 45;
+/** Refresh the cached near-player chunk list at least this often (ticks). */
+const FIREFLY_NEIGHBOR_CHUNKS_REFRESH_TICKS = 30;
+
 export class FireflyAmbientParticles {
   private readonly root: Container;
   private readonly particles: FireflyParticle[] = [];
   private readonly solidScratch: AABB[] = [];
-  private readonly emitterScratch: DynamicLightEmitter[] = [];
   private spawnSeq = 0;
   private updateSeq = 0;
+
+  /** Per-tick nearest-water result cache keyed by packed (wx, wy). Value -1 = no water. */
+  private readonly _nearestWaterCache = new Map<number, number>();
+  /** Reused by spawn pool filtering to avoid reallocations each tick. */
+  private readonly _poolNearScratch: [number, number][] = [];
+  private readonly _poolVisibleScratch: [number, number][] = [];
+  /** Best-N scratch for dynamic light emitter ranking (no full sort). */
+  private readonly _emitterCandidateIdx: number[] = [];
+  private readonly _emitterCandidateD2: number[] = [];
+
+  /** Cached near-player chunk list; invalidated on player-chunk crossing or periodic refresh. */
+  private readonly _neighborChunkList: [number, number][] = [];
+  private _neighborChunkPcx: number | null = null;
+  private _neighborChunkPcy: number | null = null;
+  private _neighborChunkRefreshAt = 0;
 
   constructor(
     private readonly worldSeed: number,
@@ -176,6 +205,10 @@ export class FireflyAmbientParticles {
       return;
     }
     this.updateSeq = (this.updateSeq + 1) >>> 0;
+    // Nearest-water results are derived from current block state; invalidate each tick so
+    // block changes propagate, but they remain valid across the multiple spawn attempts
+    // inside this single update() call.
+    this._nearestWaterCache.clear();
 
     const z = camera.getZoom();
     const marginWorld = FIREFLY_VIEW_MARGIN_SCREEN_PX / Math.max(z, 0.0001);
@@ -229,10 +262,17 @@ export class FireflyAmbientParticles {
       return;
     }
 
+    // Throttle the expensive spawn probe loop. Spawn is non-critical; running
+    // every N ticks still produces steady firefly density because FIREFLY_MAX_PARTICLES
+    // is small and updated particles are sticky (several seconds on-screen).
+    if (this.updateSeq % FIREFLY_SPAWN_SEARCH_EVERY_N_TICKS !== 0) {
+      return;
+    }
+
     const playerBy = Math.floor(playerFeetUpY / BLOCK_SIZE);
     const pcx = Math.floor(playerWorldX / BLOCK_SIZE / CHUNK_SIZE);
     const pcy = Math.floor(playerFeetUpY / BLOCK_SIZE / CHUNK_SIZE);
-    const candidates = this.chunksNear(pcx, pcy);
+    const candidates = this.getNeighborChunks(pcx, pcy);
     if (candidates.length === 0) {
       return;
     }
@@ -242,20 +282,25 @@ export class FireflyAmbientParticles {
     const minViewChunkX = Math.floor(minViewBlockX / CHUNK_SIZE);
     const maxViewChunkX = Math.floor(maxViewBlockX / CHUNK_SIZE);
 
-    const poolNear: [number, number][] = [];
-    for (const c of candidates) {
-      if (
-        c[0] >= minViewChunkX &&
-        c[0] <= maxViewChunkX &&
-        Math.abs(c[0] - pcx) <= FIREFLY_SPAWN_POOL_CHEB &&
-        Math.abs(c[1] - pcy) <= FIREFLY_SPAWN_POOL_CHEB
-      ) {
-        poolNear.push(c);
+    const poolNear = this._poolNearScratch;
+    const poolVisible = this._poolVisibleScratch;
+    poolNear.length = 0;
+    poolVisible.length = 0;
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i]!;
+      const cx = c[0];
+      const cy = c[1];
+      const inViewX = cx >= minViewChunkX && cx <= maxViewChunkX;
+      if (inViewX) {
+        poolVisible.push(c);
+        if (
+          Math.abs(cx - pcx) <= FIREFLY_SPAWN_POOL_CHEB &&
+          Math.abs(cy - pcy) <= FIREFLY_SPAWN_POOL_CHEB
+        ) {
+          poolNear.push(c);
+        }
       }
     }
-    const poolVisible = candidates.filter(
-      (c) => c[0] >= minViewChunkX && c[0] <= maxViewChunkX,
-    );
     const chunkPool =
       poolNear.length > 0
         ? poolNear
@@ -263,12 +308,22 @@ export class FireflyAmbientParticles {
           ? poolVisible
           : candidates;
 
+    // Adaptive workload: when recent frame time was high, reduce spawn probing
+    // so fixed tick stays inside its budget and we don't pile up on slow frames.
+    const heavy = dtSec > FIREFLY_HEAVY_FRAME_DT_SEC;
+    const triesThisTick = heavy
+      ? Math.max(1, Math.floor(FIREFLY_SPAWN_TRIES_PER_TICK / 2))
+      : FIREFLY_SPAWN_TRIES_PER_TICK;
+    const samplesThisTry = heavy
+      ? Math.max(3, Math.floor(FIREFLY_GROUND_LOCATE_SAMPLES / 2))
+      : FIREFLY_GROUND_LOCATE_SAMPLES;
+
     const bank = getFireflyTextureBank();
     let spawned = 0;
 
     for (
       let t = 0;
-      t < FIREFLY_SPAWN_TRIES_PER_TICK && spawned < room;
+      t < triesThisTick && spawned < room;
       t++
     ) {
       const rng = mulberry32(
@@ -278,7 +333,7 @@ export class FireflyAmbientParticles {
 
       let wx = 0;
       let wy: number | null = null;
-      for (let s = 0; s < FIREFLY_GROUND_LOCATE_SAMPLES; s++) {
+      for (let s = 0; s < samplesThisTry; s++) {
         const lx = Math.floor(rng() * CHUNK_SIZE);
         wx = pick[0] * CHUNK_SIZE + lx;
         wy = this.findSpawnGroundY(wx, playerBy);
@@ -340,33 +395,63 @@ export class FireflyAmbientParticles {
     viewCenterWorldBlockY: number,
     out: DynamicLightEmitter[],
   ): void {
-    this.emitterScratch.length = 0;
     if (this.particles.length === 0) {
       return;
     }
 
-    const ranked = this.particles
-      .filter((p) => p.hasEnteredTightView)
-      .map((p) => {
-        const wx = p.x / BLOCK_SIZE;
-        const wy = -p.y / BLOCK_SIZE;
-        const dx = wx - viewCenterWorldBlockX;
-        const dy = wy - viewCenterWorldBlockY;
-        return { p, d2: dx * dx + dy * dy };
-      })
-      .sort((a, b) => a.d2 - b.d2);
+    // Fixed-size best-N selection — keeps only the N closest candidates without
+    // allocating intermediate arrays or doing a full sort. N (5) is small, so
+    // insertion-sort into parallel typed-ish arrays is strictly faster than
+    // filter+map+sort.
+    const maxN = FIREFLY_LIGHT_MAX_EMITTERS;
+    const bestIdx = this._emitterCandidateIdx;
+    const bestD2 = this._emitterCandidateD2;
+    bestIdx.length = 0;
+    bestD2.length = 0;
 
-    const maxN = Math.min(FIREFLY_LIGHT_MAX_EMITTERS, ranked.length);
-    for (let i = 0; i < maxN; i++) {
-      const p = ranked[i]!.p;
-      this.emitterScratch.push({
+    const parts = this.particles;
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i]!;
+      if (!p.hasEnteredTightView) {
+        continue;
+      }
+      const wx = p.x / BLOCK_SIZE;
+      const wy = -p.y / BLOCK_SIZE;
+      const dx = wx - viewCenterWorldBlockX;
+      const dy = wy - viewCenterWorldBlockY;
+      const d2 = dx * dx + dy * dy;
+
+      if (bestD2.length < maxN) {
+        let j = bestD2.length;
+        while (j > 0 && bestD2[j - 1]! > d2) {
+          bestD2[j] = bestD2[j - 1]!;
+          bestIdx[j] = bestIdx[j - 1]!;
+          j--;
+        }
+        bestD2[j] = d2;
+        bestIdx[j] = i;
+      } else if (d2 < bestD2[maxN - 1]!) {
+        let j = maxN - 1;
+        while (j > 0 && bestD2[j - 1]! > d2) {
+          bestD2[j] = bestD2[j - 1]!;
+          bestIdx[j] = bestIdx[j - 1]!;
+          j--;
+        }
+        bestD2[j] = d2;
+        bestIdx[j] = i;
+      }
+    }
+
+    const yBiasBlocks = FIREFLY_LIGHT_Y_OFFSET_PX / BLOCK_SIZE;
+    for (let k = 0; k < bestIdx.length; k++) {
+      const p = parts[bestIdx[k]!]!;
+      // Torch bloom path has a slight built-in downward tip shift; bias emitters up 2px.
+      out.push({
         worldBlockX: p.x / BLOCK_SIZE,
-        // Torch bloom path has a slight built-in downward tip shift; bias emitters up 2px.
-        worldBlockY: -p.y / BLOCK_SIZE + FIREFLY_LIGHT_Y_OFFSET_PX / BLOCK_SIZE,
+        worldBlockY: -p.y / BLOCK_SIZE + yBiasBlocks,
         strength: FIREFLY_LIGHT_STRENGTH * (0.7 + p.brightness * 0.3),
       });
     }
-    out.push(...this.emitterScratch);
   }
 
   private updateExistingParticles(
@@ -523,13 +608,24 @@ export class FireflyAmbientParticles {
   }
 
   private checkGroundSpawnCell(wx: number, wy: number): boolean {
-    const ground = this.world.getBlock(wx, wy);
-    if (!ground.solid || ground.water || ground.replaceable || !ground.collides) {
+    const world = this.world;
+    const groundId = world.getForegroundBlockId(wx, wy);
+    if (
+      !world.isSolidBlockId(groundId) ||
+      world.isWaterBlockId(groundId) ||
+      world.isReplaceableBlockId(groundId) ||
+      !world.isCollidesBlockId(groundId)
+    ) {
       return false;
     }
-    const head = this.world.getBlock(wx, wy + 1);
-    const upper = this.world.getBlock(wx, wy + 2);
-    if (head.water || upper.water || head.collides || upper.collides) {
+    const headId = world.getForegroundBlockId(wx, wy + 1);
+    const upperId = world.getForegroundBlockId(wx, wy + 2);
+    if (
+      world.isWaterBlockId(headId) ||
+      world.isWaterBlockId(upperId) ||
+      world.isCollidesBlockId(headId) ||
+      world.isCollidesBlockId(upperId)
+    ) {
       return false;
     }
     const waterDist = this.nearestWaterDistance(wx, wy);
@@ -542,12 +638,22 @@ export class FireflyAmbientParticles {
 
   private findSpawnGroundY(wx: number, playerBy: number): number | null {
     const surface = this.world.getSurfaceHeight(wx);
-    const candidates = [
-      surface + 2,
-      surface + 1,
-      surface,
-      surface - 1,
-      surface - 2,
+    // Cheap surface-band gate: fireflies past this vertical distance from the player
+    // are off-screen / irrelevant at any reasonable zoom. Skipping these probes saves
+    // most of the cost when the player is deep underground or high in the sky — both
+    // cases where the surface-band would otherwise run nearestWaterDistance() on
+    // cells the player can't see.
+    const surfaceNearPlayer = Math.abs(surface - playerBy) <= 80;
+    if (surfaceNearPlayer) {
+      // Surface band first — the overwhelmingly common success case at night.
+      if (this.checkGroundSpawnCell(wx, surface + 2)) return surface + 2;
+      if (this.checkGroundSpawnCell(wx, surface + 1)) return surface + 1;
+      if (this.checkGroundSpawnCell(wx, surface)) return surface;
+      if (this.checkGroundSpawnCell(wx, surface - 1)) return surface - 1;
+      if (this.checkGroundSpawnCell(wx, surface - 2)) return surface - 2;
+    }
+    // Player band (caves above / below): probes progressively deeper ledges near the player.
+    const playerCandidates: number[] = [
       playerBy + 24,
       playerBy + 16,
       playerBy + 8,
@@ -561,7 +667,7 @@ export class FireflyAmbientParticles {
       playerBy - 56,
       playerBy - 64,
     ];
-    for (const wy of candidates) {
+    for (const wy of playerCandidates) {
       if (this.checkGroundSpawnCell(wx, wy)) {
         return wy;
       }
@@ -570,29 +676,51 @@ export class FireflyAmbientParticles {
   }
 
   private nearestWaterDistance(wx: number, wy: number): number | null {
+    const cacheKey = packWxWyKey(wx, wy);
+    const cached = this._nearestWaterCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached < 0 ? null : cached;
+    }
+    const world = this.world;
     const r = FIREFLY_NEAR_WATER_RADIUS_BLOCKS;
     let best: number | null = null;
     for (let dy = -3; dy <= 1; dy++) {
       for (let dx = -r; dx <= r; dx++) {
-        if (!this.world.getBlock(wx + dx, wy + dy).water) {
+        if (!world.isWaterBlockId(world.getForegroundBlockId(wx + dx, wy + dy))) {
           continue;
         }
         const d = Math.max(Math.abs(dx), Math.abs(dy));
         best = best === null ? d : Math.min(best, d);
       }
     }
+    this._nearestWaterCache.set(cacheKey, best === null ? -1 : best);
     return best;
   }
 
-  private chunksNear(pcx: number, pcy: number): [number, number][] {
-    const out: [number, number][] = [];
-    for (const [cx, cy] of this.world.loadedChunkCoords()) {
-      const d = Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy));
-      if (d <= FIREFLY_SPAWN_CHUNK_RADIUS) {
-        out.push([cx, cy]);
-      }
+  /**
+   * Returns the cached list of chunk coords within {@link FIREFLY_SPAWN_CHUNK_RADIUS}
+   * of the player. Rebuilt only when the player crosses a chunk boundary or every
+   * {@link FIREFLY_NEIGHBOR_CHUNKS_REFRESH_TICKS} ticks to pick up newly streamed chunks.
+   */
+  private getNeighborChunks(pcx: number, pcy: number): [number, number][] {
+    const staleByMove =
+      this._neighborChunkPcx !== pcx || this._neighborChunkPcy !== pcy;
+    const staleByTime = this.updateSeq >= this._neighborChunkRefreshAt;
+    if (!staleByMove && !staleByTime) {
+      return this._neighborChunkList;
     }
-    return out;
+    // Bounded iteration (O(R²)) instead of scanning every loaded chunk.
+    this.world.collectLoadedChunkCoordsWithinDistance(
+      pcx,
+      pcy,
+      FIREFLY_SPAWN_CHUNK_RADIUS,
+      this._neighborChunkList,
+    );
+    this._neighborChunkPcx = pcx;
+    this._neighborChunkPcy = pcy;
+    this._neighborChunkRefreshAt =
+      this.updateSeq + FIREFLY_NEIGHBOR_CHUNKS_REFRESH_TICKS;
+    return this._neighborChunkList;
   }
 
   private fireflyCenterOverlapsSolid(cx: number, cyPixi: number): boolean {

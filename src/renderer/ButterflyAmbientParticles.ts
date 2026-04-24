@@ -771,15 +771,17 @@ export class ButterflyAmbientParticles {
     return false;
   }
 
+  private readonly _neighborChunkScratch: [number, number][] = [];
+
   private chunksNear(pcx: number, pcy: number): [number, number][] {
-    const out: [number, number][] = [];
-    for (const [cx, cy] of this.world.loadedChunkCoords()) {
-      const d = Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy));
-      if (d <= BUTTERFLY_SPAWN_CHUNK_RADIUS) {
-        out.push([cx, cy]);
-      }
-    }
-    return out;
+    // Bounded iteration (O(R²)) — avoids scanning every loaded chunk per tick.
+    this.world.collectLoadedChunkCoordsWithinDistance(
+      pcx,
+      pcy,
+      BUTTERFLY_SPAWN_CHUNK_RADIUS,
+      this._neighborChunkScratch,
+    );
+    return this._neighborChunkScratch;
   }
 
   /** If more than {@link BUTTERFLY_MAX_ONSCREEN} overlap the tight view, recycle extras. */

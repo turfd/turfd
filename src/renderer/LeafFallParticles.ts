@@ -579,15 +579,17 @@ export class LeafFallParticles {
     return true;
   }
 
+  private readonly _neighborChunkScratch: [number, number][] = [];
+
   private chunksNear(pcx: number, pcy: number): [number, number][] {
-    const out: [number, number][] = [];
-    for (const [cx, cy] of this.world.loadedChunkCoords()) {
-      const d = Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy));
-      if (d <= LEAF_FALL_SPAWN_CHUNK_RADIUS) {
-        out.push([cx, cy]);
-      }
-    }
-    return out;
+    // Bounded iteration (O(R²)) — avoids scanning every loaded chunk per tick.
+    this.world.collectLoadedChunkCoordsWithinDistance(
+      pcx,
+      pcy,
+      LEAF_FALL_SPAWN_CHUNK_RADIUS,
+      this._neighborChunkScratch,
+    );
+    return this._neighborChunkScratch;
   }
 
   /**

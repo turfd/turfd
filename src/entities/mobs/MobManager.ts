@@ -1137,14 +1137,23 @@ export class MobManager {
       return [...this.world.loadedChunkCoords()] as Array<[number, number]>;
     }
     const R = PASSIVE_CHUNK_SPAWN_RADIUS;
+    // Union of bounded iterations around each player centre — O(centres · R²) instead
+    // of O(loadedChunks · centres). De-duplicate with a Set so nearby players don't
+    // double-count overlapping chunks.
+    const seen = new Set<number>();
     const out: Array<[number, number]> = [];
-    for (const [cx, cy] of this.world.loadedChunkCoords()) {
-      if (
-        centres.some(
-          (c) => Math.max(Math.abs(cx - c.cx), Math.abs(cy - c.cy)) <= R,
-        )
-      ) {
-        out.push([cx, cy]);
+    const scratch: [number, number][] = [];
+    for (const c of centres) {
+      this.world.collectLoadedChunkCoordsWithinDistance(c.cx, c.cy, R, scratch);
+      for (let i = 0; i < scratch.length; i++) {
+        const cx = scratch[i]![0];
+        const cy = scratch[i]![1];
+        // Cantor-style pairing folds signed ints into a single Number safely up to ~1M.
+        const key = ((cx + 1_048_576) * 2_097_152) + (cy + 1_048_576);
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push([cx, cy]);
+        }
       }
     }
     return out;

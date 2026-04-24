@@ -81,7 +81,13 @@ export class GameLoop {
       });
     }
 
-    const alpha = this.accumulatorMs / FIXED_TIMESTEP_MS;
+    // Under heavy load we cap fixed steps per frame, so backlog can exceed one tick.
+    // Clamp interpolation to avoid extrapolating past the latest fixed state
+    // (which manifests as visual jump-height inflation / ground sinking).
+    const alpha = Math.min(
+      1,
+      Math.max(0, this.accumulatorMs / FIXED_TIMESTEP_MS),
+    );
     this.hooks.onRender(alpha);
 
     this.rafId = requestAnimationFrame((t) => this.frame(t));

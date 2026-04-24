@@ -202,6 +202,8 @@ function unpackChunkCoordKey(key: number): ChunkCoord {
 const LIGHT_RECOMPUTE_SKY = 1 << 0;
 const LIGHT_RECOMPUTE_BLOCK = 1 << 1;
 const LIGHT_RECOMPUTE_BOTH = LIGHT_RECOMPUTE_SKY | LIGHT_RECOMPUTE_BLOCK;
+const CHUNK_SIZE_MASK = CHUNK_SIZE - 1;
+const CHUNK_SIZE_IS_POWER_OF_TWO = (CHUNK_SIZE & (CHUNK_SIZE - 1)) === 0;
 
 export class World {
   private readonly registry: BlockRegistry;
@@ -266,10 +268,14 @@ export class World {
   private readonly _dropSolidScratch: AABB[] = [];
   /** Cached `getSkyExposureTop` per world column `wx` (invalidated on block / chunk changes). */
   private readonly _skyTopByWx = new Map<number, number>();
-  private readonly _lightAbsorptionById = new Map<number, number>();
-  private readonly _lightEmissionById = new Map<number, number>();
+  private readonly _lightAbsorptionById: number[] = [];
+  private readonly _lightEmissionById: number[] = [];
   /** Hot path for lighting / sky column scans (avoids `registry.getById` per cell). */
   private readonly _solidById = new Map<number, boolean>();
+  /** Hot probe flags (water/collides/replaceable) keyed by block id. */
+  private readonly _waterById = new Map<number, boolean>();
+  private readonly _collidesById = new Map<number, boolean>();
+  private readonly _replaceableById = new Map<number, boolean>();
   /** Hysteresis centre for {@link streamChunksAroundPlayer}; seeded in {@link init}. */
   private streamCentreCx: number | null = null;
   private streamCentreCy: number | null = null;
@@ -1946,6 +1952,24 @@ export class World {
     }
   }
 
+  /**
+   * Loaded chunk coords within Chebyshev `distance` of `(cx, cy)`. Iterates the
+   * O(distance²) axis-aligned square of chunk coordinates rather than every loaded
+   * chunk, so it stays cheap when `loadedChunks >> (2·distance + 1)²`.
+   * Pushes `[cx, cy]` pairs into `out` (cleared before use).
+   */
+  collectLoadedChunkCoordsWithinDistance(
+    cx: number,
+    cy: number,
+    distance: number,
+    out: [number, number][],
+  ): void {
+    out.length = 0;
+    for (const chunk of this.chunks.getChunksWithinDistance({ cx, cy }, distance)) {
+      out.push([chunk.coord.cx, chunk.coord.cy]);
+    }
+  }
+
   async init(
     progressCallback?: WorldLoadProgressCallback,
     initialCentreBlockX?: number,
@@ -2520,17 +2544,37 @@ export class World {
   }
 
   private _makeReader(): {
-    getBlock(wx: number, wy: number): number;
+    getBlockId(wx: number, wy: number): number;
     isSolid(wx: number, wy: number): boolean;
-    getLightAbsorption(wx: number, wy: number): number;
-    getLightEmission(wx: number, wy: number): number;
+    getLightAbsorptionById(id: number, wx: number, wy: number): number;
+    getLightEmissionById(id: number): number;
     getSkyExposureTop(wx: number): number;
   } {
+    // Light propagation repeatedly samples nearby cells. Cache the last resolved chunk
+    // so neighbour reads avoid repeated ChunkManager map lookups.
+    let cachedCx = Number.NaN;
+    let cachedCy = Number.NaN;
+    let cachedChunk: Chunk | undefined;
+    const getBlockIdCached = (wx: number, wy: number): number => {
+      const cx = Math.floor(wx / CHUNK_SIZE);
+      const cy = Math.floor(wy / CHUNK_SIZE);
+      if (cx !== cachedCx || cy !== cachedCy) {
+        cachedCx = cx;
+        cachedCy = cy;
+        cachedChunk = this.chunks.getChunkXY(cx, cy);
+      }
+      const chunk = cachedChunk;
+      if (chunk === undefined) {
+        return this.airId;
+      }
+      const lx = wx - cx * CHUNK_SIZE;
+      const ly = wy - cy * CHUNK_SIZE;
+      return getBlock(chunk, lx, ly);
+    };
     return {
-      getBlock: (wx, wy) => this.getBlockId(wx, wy),
-      isSolid: (wx, wy) => this.getSolidById(this.getBlockId(wx, wy)),
-      getLightAbsorption: (wx, wy) => {
-        const id = this.getBlockId(wx, wy);
+      getBlockId: (wx, wy) => getBlockIdCached(wx, wy),
+      isSolid: (wx, wy) => this.getSolidById(getBlockIdCached(wx, wy)),
+      getLightAbsorptionById: (id, wx, wy) => {
         const base = this.getLightAbsorptionById(id);
         // Open doors (latched or proximity) pass light like air for BFS/occlusion.
         if (base > 0 && this.registry.isDoor(id) && this.isDoorEffectivelyOpen(wx, wy)) {
@@ -2538,12 +2582,50 @@ export class World {
         }
         return base;
       },
-      getLightEmission: (wx, wy) => {
-        const id = this.getBlockId(wx, wy);
-        return this.getLightEmissionById(id);
-      },
+      getLightEmissionById: (id) => this.getLightEmissionById(id),
       getSkyExposureTop: (wx) => this._getSkyExposureTop(wx),
     };
+  }
+
+  /**
+   * Cached `BlockDefinition.solid` by numeric id — safe to use on hot probe paths
+   * (renderer / particles / lighting) to avoid repeated registry / definition lookups.
+   */
+  isSolidBlockId(id: number): boolean {
+    return this.getSolidById(id);
+  }
+
+  /** Cached `BlockDefinition.water` by numeric id. */
+  isWaterBlockId(id: number): boolean {
+    const hit = this._waterById.get(id);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const value = this.registry.getById(id).water;
+    this._waterById.set(id, value);
+    return value;
+  }
+
+  /** Cached `BlockDefinition.collides` by numeric id. */
+  isCollidesBlockId(id: number): boolean {
+    const hit = this._collidesById.get(id);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const value = this.registry.getById(id).collides;
+    this._collidesById.set(id, value);
+    return value;
+  }
+
+  /** Cached `BlockDefinition.replaceable` by numeric id. */
+  isReplaceableBlockId(id: number): boolean {
+    const hit = this._replaceableById.get(id);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const value = this.registry.getById(id).replaceable;
+    this._replaceableById.set(id, value);
+    return value;
   }
 
   private getSolidById(id: number): boolean {
@@ -2557,22 +2639,22 @@ export class World {
   }
 
   private getLightAbsorptionById(id: number): number {
-    const hit = this._lightAbsorptionById.get(id);
+    const hit = this._lightAbsorptionById[id];
     if (hit !== undefined) {
       return hit;
     }
     const value = this.registry.getById(id).lightAbsorption;
-    this._lightAbsorptionById.set(id, value);
+    this._lightAbsorptionById[id] = value;
     return value;
   }
 
   private getLightEmissionById(id: number): number {
-    const hit = this._lightEmissionById.get(id);
+    const hit = this._lightEmissionById[id];
     if (hit !== undefined) {
       return hit;
     }
     const value = this.registry.getById(id).lightEmission;
-    this._lightEmissionById.set(id, value);
+    this._lightEmissionById[id] = value;
     return value;
   }
 
@@ -2582,7 +2664,9 @@ export class World {
       return hit;
     }
     const cx = Math.floor(wx / CHUNK_SIZE);
-    const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const lx = CHUNK_SIZE_IS_POWER_OF_TWO
+      ? wx & CHUNK_SIZE_MASK
+      : ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const minCy = Math.floor(WORLD_Y_MIN / CHUNK_SIZE);
     const maxCy = Math.floor(WORLD_Y_MAX / CHUNK_SIZE);
     let top = WORLD_Y_MIN;
@@ -2631,8 +2715,12 @@ export class World {
     if (chunk === undefined) {
       return this.airId;
     }
-    const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const ly = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const lx = CHUNK_SIZE_IS_POWER_OF_TWO
+      ? wx & CHUNK_SIZE_MASK
+      : ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const ly = CHUNK_SIZE_IS_POWER_OF_TWO
+      ? wy & CHUNK_SIZE_MASK
+      : ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     return getBlock(chunk, lx, ly);
   }
 

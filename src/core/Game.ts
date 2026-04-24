@@ -6504,29 +6504,11 @@ export class Game {
       this.blockBreakParticles?.update(dtSec);
       const pl = entityManager.getPlayer().state.position;
       this.leafFallParticles?.update(dtSec, pl.x, pl.y);
-      {
-        const pipe = this.pipeline;
-        if (pipe !== null) {
-          const { width: sw, height: sh } = pipe.pixiApp.renderer.screen;
-          this.butterflyParticles?.update(
-            dtSec,
-            pl.x,
-            pl.y,
-            pipe.getCamera(),
-            sw,
-            sh,
-          );
-          this.fireflyParticles?.update(
-            dtSec,
-            pl.x,
-            pl.y,
-            pipe.getCamera(),
-            sw,
-            sh,
-            this._isNightForSleep(),
-          );
-        }
-      }
+      // NOTE: firefly / butterfly ambient particles are visual-only and are now ticked
+      // from the render path (see {@link Game._tickAmbientVisualParticles}) so their
+      // cost scales with render FPS (and an adaptive-workload gate) rather than the
+      // fixed 60 Hz simulation tick. Keeping them here regressed fixedUpdate CPU under
+      // heavy scenes and wasn't needed — they don't affect gameplay state.
       this._playerStateBroadcastPhase += 1;
       if (this._playerStateBroadcastPhase >= 2) {
         this._playerStateBroadcastPhase = 0;
@@ -7055,6 +7037,40 @@ export class Game {
     send(brk.wx, brk.wy, layerU8, crack);
   }
 
+  /**
+   * Ambient particle (firefly / butterfly) tick, driven from the render path.
+   * Runs interpolated with the camera but is gated by {@link paused} so behavior
+   * matches the previous fixed-tick wiring whenever the game is frozen.
+   */
+  private _tickAmbientVisualParticles(dtSec: number, alpha: number): void {
+    if (this.paused || dtSec <= 0) {
+      return;
+    }
+    const pipe = this.pipeline;
+    const em = this.entityManager;
+    if (pipe === null || em === null) {
+      return;
+    }
+    const s = em.getPlayer().state;
+    const ix = s.prevPosition.x + (s.position.x - s.prevPosition.x) * alpha;
+    const iy = s.prevPosition.y + (s.position.y - s.prevPosition.y) * alpha;
+    if (!Number.isFinite(ix) || !Number.isFinite(iy)) {
+      return;
+    }
+    const { width: sw, height: sh } = pipe.pixiApp.renderer.screen;
+    const cam = pipe.getCamera();
+    this.butterflyParticles?.update(dtSec, ix, iy, cam, sw, sh);
+    this.fireflyParticles?.update(
+      dtSec,
+      ix,
+      iy,
+      cam,
+      sw,
+      sh,
+      this._isNightForSleep(),
+    );
+  }
+
   private render(alpha: number): void {
     const now = performance.now();
     const winterAmount = 0;
@@ -7181,6 +7197,11 @@ export class Game {
     }
 
     this.entityManager?.syncPlayerGraphic(alpha, dtSec, now);
+
+    // Ambient visual particles (fireflies/butterflies) tick on the render path so
+    // their spawn probing & motion integration cost scales with draw FPS rather than
+    // the fixed-timestep simulation loop, which had them competing with gameplay work.
+    this._tickAmbientVisualParticles(dtSec, alpha);
 
     if (
       this._nametagOverlay !== null &&

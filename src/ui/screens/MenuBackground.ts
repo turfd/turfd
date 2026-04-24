@@ -38,6 +38,7 @@ import {
   buildFgShadowMesh,
   createWorldFgShadowSampler,
 } from "../../renderer/chunk/TileDrawBatch";
+import { buildLeafDecorationMesh } from "../../renderer/chunk/LeafDecorationBatch";
 import { BlockRegistry } from "../../world/blocks/BlockRegistry";
 import { WorldGenerator } from "../../world/gen/WorldGenerator";
 import type { Chunk } from "../../world/chunk/Chunk";
@@ -713,6 +714,11 @@ export class MenuBackground {
         const { mesh, waterMesh } = buildMesh(chunk, registry, atlas);
         mesh.position.set(pos.x, pos.y);
         worldContainer.addChild(mesh);
+        const leafDeco = buildLeafDecorationMesh(chunk, registry, atlas, {
+          sampleBlockId: fgShadowSampler,
+        });
+        leafDeco.position.set(pos.x, pos.y);
+        worldContainer.addChild(leafDeco);
         waterMesh.position.set(pos.x, pos.y);
         worldContainer.addChild(waterMesh);
       }

@@ -163,6 +163,13 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _bloomMaskRT: RenderTexture | null = null;
   private _bloomMaskPlayerRoot: Container | null = null;
   private readonly _emptyMaskClearRoot = new Container();
+  /**
+   * Bloom mask (player silhouette) is re-rendered every other frame. The RT persists between
+   * frames; a ≤16ms stale mask is imperceptible given bloom's soft glow. Cuts one full
+   * {@link renderWorldWithOverscanOffset} pass every other frame when bloom is enabled.
+   * Starts at 1 so the first `render()` call after enablement always primes the RT.
+   */
+  private _bloomMaskFrameCounter = 1;
   private _bgToneFilter: TonemapFilter | null = null;
 
 
@@ -199,6 +206,25 @@ export class RenderPipeline implements RenderPipelineLayers {
     this.layerParticles = new Container({ label: "layerParticles" });
 
     this.layerLightmap.visible = true;
+
+    // Pixi's EventSystem walks the whole display tree on every pointermove to hit-test
+    // interactive children. The game doesn't rely on any pixi-level pointer events —
+    // pointer→world translation happens manually via {@link Input.updateMouseWorldPos} —
+    // so opting every world-tree container out of event propagation cuts a large chunk
+    // of per-move CPU (visible as `_onPointerMove` / `Hit test` in profile captures).
+    this.subPixelNudge.eventMode = "none";
+    this.camera.worldRoot.eventMode = "none";
+    this.layerSky.eventMode = "none";
+    this.layerTilesBack.eventMode = "none";
+    this.layerTilesMid.eventMode = "none";
+    this.layerEntities.eventMode = "none";
+    this.layerWaterOverEntities.eventMode = "none";
+    this.layerForeground.eventMode = "none";
+    this.layerLightmap.eventMode = "none";
+    this.layerParticles.eventMode = "none";
+    // Lighting overlay is screen-cover compositing output; no value in per-frame culler descent.
+    this.layerLightmap.cullable = false;
+    this.layerLightmap.cullableChildren = false;
 
     // So local player zIndex can sort above mobs (e.g. zIndex -2) and match bloom mask vs albedo.
     this.layerEntities.sortableChildren = true;
@@ -365,6 +391,8 @@ export class RenderPipeline implements RenderPipelineLayers {
     });
     this._bloomMaskRT.source.scaleMode = "nearest";
 
+    // Entire pixi stage opts out of event propagation — see constructor note.
+    application.stage.eventMode = "none";
     application.stage.addChild(this.subPixelNudge);
 
     const cloud = new SpriteCloudLayer();
@@ -919,7 +947,13 @@ export class RenderPipeline implements RenderPipelineLayers {
       this.renderWorldWithOverscanOffset(this._albedoRT);
       const vp = getVideoPrefs();
       if (vp.bloom) {
-        this.renderBloomMask();
+        // Render the bloom mask every other frame — the RT persists in between, and
+        // bloom occlusion tolerates a single-frame stale silhouette far better than it
+        // tolerates the duplicated world render this path implies at 60 FPS.
+        this._bloomMaskFrameCounter = (this._bloomMaskFrameCounter + 1) | 0;
+        if ((this._bloomMaskFrameCounter & 1) === 0) {
+          this.renderBloomMask();
+        }
       }
       try {
         this.camera.worldRoot.visible = false;

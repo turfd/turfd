@@ -10,10 +10,10 @@ import {
  * sample neighbour chunks without importing World directly.
  */
 interface WorldBlockReader {
-  getBlock(wx: number, wy: number): number;
+  getBlockId(wx: number, wy: number): number;
   isSolid(wx: number, wy: number): boolean;
-  getLightAbsorption(wx: number, wy: number): number;
-  getLightEmission(wx: number, wy: number): number;
+  getLightAbsorptionById(id: number, wx: number, wy: number): number;
+  getLightEmissionById(id: number): number;
   /** World Y of the highest solid block in column wx (or WORLD_Y_MIN if none). */
   getSkyExposureTop(wx: number): number;
 }
@@ -132,28 +132,32 @@ export function computeSkyLight(
     // Down (wy - 1): no decay — sky light pours straight down
     {
       const ny = wy - 1;
-      const absorption = reader.getLightAbsorption(wx, ny);
+      const id = reader.getBlockId(wx, ny);
+      const absorption = reader.getLightAbsorptionById(id, wx, ny);
       const next = level - absorption;
       if (next > 0) tryPush(wx, ny, Math.min(SKY_LIGHT_MAX, next));
     }
     // Up (wy + 1): normal decay
     {
       const ny = wy + 1;
-      const absorption = reader.getLightAbsorption(wx, ny);
+      const id = reader.getBlockId(wx, ny);
+      const absorption = reader.getLightAbsorptionById(id, wx, ny);
       const next = level - 1 - absorption;
       if (next > 0) tryPush(wx, ny, Math.min(SKY_LIGHT_MAX, next));
     }
     // Left
     {
       const nx = wx - 1;
-      const absorption = reader.getLightAbsorption(nx, wy);
+      const id = reader.getBlockId(nx, wy);
+      const absorption = reader.getLightAbsorptionById(id, nx, wy);
       const next = level - 1 - absorption;
       if (next > 0) tryPush(nx, wy, Math.min(SKY_LIGHT_MAX, next));
     }
     // Right
     {
       const nx = wx + 1;
-      const absorption = reader.getLightAbsorption(nx, wy);
+      const id = reader.getBlockId(nx, wy);
+      const absorption = reader.getLightAbsorptionById(id, nx, wy);
       const next = level - 1 - absorption;
       if (next > 0) tryPush(nx, wy, Math.min(SKY_LIGHT_MAX, next));
     }
@@ -202,7 +206,8 @@ export function computeBlockLight(
     const wy = wyMin + py;
     for (let px = 0; px < pw; px++) {
       const wx = wxMin + px;
-      const emission = reader.getLightEmission(wx, wy);
+      const id = reader.getBlockId(wx, wy);
+      const emission = reader.getLightEmissionById(id);
       if (emission > 0) {
         const seed = Math.min(BLOCK_LIGHT_MAX, emission);
         push(wx, wy, seed);
@@ -235,7 +240,8 @@ export function computeBlockLight(
       const d = BLOCK_LIGHT_NB[ni]!;
       const nx = wx + d[0];
       const ny = wy + d[1];
-      const absorption = reader.getLightAbsorption(nx, ny);
+      const id = reader.getBlockId(nx, ny);
+      const absorption = reader.getLightAbsorptionById(id, nx, ny);
       const nextLevel = level - 1 - absorption;
       if (nextLevel > 0) {
         const clamped = Math.min(BLOCK_LIGHT_MAX, nextLevel);
