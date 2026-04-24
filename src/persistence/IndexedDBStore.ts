@@ -143,6 +143,32 @@ export type ChunkRecord = {
   chests?: ChestPersistedChunk[];
 };
 
+export type PersistedFeetPosition = { x: number; y: number };
+
+/**
+ * Absolute guard for persisted feet coordinates. Values beyond this are treated as corrupt.
+ * Chosen to be far beyond any practical world-play range while still filtering runaway values.
+ */
+const PERSISTED_FEET_MAX_ABS = 10_000_000;
+
+export function sanitizePersistedFeetPosition(
+  x: number | undefined,
+  y: number | undefined,
+): PersistedFeetPosition | null {
+  if (
+    x === undefined ||
+    y === undefined ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y)
+  ) {
+    return null;
+  }
+  if (Math.abs(x) > PERSISTED_FEET_MAX_ABS || Math.abs(y) > PERSISTED_FEET_MAX_ABS) {
+    return null;
+  }
+  return { x, y };
+}
+
 function chunkStoreKey(worldUuid: string, coord: ChunkCoord): string {
   return `${worldUuid}:${chunkKey(coord)}`;
 }

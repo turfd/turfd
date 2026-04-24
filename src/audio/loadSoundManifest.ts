@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import type { AudioEngine } from "./AudioEngine";
+import { withBuildCacheBust } from "../core/assetCache";
 
 const pathOrPaths = z.union([
   z.string().min(1),
@@ -94,7 +95,7 @@ export type SoundManifestJson = z.infer<typeof soundManifestSchema>;
 function joinPackUrl(packBaseUrl: string, relativePath: string): string {
   const base = packBaseUrl.endsWith("/") ? packBaseUrl : `${packBaseUrl}/`;
   const rel = relativePath.replace(/^\//, "");
-  return `${base}${rel}`;
+  return withBuildCacheBust(`${base}${rel}`);
 }
 
 async function loadPathOrPaths(
@@ -251,7 +252,7 @@ export async function fetchAndLoadSoundManifest(
   manifestRelativePath: string,
 ): Promise<void> {
   const url = joinPackUrl(packBaseUrl, manifestRelativePath);
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
     console.warn(`fetchAndLoadSoundManifest: ${url} (${res.status})`);
     return;

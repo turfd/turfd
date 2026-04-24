@@ -2,6 +2,8 @@ import {
   AUDIO_ENV_AIR_HALFRADIUS_BLOCKS,
   AUDIO_ENV_CAVE_ENTER_AIR_COUNT,
   AUDIO_ENV_CAVE_EXIT_AIR_COUNT,
+  AUDIO_ENV_SHALLOW_CAVE_ENTER_AIR_COUNT,
+  AUDIO_ENV_SHALLOW_CAVE_EXIT_AIR_COUNT,
   AUDIO_ENV_SHALLOW_LAYER_MIN_BLOCK_Y,
   BLOCK_SIZE,
   PLAYER_WIDTH,
@@ -87,6 +89,13 @@ function maxAirAcrossOffsets(
   return best;
 }
 
+function opennessFromAirCount(airMax: number, enterAirCount: number): number {
+  const side = AUDIO_ENV_AIR_HALFRADIUS_BLOCKS * 2 + 1;
+  const maxAir = side * side;
+  const span = maxAir - enterAirCount;
+  return span > 0 ? clamp01((airMax - enterAirCount) / span) : 1;
+}
+
 export class EnvironmentDetector {
   private wasCave = false;
 
@@ -103,15 +112,27 @@ export class EnvironmentDetector {
     const airMax = maxAirAcrossOffsets(world, feetBx, feetBy);
 
     if (feetBy >= AUDIO_ENV_SHALLOW_LAYER_MIN_BLOCK_Y) {
-      this.wasCave = false;
+      if (this.wasCave) {
+        if (airMax <= AUDIO_ENV_SHALLOW_CAVE_EXIT_AIR_COUNT) {
+          this.wasCave = false;
+        }
+      } else if (airMax >= AUDIO_ENV_SHALLOW_CAVE_ENTER_AIR_COUNT) {
+        this.wasCave = true;
+      }
+
+      if (this.wasCave) {
+        const openness01 = opennessFromAirCount(
+          airMax,
+          AUDIO_ENV_SHALLOW_CAVE_ENTER_AIR_COUNT,
+        );
+        return { env: "cave", openness01 };
+      }
+
       if (airMax >= AUDIO_ENV_CAVE_ENTER_AIR_COUNT) {
-        const side = AUDIO_ENV_AIR_HALFRADIUS_BLOCKS * 2 + 1;
-        const maxAir = side * side;
-        const span = maxAir - AUDIO_ENV_CAVE_ENTER_AIR_COUNT;
-        const openness01 =
-          span > 0
-            ? clamp01((airMax - AUDIO_ENV_CAVE_ENTER_AIR_COUNT) / span)
-            : 1;
+        const openness01 = opennessFromAirCount(
+          airMax,
+          AUDIO_ENV_CAVE_ENTER_AIR_COUNT,
+        );
         return { env: "enclosed", openness01 };
       }
       return { env: "underground", openness01: 0 };
@@ -129,13 +150,7 @@ export class EnvironmentDetector {
       return { env: "underground", openness01: 0 };
     }
 
-    const side = AUDIO_ENV_AIR_HALFRADIUS_BLOCKS * 2 + 1;
-    const maxAir = side * side;
-    const span = maxAir - AUDIO_ENV_CAVE_ENTER_AIR_COUNT;
-    const openness01 =
-      span > 0
-        ? clamp01((airMax - AUDIO_ENV_CAVE_ENTER_AIR_COUNT) / span)
-        : 1;
+    const openness01 = opennessFromAirCount(airMax, AUDIO_ENV_CAVE_ENTER_AIR_COUNT);
 
     return { env: "cave", openness01 };
   }

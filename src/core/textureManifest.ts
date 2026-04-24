@@ -1,6 +1,7 @@
 /** Bedrock-style split: block terrain textures vs item textures (separate JSON manifests). */
 
 import type { ItemRegistry } from "../items/ItemRegistry";
+import { withBuildCacheBust } from "./assetCache";
 
 /** Site-root-relative prefix for built-in Stratum Core textures (`resource_packs/stratum-core/textures/`). */
 export const STRATUM_CORE_TEXTURES_BASE =
@@ -23,7 +24,7 @@ export const EXTRA_ITEM_TEXTURE_KEYS = [
 export function stratumCoreTextureAssetUrl(relativeToTexturesRoot: string): string {
   const base = import.meta.env.BASE_URL;
   const rel = relativeToTexturesRoot.replace(/^\/+/, "");
-  return `${base}${STRATUM_CORE_TEXTURES_BASE}${rel}`;
+  return withBuildCacheBust(`${base}${STRATUM_CORE_TEXTURES_BASE}${rel}`);
 }
 
 export type TextureManifestJson = {
@@ -35,8 +36,8 @@ export async function fetchTextureManifestJson(
 ): Promise<TextureManifestJson> {
   const base = import.meta.env.BASE_URL;
   const trimmed = manifestRelativePath.replace(/^\/+/, "");
-  const jsonUrl = `${base}${trimmed}`;
-  const res = await fetch(jsonUrl);
+  const jsonUrl = withBuildCacheBust(`${base}${trimmed}`);
+  const res = await fetch(jsonUrl, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Texture manifest failed to load: ${jsonUrl} (${res.status})`);
   }
@@ -100,7 +101,7 @@ export async function fetchItemIconUrlMapForRegistry(
         `No texture path for item '${def.key}' (textureName "${k}") for UI icons.`,
       );
     }
-    out[k] = new URL(rel.replace(/^\/+/, ""), baseForResolve).href;
+    out[k] = withBuildCacheBust(new URL(rel.replace(/^\/+/, ""), baseForResolve).href);
   }
   for (const key of EXTRA_ITEM_TEXTURE_KEYS) {
     if (out[key] !== undefined) {
@@ -108,7 +109,9 @@ export async function fetchItemIconUrlMapForRegistry(
     }
     const rel = item[key] ?? block[key];
     if (typeof rel === "string" && rel.length > 0) {
-      out[key] = new URL(rel.replace(/^\/+/, ""), baseForResolve).href;
+      out[key] = withBuildCacheBust(
+        new URL(rel.replace(/^\/+/, ""), baseForResolve).href,
+      );
     }
   }
   return out;

@@ -12,13 +12,17 @@ import { BLOCK_SIZE } from "../core/constants";
 import type { TextureManifestJson } from "../core/textureManifest";
 import { BLOCK_TEXTURE_MANIFEST_PATH } from "../core/textureManifest";
 import { resolveTextureMapKey } from "../core/textureKeyResolve";
+import { withBuildCacheBust } from "../core/assetCache";
 
 const MAX_PACK_DIMENSION = 4096;
 
 function publicAssetUrl(relativePath: string): string {
+  if (/^(blob:|data:|https?:\/\/)/i.test(relativePath)) {
+    return relativePath;
+  }
   const base = import.meta.env.BASE_URL;
   const path = relativePath.replace(/^\/+/, "");
-  return `${base}${path}`;
+  return withBuildCacheBust(`${base}${path}`);
 }
 
 function loadImageElement(url: string): Promise<HTMLImageElement> {
@@ -172,7 +176,7 @@ export class AtlasLoader {
   /** Load a single manifest JSON (`block_texture_manifest.json` or `item_texture_manifest.json`). */
   async load(): Promise<void> {
     const jsonUrl = publicAssetUrl(this.manifestRelativePath);
-    const res = await fetch(jsonUrl);
+    const res = await fetch(jsonUrl, { cache: "no-store" });
     if (!res.ok) {
       throw new Error(`Texture manifest failed to load: ${jsonUrl} (${res.status})`);
     }

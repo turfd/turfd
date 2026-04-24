@@ -17,9 +17,10 @@ import {
   BehaviorPackManifestSchema,
   type BehaviorPackManifest,
 } from "./internalPackManifest";
+import { withBuildCacheBust } from "../core/assetCache";
 
 async function fetchJson(url: string): Promise<unknown> {
-  const res = await fetch(url);
+  const res = await fetch(withBuildCacheBust(url), { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
   }

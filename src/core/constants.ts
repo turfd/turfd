@@ -62,6 +62,15 @@ export const AUDIO_ENV_CAVE_ENTER_AIR_COUNT = 24;
 /** Leave “cave” for “underground” when air cells drop to this or below (hysteresis exit). */
 export const AUDIO_ENV_CAVE_EXIT_AIR_COUNT = 17;
 
+/**
+ * In shallow layers (near-surface interiors), treat only very open volumes as true caves.
+ * This prevents houses/tunnels from grabbing cave IR while still allowing big caverns.
+ */
+export const AUDIO_ENV_SHALLOW_CAVE_ENTER_AIR_COUNT = 34;
+
+/** Leave shallow-layer “cave” mode once openness falls below this (hysteresis exit). */
+export const AUDIO_ENV_SHALLOW_CAVE_EXIT_AIR_COUNT = 28;
+
 /** Short wet/dry ramp when only cave “openness” changes (same IR, seconds). */
 export const AUDIO_REVERB_CAVE_OPENNESS_RAMP_SEC = 0.45;
 
@@ -933,25 +942,25 @@ export const TERRAIN_BASE_SURFACE_BIAS_BLOCKS = 2;
 /**
  * Lake biome: horizontal scale in blocks (simplex input `wx / this`). Larger ⇒ rarer lake regions / wider basins.
  */
-export const LAKE_BIOME_SCALE_BLOCKS = 640;
+export const LAKE_BIOME_SCALE_BLOCKS = 920;
 
 /**
  * Lake mask (macro noise 0..1): smoothstep edges. Higher band ⇒ fewer, more separated lakes.
  */
 /** Narrower lake basins vs sea (fewer large “ocean” columns). */
-export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.91;
-export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.98;
+export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.95;
+export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.992;
 
 /**
  * Second noise channel (0..1): multiplied with macro mask for irregular shorelines and extra rarity.
  */
 export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.65;
-export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.86;
+export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.93;
 
 /**
  * Applied to (macro × micro) so mid-strength shores shrink — fewer large lake footprints.
  */
-export const LAKE_BIOME_INFLUENCE_POW = 1.35;
+export const LAKE_BIOME_INFLUENCE_POW = 2.05;
 
 /** Approximate lake bed depth below {@link WATER_SEA_LEVEL_WY} at full lake influence (before jitter). */
 export const LAKE_BIOME_DEPTH_BLOCKS = 7;

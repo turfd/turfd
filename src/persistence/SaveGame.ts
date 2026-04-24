@@ -7,8 +7,11 @@ import type { Player } from "../entities/Player";
 import type { World } from "../world/World";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 import { ITEM_ID_LAYOUT_REVISION_CURRENT } from "../items/itemIdLayoutMigration";
-import type { WorldMetadata } from "./IndexedDBStore";
-import { IndexedDBStore } from "./IndexedDBStore";
+import {
+  IndexedDBStore,
+  sanitizePersistedFeetPosition,
+  type WorldMetadata,
+} from "./IndexedDBStore";
 
 export class SaveGame {
   private readonly store: IndexedDBStore;
@@ -71,6 +74,7 @@ export class SaveGame {
   private autoSaveId: ReturnType<typeof setInterval> | null = null;
   /** Serializes overlapping `save()` calls (autosave + manual) to avoid torn metadata/chunk batches. */
   private _saveSerial = Promise.resolve();
+  private _lastGoodPlayerFeet: { x: number; y: number } | null = null;
 
   constructor(
     store: IndexedDBStore,
@@ -192,7 +196,29 @@ export class SaveGame {
     const mobs = this.getMobsForSave?.() ?? existing?.mobs;
     const drops = this.getDropsForSave?.() ?? existing?.drops;
 
-    const spawnFeet = this.getPlayerSpawnFeet?.() ?? null;
+    const spawnFeetRaw = this.getPlayerSpawnFeet?.() ?? null;
+    const spawnFeet =
+      spawnFeetRaw === null
+        ? null
+        : sanitizePersistedFeetPosition(spawnFeetRaw.x, spawnFeetRaw.y);
+    const currentPlayerFeet = sanitizePersistedFeetPosition(
+      this.player.state.position.x,
+      this.player.state.position.y,
+    );
+    const existingPlayerFeet = sanitizePersistedFeetPosition(
+      existing?.playerX,
+      existing?.playerY,
+    );
+    const playerFeetForSave =
+      currentPlayerFeet ?? this._lastGoodPlayerFeet ?? existingPlayerFeet ?? { x: 0, y: 0 };
+    if (currentPlayerFeet !== null) {
+      this._lastGoodPlayerFeet = currentPlayerFeet;
+    } else if (import.meta.env.DEV) {
+      console.warn("[SaveGame] Invalid player feet at save; using fallback.", {
+        position: this.player.state.position,
+        fallback: playerFeetForSave,
+      });
+    }
 
     const meta: WorldMetadata = {
       uuid: this.worldUuid,
@@ -201,8 +227,8 @@ export class SaveGame {
       seed: this.world.getSeed(),
       createdAt: existing?.createdAt ?? now,
       lastPlayedAt: now,
-      playerX: this.player.state.position.x,
-      playerY: this.player.state.position.y,
+      playerX: playerFeetForSave.x,
+      playerY: playerFeetForSave.y,
       hotbarSlot: this.player.state.hotbarSlot,
       playerHealth: this.player.state.health,
       modList: this.world.getRegistry().getModList(),

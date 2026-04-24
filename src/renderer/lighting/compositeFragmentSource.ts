@@ -357,7 +357,8 @@ void main() {
     float insideUv = ax * bx * ay * by;
     bloomPlayerOccl *= (1.0 - 0.998 * insideUv);
   }
-  vec3 hdrColor = albedo.rgb * light + bloom * albedo.a * uBloomEnabled * bloomPlayerOccl;
+  vec3 bloomApplied = bloom * uBloomEnabled * bloomPlayerOccl;
+  vec3 hdrColor = albedo.rgb * light + bloomApplied;
 
   vec3 tonemapped;
   if (uTonemapper == 1) {
@@ -369,6 +370,8 @@ void main() {
   } else {
     tonemapped = clamp(hdrColor, 0.0, 1.0);
   }
-  finalColor = vec4(tonemapped, albedo.a);
+  // Keep normal scene alpha, but allow emissive bloom to appear in transparent air.
+  float bloomAlpha = clamp(max(bloomApplied.r, max(bloomApplied.g, bloomApplied.b)), 0.0, 1.0);
+  finalColor = vec4(tonemapped, max(albedo.a, bloomAlpha));
 }
 `;

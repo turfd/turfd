@@ -103,7 +103,10 @@ import {
   loadWorkshopRecipesIntoRegistry,
 } from "../mods/loadWorkshopContent";
 import type { CachedMod } from "../mods/workshopTypes";
-import { IndexedDBStore } from "../persistence/IndexedDBStore";
+import {
+  IndexedDBStore,
+  sanitizePersistedFeetPosition,
+} from "../persistence/IndexedDBStore";
 import type { WorldMetadata, WorkshopModRef } from "../persistence/IndexedDBStore";
 import { SaveGame } from "../persistence/SaveGame";
 import { resolveWorldWorkshopStacks } from "../persistence/worldWorkshopStacks";
@@ -414,6 +417,7 @@ export class Game {
   private _foliageBendLatchLocal = 0;
   private readonly _foliageBendLatchRemote = new Map<string, number>();
   private _lastMouseWorldPosUpdateTime = 0;
+  private _lastInvalidCameraTargetWarnMs = 0;
   private started = false;
   private _windowResizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly scheduleWindowResizedEvent = (): void => {
@@ -652,13 +656,12 @@ export class Game {
         this._weather.restoreFromSave(rs);
       }
     }
-    if (
-      metaLoaded?.playerSpawnX !== undefined &&
-      metaLoaded?.playerSpawnY !== undefined &&
-      Number.isFinite(metaLoaded.playerSpawnX) &&
-      Number.isFinite(metaLoaded.playerSpawnY)
-    ) {
-      this._localSpawnFeet = { x: metaLoaded.playerSpawnX, y: metaLoaded.playerSpawnY };
+    const persistedSpawn = sanitizePersistedFeetPosition(
+      metaLoaded?.playerSpawnX,
+      metaLoaded?.playerSpawnY,
+    );
+    if (persistedSpawn !== null) {
+      this._localSpawnFeet = persistedSpawn;
     }
 
     this.quitUnsub = this.bus.on("ui:quit", () => {
@@ -1613,9 +1616,22 @@ export class Game {
 
     const player = entityManager.getPlayer();
     if (playerSavedState !== undefined) {
-      player.applySavedState(
+      const safeSavedFeet = sanitizePersistedFeetPosition(
         playerSavedState.x,
         playerSavedState.y,
+      );
+      const spawnYFallback = this._computeWorldSpawnFeetY(world);
+      const restoreFeet = safeSavedFeet ?? { x: 0, y: spawnYFallback };
+      if (safeSavedFeet === null && import.meta.env.DEV) {
+        console.warn("[Game] Invalid saved player feet; falling back to computed spawn.", {
+          x: playerSavedState.x,
+          y: playerSavedState.y,
+          fallback: restoreFeet,
+        });
+      }
+      player.applySavedState(
+        restoreFeet.x,
+        restoreFeet.y,
         playerSavedState.hotbarSlot,
         playerSavedState.inventory,
         playerSavedState.health,
@@ -3094,14 +3110,21 @@ export class Game {
     if (em === null) {
       return;
     }
+    const safeSpawn = sanitizePersistedFeetPosition(x, y);
+    if (safeSpawn === null) {
+      if (import.meta.env.DEV) {
+        console.warn("[Game] Ignored invalid assigned spawn from network.", { x, y });
+      }
+      return;
+    }
     const pl = em.getPlayer().state;
-    pl.position.x = x;
-    pl.position.y = y;
-    pl.prevPosition.x = x;
-    pl.prevPosition.y = y;
+    pl.position.x = safeSpawn.x;
+    pl.position.y = safeSpawn.y;
+    pl.prevPosition.x = safeSpawn.x;
+    pl.prevPosition.y = safeSpawn.y;
     pl.velocity.x = 0;
     pl.velocity.y = 0;
-    this._localSpawnFeet = { x, y };
+    this._localSpawnFeet = safeSpawn;
   }
 
   private _wirePauseNetworkHandlers(): void {
@@ -7132,9 +7155,20 @@ export class Game {
       const s = this.entityManager.getPlayer().state;
       const ix = s.prevPosition.x + (s.position.x - s.prevPosition.x) * alpha;
       const iy = s.prevPosition.y + (s.position.y - s.prevPosition.y) * alpha;
-      this.pipeline
-        .getCamera()
-        .setTarget(ix, -iy - CAMERA_PLAYER_VERTICAL_OFFSET_PX);
+      if (Number.isFinite(ix) && Number.isFinite(iy)) {
+        this.pipeline
+          .getCamera()
+          .setTarget(ix, -iy - CAMERA_PLAYER_VERTICAL_OFFSET_PX);
+      } else if (import.meta.env.DEV) {
+        const nowMs = performance.now();
+        if (nowMs - this._lastInvalidCameraTargetWarnMs > 2000) {
+          this._lastInvalidCameraTargetWarnMs = nowMs;
+          console.warn("[Game] Skipped camera target update due to invalid player interpolation.", {
+            ix,
+            iy,
+          });
+        }
+      }
     }
 
     this.pipeline?.getCamera().update(dtSec);
