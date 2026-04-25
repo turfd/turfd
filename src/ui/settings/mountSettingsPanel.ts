@@ -42,7 +42,7 @@ export type MountSettingsPanelOptions = {
   signal?: AbortSignal;
 };
 
-type SettingsSubTab = "audio" | "controls" | "packs" | "video";
+type SettingsSubTab = "audio" | "controls" | "packs" | "video" | "debug";
 
 function makeBtn(text: string, ...classes: string[]): HTMLButtonElement {
   const b = document.createElement("button");
@@ -100,6 +100,10 @@ export async function mountSettingsPanel(
   panelVideo.className = "st-settings-tab-panel";
   panelVideo.setAttribute("role", "tabpanel");
 
+  const panelDebug = document.createElement("div");
+  panelDebug.className = "st-settings-tab-panel";
+  panelDebug.setAttribute("role", "tabpanel");
+
   let activeTab: SettingsSubTab = "audio";
 
   const tabBtn: Record<SettingsSubTab, HTMLButtonElement> = {
@@ -107,6 +111,7 @@ export async function mountSettingsPanel(
     controls: makeBtn("Controls", "st-settings-subtab"),
     packs: makeBtn("Texture packs", "st-settings-subtab"),
     video: makeBtn("Video", "st-settings-subtab"),
+    debug: makeBtn("Debug", "st-settings-subtab"),
   };
 
   function setTab(tab: SettingsSubTab): void {
@@ -120,9 +125,10 @@ export async function mountSettingsPanel(
     panelControls.classList.toggle("st-settings-tab-panel--active", tab === "controls");
     panelPacks.classList.toggle("st-settings-tab-panel--active", tab === "packs");
     panelVideo.classList.toggle("st-settings-tab-panel--active", tab === "video");
+    panelDebug.classList.toggle("st-settings-tab-panel--active", tab === "debug");
   }
 
-  for (const id of ["audio", "controls", "packs", "video"] as SettingsSubTab[]) {
+  for (const id of ["audio", "controls", "packs", "video", "debug"] as SettingsSubTab[]) {
     const b = tabBtn[id];
     b.setAttribute("role", "tab");
     b.addEventListener("click", () => setTab(id));
@@ -473,7 +479,54 @@ export async function mountSettingsPanel(
     panelVideo.appendChild(row);
   }
 
-  panelsWrap.append(panelAudio, panelControls, panelPacks, panelVideo);
+  // --- Debug ---
+  const debugTitle = document.createElement("div");
+  debugTitle.className = "st-settings-section";
+  debugTitle.style.marginTop = "0";
+  debugTitle.textContent = "Profiler";
+  panelDebug.appendChild(debugTitle);
+  const debugHint = document.createElement("p");
+  debugHint.className = "st-settings-hint";
+  debugHint.textContent =
+    "Capture a 30-second performance report with bottom-up timings for bug reports.";
+  panelDebug.appendChild(debugHint);
+  const startProfilerBtn = makeBtn("Start Profiler", "mm-btn", "mm-btn-secondary");
+  const profilerStatus = document.createElement("div");
+  profilerStatus.className = "st-settings-hint";
+  profilerStatus.textContent = "Idle.";
+  startProfilerBtn.addEventListener("click", () => {
+    if (startProfilerBtn.disabled || opts.bus === undefined) {
+      return;
+    }
+    opts.bus.emit({ type: "ui:perf-capture-start" } satisfies GameEvent);
+    opts.bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
+  });
+  panelDebug.appendChild(startProfilerBtn);
+  panelDebug.appendChild(profilerStatus);
+  if (opts.bus !== undefined) {
+    const offProfilerStatus = opts.bus.on("ui:perf-capture-status", (e) => {
+      startProfilerBtn.disabled = e.status === "capturing";
+      profilerStatus.style.color = e.status === "failed" ? "#ff9f9f" : "";
+      profilerStatus.textContent = e.outputPath
+        ? `${e.message} (${e.outputPath})`
+        : e.message;
+    });
+    const offProfilerStatusOnAbort = (): void => {
+      offProfilerStatus();
+    };
+    if (opts.signal?.aborted) {
+      offProfilerStatusOnAbort();
+    } else {
+      opts.signal?.addEventListener("abort", offProfilerStatusOnAbort, {
+        once: true,
+      });
+    }
+  } else {
+    startProfilerBtn.disabled = true;
+    profilerStatus.textContent = "Unavailable from main menu settings.";
+  }
+
+  panelsWrap.append(panelAudio, panelControls, panelPacks, panelVideo, panelDebug);
   root.append(title, tabbar, panelsWrap);
   if (opts.signal?.aborted) {
     return;

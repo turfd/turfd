@@ -54,6 +54,8 @@ import {
   type WorldGameMode,
 } from "./types";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
+import { captureAndSavePerformanceReport } from "../debug/perfCapture";
+import { withPerfSpan } from "../debug/perfSpans";
 import {
   CraftingSystem,
   type CraftingStationContext,
@@ -414,6 +416,7 @@ export class Game {
   private readonly _fireflyLightingScratch: DynamicLightEmitter[] = [];
   private readonly _remotePlayerMovementSfx = new RemotePlayerMovementSfx();
   private saveGame: SaveGame | null = null;
+  private _perfCaptureActive = false;
   private _blockInteractions: BlockInteractions | null = null;
   private readonly _pendingBlockUpdates: { x: number; y: number; blockId: number; layer: number; cellMetadata: number }[] = [];
   private audio: AudioEngine | null = null;
@@ -672,6 +675,50 @@ export class Game {
             worldTimeMs: this._worldTime.ms,
           });
         }
+      }),
+    );
+    this.networkUnsubs.push(
+      this.bus.on("ui:perf-capture-start", (e) => {
+        if (this._perfCaptureActive) {
+          this.bus.emit({
+            type: "ui:perf-capture-status",
+            status: "capturing",
+            message: "Capture already running.",
+          } satisfies GameEvent);
+          return;
+        }
+        this._perfCaptureActive = true;
+        this.bus.emit({
+          type: "ui:perf-capture-status",
+          status: "capturing",
+          message: "Capturing for 30 seconds...",
+        } satisfies GameEvent);
+        void captureAndSavePerformanceReport({
+          durationMs: e.durationMs,
+          worldName: this.worldName,
+          worldUuid: this.worldUuid,
+          networkRole: this.adapter.state.status === "connected" ? this.adapter.state.role : "offline",
+        })
+          .then((result) => {
+            const mode = result.bottomUpAvailable ? "Bottom-up included." : "Metrics-only fallback.";
+            this.bus.emit({
+              type: "ui:perf-capture-status",
+              status: "saved",
+              message: `Saved ${result.filename}. ${mode}`,
+              outputPath: result.outputPath,
+            } satisfies GameEvent);
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : "Could not save performance report.";
+            this.bus.emit({
+              type: "ui:perf-capture-status",
+              status: "failed",
+              message,
+            } satisfies GameEvent);
+          })
+          .finally(() => {
+            this._perfCaptureActive = false;
+          });
       }),
     );
   }
@@ -7263,7 +7310,9 @@ export class Game {
       // due to a breakable block behind them).
       this._handleWandSelectionInput();
       this._maybeMeleeMob();
-      entityManager.update(dtSec);
+      withPerfSpan("EntityManager.update", () => {
+        entityManager.update(dtSec);
+      });
 
       this._tickLocalPlayerDeath(dtSec);
 
@@ -7895,7 +7944,9 @@ export class Game {
       // render delta is already slow, then recover to full budget on healthy frames.
       const lightFlushBudgetMs =
         dtSec > 1 / 28 ? 1 : dtSec > 1 / 42 ? 2 : undefined;
-      this.world.flushPendingLightRecomputes(lightFlushBudgetMs);
+      withPerfSpan("World.flushPendingLightRecomputes", () => {
+        this.world?.flushPendingLightRecomputes(lightFlushBudgetMs);
+      });
       if (import.meta.env.DEV) {
         chunkPerfLog("game:flushPendingLightRecomputes", chunkPerfNow() - tLightFlush);
       }
@@ -7909,7 +7960,9 @@ export class Game {
           ? cm.getLoadedChunks()
           : cm.getChunksWithinDistance(centre, VIEW_DISTANCE_CHUNKS);
       const tSync = import.meta.env.DEV ? chunkPerfNow() : 0;
-      this.chunkRenderer.syncChunks(visible);
+      withPerfSpan("ChunkRenderer.syncChunks", () => {
+        this.chunkRenderer?.syncChunks(visible);
+      });
       if (import.meta.env.DEV) {
         chunkPerfLog("game:chunkRendererSync", chunkPerfNow() - tSync);
       }
@@ -8156,7 +8209,9 @@ export class Game {
         );
       }
     }
-    this.pipeline?.render(alpha);
+    withPerfSpan("RenderPipeline.render", () => {
+      this.pipeline?.render(alpha);
+    });
     this.bus.emit({ type: "game:render", alpha } satisfies GameEvent);
   }
 

@@ -38,6 +38,13 @@ export type GameEvent =
   | { type: "game:saved" }
   | { type: "ui:save" }
   | { type: "ui:close-pause" }
+  | { type: "ui:perf-capture-start"; durationMs?: number }
+  | {
+      type: "ui:perf-capture-status";
+      status: "idle" | "capturing" | "saved" | "failed";
+      message: string;
+      outputPath?: string;
+    }
   /** In-game death overlay: respawn at world spawn (x=0). */
   | { type: "ui:death-respawn" }
   | { type: "ui:quit" }

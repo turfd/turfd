@@ -5,6 +5,7 @@ import {
   MAX_FRAME_MS,
 } from "./constants";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
+import { withPerfSpan } from "../debug/perfSpans";
 
 export type GameLoopHooks = {
   /** Called once per fixed tick (60 Hz). */
@@ -66,7 +67,9 @@ export class GameLoop {
       this.accumulatorMs >= FIXED_TIMESTEP_MS &&
       fixedSteps < MAX_FIXED_STEPS_PER_FRAME
     ) {
-      this.hooks.onFixedUpdate(FIXED_TIMESTEP_SEC);
+      withPerfSpan("Game.fixedUpdate", () => {
+        this.hooks.onFixedUpdate(FIXED_TIMESTEP_SEC);
+      });
       this.tickIndex += 1;
       this.accumulatorMs -= FIXED_TIMESTEP_MS;
       fixedSteps += 1;
@@ -88,7 +91,9 @@ export class GameLoop {
       1,
       Math.max(0, this.accumulatorMs / FIXED_TIMESTEP_MS),
     );
-    this.hooks.onRender(alpha);
+    withPerfSpan("Game.render", () => {
+      this.hooks.onRender(alpha);
+    });
 
     this.rafId = requestAnimationFrame((t) => this.frame(t));
   }

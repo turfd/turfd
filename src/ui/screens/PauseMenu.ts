@@ -431,7 +431,6 @@ export class PauseMenu {
         this._syncMultiplayerPanel();
       }),
     );
-
     const timeSection = document.createElement("div");
     timeSection.className = "pm-section";
     const timeTitle = document.createElement("div");
