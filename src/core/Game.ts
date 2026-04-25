@@ -707,7 +707,9 @@ export class Game {
       this._worldGameMode = normalizeWorldGameMode(
         metaLoaded?.gameMode ?? this._worldGameMode,
       );
-      this._cheatsEnabled = metaLoaded?.enableCheats === true;
+      // New sandbox worlds default to cheats enabled unless metadata explicitly sets otherwise.
+      this._cheatsEnabled =
+        metaLoaded?.enableCheats ?? (metaLoaded === undefined && this._worldGameMode === "sandbox");
     }
     this._moderation.loadFromPersisted(
       migrateModerationMetadata(metaLoaded?.moderation),
