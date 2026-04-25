@@ -34,6 +34,10 @@ export interface IAuthProvider {
     password: string,
   ): Promise<{ ok: true } | { ok: false; error: string }>;
 
+  resetPasswordForEmail(
+    email: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }>;
+
   signOut(): Promise<void>;
 
   /** Called when session or profile-relevant state may have changed. */

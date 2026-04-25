@@ -855,6 +855,7 @@ async function main(): Promise<void> {
         skinId,
         modRepository,
         sharedAudio,
+        preloadedBlockAtlas: loadingBackdrop?.getBlockAtlasLoader() ?? null,
       });
       const loadStartedAt = Date.now();
       const minHoldMs = randomLoadingHoldMs();

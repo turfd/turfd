@@ -16,6 +16,7 @@ import { withBuildCacheBust } from "../core/assetCache";
 import { parseJsoncResponse } from "../core/jsonc";
 
 const MAX_PACK_DIMENSION = 4096;
+const ATLAS_IMAGE_LOAD_CONCURRENCY = 10;
 
 function publicAssetUrl(relativePath: string): string {
   if (/^(blob:|data:|https?:\/\/)/i.test(relativePath)) {
@@ -34,6 +35,28 @@ function loadImageElement(url: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
   });
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const out = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (nextIndex < items.length) {
+        const idx = nextIndex++;
+        out[idx] = await task(items[idx]!, idx);
+      }
+    }),
+  );
+  return out;
 }
 
 type PackedEntry = {
@@ -177,7 +200,7 @@ export class AtlasLoader {
   /** Load a single manifest JSON (`block_texture_manifest.json` or `item_texture_manifest.json`). */
   async load(): Promise<void> {
     const jsonUrl = publicAssetUrl(this.manifestRelativePath);
-    const res = await fetch(jsonUrl, { cache: "no-store" });
+    const res = await fetch(jsonUrl);
     if (!res.ok) {
       throw new Error(`Texture manifest failed to load: ${jsonUrl} (${res.status})`);
     }
@@ -208,23 +231,27 @@ export class AtlasLoader {
     errContext: string,
   ): Promise<void> {
     const names = Object.keys(raw).sort((a, b) => a.localeCompare(b));
+    const loadedByName = await mapWithConcurrency(
+      names,
+      ATLAS_IMAGE_LOAD_CONCURRENCY,
+      async (name) => {
+        const rel = raw[name];
+        if (typeof rel !== "string" || rel.length === 0) {
+          throw new Error(`${errContext}: invalid path for "${name}"`);
+        }
+        const url = publicAssetUrl(rel);
+        const img = await loadImageElement(url);
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        if (w < 1 || h < 1) {
+          throw new Error(`Invalid image dimensions for "${name}" (${url})`);
+        }
+        return { name, img };
+      },
+    );
     const slices: PackSlice[] = [];
-    const images = new Map<string, HTMLImageElement>();
-
-    for (const name of names) {
-      const rel = raw[name];
-      if (typeof rel !== "string" || rel.length === 0) {
-        throw new Error(`${errContext}: invalid path for "${name}"`);
-      }
-      const url = publicAssetUrl(rel);
-      const img = await loadImageElement(url);
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
-      if (w < 1 || h < 1) {
-        throw new Error(`Invalid image dimensions for "${name}" (${url})`);
-      }
-      images.set(name, img);
-      slices.push(...expandStripSlicesIfNeeded(name, img));
+    for (const loaded of loadedByName) {
+      slices.push(...expandStripSlicesIfNeeded(loaded.name, loaded.img));
     }
 
     const packSizes = slices.map((s) => ({ name: s.name, w: s.w, h: s.h }));

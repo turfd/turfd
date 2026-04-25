@@ -33,6 +33,13 @@ export class NullAuthProvider implements IAuthProvider {
     });
   }
 
+  resetPasswordForEmail(): Promise<{ ok: true } | { ok: false; error: string }> {
+    return Promise.resolve({
+      ok: false,
+      error: "Password reset requires Supabase to be configured.",
+    });
+  }
+
   signOut(): Promise<void> {
     return Promise.resolve();
   }

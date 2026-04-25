@@ -263,6 +263,32 @@ export function mountProfileScreen(
     actions.appendChild(primary);
     inner.appendChild(emailWrap);
     inner.appendChild(passWrap);
+    if (mode === "login") {
+      const forgot = document.createElement("button");
+      forgot.type = "button";
+      forgot.className = "mm-btn mm-btn-subtle";
+      forgot.textContent = "Forgot password?";
+      forgot.addEventListener("click", () => {
+        void (async () => {
+          setFeedback("", "clear");
+          const email = emailInput.value.trim();
+          if (email === "") {
+            setFeedback("Enter your email first.", "err");
+            return;
+          }
+          const res = await auth.resetPasswordForEmail(email);
+          if (res.ok) {
+            setFeedback(
+              "If that email exists, a reset link has been sent.",
+              "ok",
+            );
+          } else {
+            setFeedback(res.error, "err");
+          }
+        })();
+      });
+      actions.appendChild(forgot);
+    }
     inner.appendChild(actions);
 
     const sw = document.createElement("div");

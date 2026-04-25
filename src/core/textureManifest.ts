@@ -38,7 +38,7 @@ export async function fetchTextureManifestJson(
   const base = import.meta.env.BASE_URL;
   const trimmed = manifestRelativePath.replace(/^\/+/, "");
   const jsonUrl = withBuildCacheBust(`${base}${trimmed}`);
-  const res = await fetch(jsonUrl, { cache: "no-store" });
+  const res = await fetch(jsonUrl);
   if (!res.ok) {
     throw new Error(`Texture manifest failed to load: ${jsonUrl} (${res.status})`);
   }

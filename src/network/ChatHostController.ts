@@ -84,6 +84,8 @@ export type ChatHostControllerDeps = {
   executeWeather: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/summon` (spawn mobs near players). */
   executeSummon: (issuerPeerId: string, rest: string) => void;
+  /** Host-only: `/killall` (despawn mobs immediately). */
+  executeKillAll: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/tp` (self/other teleport). */
   executeTeleport: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/structure ...` helpers. */
@@ -207,6 +209,20 @@ export class ChatHostController {
         return true;
       }
       this.d.executeSummon(fromPeerId, rest);
+      return true;
+    }
+
+    if (cmd === "killall" || cmd === "clear") {
+      if (!this.canUseCheatCommands(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
+        );
+        return true;
+      }
+      this.d.executeKillAll(fromPeerId, rest);
       return true;
     }
 

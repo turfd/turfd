@@ -136,6 +136,20 @@ export class SupabaseAuthProvider implements IAuthProvider {
     return { ok: true };
   }
 
+  async resetPasswordForEmail(
+    email: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const trimmed = email.trim();
+    if (trimmed === "") {
+      return { ok: false, error: "Enter your email first." };
+    }
+    const { error } = await this.client.auth.resetPasswordForEmail(trimmed);
+    if (error !== null) {
+      return { ok: false, error: mapAuthError(error) };
+    }
+    return { ok: true };
+  }
+
   async signOut(): Promise<void> {
     await this.client.auth.signOut();
   }

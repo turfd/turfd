@@ -589,6 +589,18 @@ export class MobManager {
     return this.removeMob(id, true);
   }
 
+  /** Host/solo admin command: remove every active mob and queue replicated despawns. */
+  despawnAll(): number {
+    if (this.mobs.size === 0) {
+      return 0;
+    }
+    const ids = [...this.mobs.keys()];
+    for (const id of ids) {
+      this.removeMob(id, true);
+    }
+    return ids.length;
+  }
+
   /**
    * Drops spawn items via {@link World.spawnItem} (same replication path as block drops).
    */

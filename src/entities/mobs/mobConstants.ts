@@ -405,8 +405,9 @@ export const SHEEP_DEATH_ANIM_SEC = 0.82;
 
 /**
  * Performance: hard cap on living mobs. Keeps Maps, physics, and render sync bounded.
+ * Lowered to reduce long-session host degradation when many persistent summons accumulate.
  */
-export const MOB_GLOBAL_CAP = 96;
+export const MOB_GLOBAL_CAP = 50;
 
 /** Pixels past the screen edge when rejecting natural spawns (so mobs do not pop at the border). */
 export const MOB_SPAWN_VIEW_MARGIN_SCREEN_PX = 64;

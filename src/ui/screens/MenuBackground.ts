@@ -917,6 +917,10 @@ export class MenuBackground {
     return !this.destroyed && this.app !== null;
   }
 
+  getBlockAtlasLoader(): AtlasLoader | null {
+    return this.atlasLoader;
+  }
+
   destroy(): void {
     this.destroyed = true;
     if (this.rafId !== null) {

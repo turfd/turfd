@@ -303,6 +303,8 @@ export type GameOptions = {
    * When set (e.g. from `main.ts` for menu OST), SFX/music share this engine and it is not destroyed with the game.
    */
   sharedAudio?: AudioEngine;
+  /** Optional block atlas prepared by menu background to avoid duplicate startup load. */
+  preloadedBlockAtlas?: AtlasLoader | null;
 };
 
 export type PlayerSavedState = {
@@ -591,6 +593,7 @@ export class Game {
 
   private readonly _modRepository: IModRepository | null;
   private readonly _sharedAudio: AudioEngine | undefined;
+  private readonly _preloadedBlockAtlas: AtlasLoader | null;
 
   constructor(options: GameOptions) {
     this.mount = options.mount;
@@ -612,6 +615,7 @@ export class Game {
     this._localSkinId = options.skinId ?? null;
     this._modRepository = options.modRepository ?? null;
     this._sharedAudio = options.sharedAudio;
+    this._preloadedBlockAtlas = options.preloadedBlockAtlas ?? null;
     this.bus = new EventBus();
     const initialTimeMs =
       options.initialWorldTimeMs ?? DAY_LENGTH_MS * 0.15;
@@ -901,8 +905,10 @@ export class Game {
       stage: "Loading textures",
       detail: "Loading block textures...",
     });
-    const blockAtlas = new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
-    await blockAtlas.load();
+    const blockAtlas = this._preloadedBlockAtlas ?? new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
+    if (this._preloadedBlockAtlas === null) {
+      await blockAtlas.load();
+    }
     this.blockAtlasLoader = blockAtlas;
     for (const c of worldResourceCached) {
       await applyWorkshopTexturesToBlockAtlas(blockAtlas, [c]);
@@ -3438,6 +3444,9 @@ export class Game {
       executeSummon: (issuerPeerId, rest) => {
         this._executeSummonCommand(issuerPeerId, rest);
       },
+      executeKillAll: (issuerPeerId, rest) => {
+        this._executeKillAllCommand(issuerPeerId, rest);
+      },
       executeTeleport: (issuerPeerId, rest) => {
         this._runTeleportCore(issuerPeerId, rest);
       },
@@ -3925,6 +3934,24 @@ export class Game {
     this._giveFeedbackToIssuer(issuerPeerId, `Summoned ${parsed.entityKey} (#${id}).`);
   }
 
+  /** Host (`issuerPeerId` set) or solo (`null`): despawn all active mobs immediately. */
+  private _executeKillAllCommand(issuerPeerId: string | null, rest: string): void {
+    if (rest.trim() !== "") {
+      this._giveFeedbackToIssuer(issuerPeerId, "Usage: /killall");
+      return;
+    }
+    const mm = this._mobManager;
+    if (mm === null) {
+      this._giveFeedbackToIssuer(issuerPeerId, "World not ready.");
+      return;
+    }
+    const removed = mm.despawnAll();
+    this._giveFeedbackToIssuer(
+      issuerPeerId,
+      removed > 0 ? `Cleared ${removed} mob(s).` : "No mobs to clear.",
+    );
+  }
+
   /**
    * Host / offline solo: `/give` implementation. `issuerPeerId` is null when offline (solo).
    */
@@ -4348,6 +4375,28 @@ export class Game {
         return;
       }
       this._executeSummonCommand(null, restSummon);
+      return;
+    }
+    const killallMatch = /^\/(?:killall|clear)(\s+.*)?$/i.exec(trimmed);
+    if (killallMatch !== null && st.status !== "connected") {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
+      const restKillall = (killallMatch[1] ?? "").trim();
+      if (restKillall !== "") {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Usage: /killall",
+        } satisfies GameEvent);
+        return;
+      }
+      this._executeKillAllCommand(null, "");
       return;
     }
     const tpMatch = /^\/tp(\s+.*)?$/i.exec(trimmed);
