@@ -1,0 +1,26 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:arrow_from_feather_flint_and_stick",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:stick",
+        "count": 1
+      },
+      {
+        "itemId": "stratum:flint",
+        "count": 1
+      },
+      {
+        "itemId": "stratum:feather",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:arrow",
+      "count": 4
+    }
+  }
+}

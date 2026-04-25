@@ -166,7 +166,7 @@ export function applyCommittedBreakOnWorld(
   if (def.identifier === "stratum:furnace") {
     world.spawnFurnaceItemDropsAt(wx, wy);
   }
-  if (def.identifier === "stratum:chest") {
+  if (def.identifier === "stratum:chest" || def.identifier === "stratum:barrel") {
     world.destroyChestForPlayerBreak(wx, wy, dropsLoot);
   } else {
     if (dropsLoot) {

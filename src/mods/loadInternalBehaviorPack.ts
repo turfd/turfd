@@ -11,6 +11,13 @@ import {
   registerEntityLootTables,
   registerLootTablesForBlocks,
 } from "./parseLootTablesJson";
+import {
+  parseStructureFeatureJson,
+  parseStructureJson,
+  type ParsedStructure,
+  type ParsedStructureFeature,
+} from "../world/structure/structureSchema";
+import { structureIdFromPath } from "../world/structure/structureIdFromPath";
 import { parseFurnaceFuelJson, parseSmeltingRecipesJson } from "./parseSmeltingJson";
 import type { SmeltingRegistry } from "../world/SmeltingRegistry";
 import {
@@ -18,18 +25,92 @@ import {
   type BehaviorPackManifest,
 } from "./internalPackManifest";
 import { withBuildCacheBust } from "../core/assetCache";
+import { parseJsoncResponse } from "../core/jsonc";
+
+const CORE_PACK_ROOT = "/public/assets/mods/behavior_packs/stratum-core/";
+const coreBlockFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/blocks/**/*.json",
+  { eager: false },
+);
+const coreItemFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/items/**/*.json",
+  { eager: false },
+);
+const coreRecipeFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/recipes/**/*.json",
+  { eager: false },
+);
+const coreLootFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/loot_tables/**/*.json",
+  { eager: false },
+);
+const coreSmeltingFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/smelting/**/*.json",
+  { eager: false },
+);
+const coreFurnaceFuelFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/furnace_fuel/**/*.json",
+  { eager: false },
+);
+const coreStructureFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/structures/**/*.json",
+  { eager: false },
+);
+const coreFeatureFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/features/**/*.json",
+  { eager: false },
+);
 
 async function fetchJson(url: string): Promise<unknown> {
   const res = await fetch(withBuildCacheBust(url), { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to load ${url}: ${res.status} ${res.statusText}`);
   }
-  return res.json() as Promise<unknown>;
+  return parseJsoncResponse(res, url);
 }
 
 export async function fetchBehaviorPackManifest(packBaseUrl: string): Promise<BehaviorPackManifest> {
   const raw = await fetchJson(`${packBaseUrl}manifest.json`);
   return BehaviorPackManifestSchema.parse(raw);
+}
+
+function toSortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
+
+function stripCorePrefix(path: string): string {
+  return path.slice(CORE_PACK_ROOT.length);
+}
+
+function coreDiscoveredManifestPaths(globMap: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const path of Object.keys(globMap)) {
+    out.push(stripCorePrefix(path));
+  }
+  return toSortedUnique(out);
+}
+
+function coreDiscoveredLeafFiles(globMap: Record<string, unknown>, dirPrefix: string): string[] {
+  const out: string[] = [];
+  const prefix = `${CORE_PACK_ROOT}${dirPrefix}/`;
+  for (const path of Object.keys(globMap)) {
+    out.push(path.slice(prefix.length));
+  }
+  return toSortedUnique(out);
+}
+
+function isCoreBehaviorPack(manifest: BehaviorPackManifest): boolean {
+  return manifest.id === "stratum.core.behavior";
+}
+
+function pickManifestPaths(
+  manifestEntries: readonly string[] | undefined,
+  discoveredEntries: readonly string[],
+): string[] {
+  if (manifestEntries !== undefined && manifestEntries.length > 0) {
+    return toSortedUnique(manifestEntries);
+  }
+  return toSortedUnique(discoveredEntries);
 }
 
 export async function loadBehaviorPackBlocks(
@@ -38,9 +119,13 @@ export async function loadBehaviorPackBlocks(
   manifest: BehaviorPackManifest,
   progress?: (loaded: number, total: number, file: string) => void,
 ): Promise<void> {
-  const total = manifest.blocks.length;
+  const files = pickManifestPaths(
+    manifest.blocks,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredLeafFiles(coreBlockFiles, "blocks") : [],
+  );
+  const total = files.length;
   const parsed = await Promise.all(
-    manifest.blocks.map(async (file) => {
+    files.map(async (file) => {
       const raw = await fetchJson(`${packBaseUrl}blocks/${file}`);
       return { file, def: parseBlockJson(raw) };
     }),
@@ -104,10 +189,14 @@ export async function loadBehaviorPackItems(
   manifest: BehaviorPackManifest,
   progress?: (loaded: number, total: number, file: string) => void,
 ): Promise<void> {
-  const total = manifest.items.length;
+  const files = pickManifestPaths(
+    manifest.items,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredLeafFiles(coreItemFiles, "items") : [],
+  );
+  const total = files.length;
   const parsed: ParsedItemDefinition[] = [];
   let loaded = 0;
-  for (const file of manifest.items) {
+  for (const file of files) {
     const raw = await fetchJson(`${packBaseUrl}items/${file}`);
     parsed.push(parseItemJson(raw));
     loaded++;
@@ -122,7 +211,11 @@ export async function loadBehaviorPackRecipes(
   packBaseUrl: string,
   manifest: BehaviorPackManifest,
 ): Promise<void> {
-  for (const rel of manifest.recipes) {
+  const files = pickManifestPaths(
+    manifest.recipes,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredManifestPaths(coreRecipeFiles) : [],
+  );
+  for (const rel of files) {
     const raw = await fetchJson(`${packBaseUrl}${rel}`);
     const recipes = parseRecipeJson(raw);
     for (const recipe of recipes) {
@@ -157,12 +250,50 @@ export async function loadBehaviorPackLoot(
   packBaseUrl: string,
   manifest: BehaviorPackManifest,
 ): Promise<void> {
-  for (const rel of manifest.loot) {
+  const files = pickManifestPaths(
+    manifest.loot,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredManifestPaths(coreLootFiles) : [],
+  );
+  for (const rel of files) {
     const raw = await fetchJson(`${packBaseUrl}${rel}`);
     const data = parseLootTablesJson(raw);
     registerLootTablesForBlocks(registry, resolver, data);
     registerEntityLootTables(resolver, data);
   }
+}
+
+export async function loadBehaviorPackStructures(
+  packBaseUrl: string,
+  manifest: BehaviorPackManifest,
+): Promise<Map<string, ParsedStructure>> {
+  const out = new Map<string, ParsedStructure>();
+  const files = pickManifestPaths(
+    manifest.structures,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredManifestPaths(coreStructureFiles) : [],
+  );
+  for (const rel of files) {
+    const raw = await fetchJson(`${packBaseUrl}${rel}`);
+    const parsed = parseStructureJson(raw);
+    const id = structureIdFromPath(rel);
+    out.set(id, parsed);
+  }
+  return out;
+}
+
+export async function loadBehaviorPackFeatures(
+  packBaseUrl: string,
+  manifest: BehaviorPackManifest,
+): Promise<ParsedStructureFeature[]> {
+  const out: ParsedStructureFeature[] = [];
+  const files = pickManifestPaths(
+    manifest.features,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredManifestPaths(coreFeatureFiles) : [],
+  );
+  for (const rel of files) {
+    const raw = await fetchJson(`${packBaseUrl}${rel}`);
+    out.push(parseStructureFeatureJson(raw));
+  }
+  return out;
 }
 
 export async function loadBehaviorPackSmelting(
@@ -171,7 +302,11 @@ export async function loadBehaviorPackSmelting(
   packBaseUrl: string,
   manifest: BehaviorPackManifest,
 ): Promise<void> {
-  for (const rel of manifest.smelting) {
+  const smeltingFiles = pickManifestPaths(
+    manifest.smelting,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredManifestPaths(coreSmeltingFiles) : [],
+  );
+  for (const rel of smeltingFiles) {
     const raw = await fetchJson(`${packBaseUrl}${rel}`);
     const recipes = parseSmeltingRecipesJson(raw);
     for (const r of recipes) {
@@ -196,7 +331,11 @@ export async function loadBehaviorPackSmelting(
     }
     smelting.registerRecipes(recipes);
   }
-  for (const rel of manifest.furnace_fuel) {
+  const fuelFiles = pickManifestPaths(
+    manifest.furnace_fuel,
+    isCoreBehaviorPack(manifest) ? coreDiscoveredManifestPaths(coreFurnaceFuelFiles) : [],
+  );
+  for (const rel of fuelFiles) {
     const raw = await fetchJson(`${packBaseUrl}${rel}`);
     const entries = parseFurnaceFuelJson(raw);
     smelting.registerFuelEntries(entries, itemRegistry);

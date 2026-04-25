@@ -1,0 +1,20 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:birch_leaves",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:stick",
+        "countMin": 0,
+        "countMax": 2,
+        "chance": 0.4
+      },
+      {
+        "itemKey": "stratum:birch_sapling",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 0.05
+      }
+    ]
+  }
+}

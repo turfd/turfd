@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:sandstone_from_sand",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:sand",
+        "count": 4
+      }
+    ],
+    "output": {
+      "itemId": "stratum:sandstone",
+      "count": 1
+    }
+  }
+}

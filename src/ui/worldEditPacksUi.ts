@@ -32,6 +32,32 @@ function cachedToRef(c: CachedMod): WorkshopModRef {
   };
 }
 
+function createPackSourcePill(c: CachedMod): HTMLSpanElement {
+  const pill = document.createElement("span");
+  const isDev = String(c.recordId).startsWith("dev:");
+  pill.textContent = isDev ? "dev" : "workshop";
+  pill.style.display = "inline-flex";
+  pill.style.alignItems = "center";
+  pill.style.justifyContent = "center";
+  pill.style.padding = "2px 7px";
+  pill.style.borderRadius = "999px";
+  pill.style.fontSize = "12px";
+  pill.style.lineHeight = "1";
+  pill.style.letterSpacing = "0.04em";
+  pill.style.textTransform = "uppercase";
+  pill.style.marginLeft = "8px";
+  if (isDev) {
+    pill.style.background = "rgba(83, 183, 106, 0.2)";
+    pill.style.border = "1px solid rgba(83, 183, 106, 0.45)";
+    pill.style.color = "#b7f0c5";
+  } else {
+    pill.style.background = "rgba(95, 159, 255, 0.2)";
+    pill.style.border = "1px solid rgba(95, 159, 255, 0.45)";
+    pill.style.color = "#bfd7ff";
+  }
+  return pill;
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -220,8 +246,12 @@ export function createWorldPackEditorController(opts: {
       kind === "b"
         ? workshopPackLoadsBlocks(c.manifest.mod_type)
         : workshopPackLoadsTextures(c.manifest.mod_type);
-    const all = opts.getInstalled().filter(matchesKind);
+    const installedRaw = opts.getInstalled();
+    const all = installedRaw.filter(matchesKind);
     const idle = all.filter((c) => !activeKeys.has(refKey(cachedToRef(c))));
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H3",location:"worldEditPacksUi.ts:renderInstalledSection",message:"available packs filter result",data:{kind,totalInstalled:installedRaw.length,matchedType:all.length,idleCount:idle.length,types:installedRaw.map((m)=>m.manifest.mod_type),mods:installedRaw.map((m)=>m.modId)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (idle.length === 0) {
       const p = el("p", "mm-note");
       p.textContent =
@@ -237,9 +267,14 @@ export function createWorldPackEditorController(opts: {
     ul.style.margin = "0";
     for (const c of idle) {
       const li = el("li", "mm-bedrock-pack-row mm-pack-installed-row");
+      const titleRow = el("div");
+      titleRow.style.display = "flex";
+      titleRow.style.alignItems = "center";
       const lab = el("span", "mm-bedrock-pack-row-label");
       const title = c.manifest.name?.trim() || c.modId;
       lab.textContent = `${title} · ${c.modId} v${c.version}`;
+      titleRow.appendChild(lab);
+      titleRow.appendChild(createPackSourcePill(c));
       const addBtn = el(
         "button",
         "mm-btn mm-btn-subtle mm-bedrock-pack-add",
@@ -255,7 +290,7 @@ export function createWorldPackEditorController(opts: {
         renderBoth();
         flushPackMetadata();
       });
-      li.appendChild(lab);
+      li.appendChild(titleRow);
       li.appendChild(addBtn);
       ul.appendChild(li);
     }

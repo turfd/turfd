@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:gold_chestplate_from_ingots",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:gold_ingot",
+        "count": 8
+      }
+    ],
+    "output": {
+      "itemId": "stratum:gold_chestplate",
+      "count": 1
+    }
+  }
+}

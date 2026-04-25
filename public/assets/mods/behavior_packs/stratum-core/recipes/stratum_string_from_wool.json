@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:string_from_wool",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "tag": "stratum:wool",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:string",
+      "count": 4
+    }
+  }
+}

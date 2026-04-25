@@ -21,6 +21,22 @@ import {
   applySeaLevelFloodWater,
   applySeaLevelFloodWaterRegion,
 } from "./SeaLevelWaterFill";
+import type { ParsedStructure } from "../structure/structureSchema";
+import type { StructureFeatureEntry } from "../structure/StructureRegistry";
+export type GeneratedStructureEntity =
+  | {
+      type: "container";
+      wx: number;
+      wy: number;
+      lootTable?: string;
+      items?: Array<{ key: string; count: number; damage?: number } | null>;
+    }
+  | {
+      type: "furnace";
+      wx: number;
+      wy: number;
+      state: unknown;
+    };
 
 // ---------------------------------------------------------------------------
 // Oak tree shapes (round-ish canopy)
@@ -111,6 +127,8 @@ type TreeShape =
   | { type: "spruce"; spec: SpruceTreeSpec };
 
 const TREE_PADDING_BLOCKS = 10;
+/** Keep one of every N structure torches (deterministic by world cell). */
+const STRUCTURE_TORCH_KEEP_PERIOD = 2;
 
 const CARDINAL_NEIGHBOR_OFFSETS = [
   [1, 0],
@@ -150,6 +168,12 @@ export class WorldGenerator {
   private readonly sugarCaneId: number;
   private readonly deadBushId: number;
   private readonly waterId: number | null;
+  private readonly torchId: number | null;
+  private _structureFeatures: Array<{
+    identifier: string;
+    structures: ParsedStructure[];
+    placement: StructureFeatureEntry["placement"];
+  }> = [];
 
   constructor(seed: number, registry: BlockRegistry) {
     this.blockRegistry = registry;
@@ -183,6 +207,19 @@ export class WorldGenerator {
     this.waterId = registry.isRegistered("stratum:water")
       ? registry.getByIdentifier("stratum:water").id
       : null;
+    this.torchId = registry.isRegistered("stratum:torch")
+      ? registry.getByIdentifier("stratum:torch").id
+      : null;
+  }
+
+  setStructureFeatures(
+    features: Array<{
+      identifier: string;
+      structures: ParsedStructure[];
+      placement: StructureFeatureEntry["placement"];
+    }>,
+  ): void {
+    this._structureFeatures = [...features];
   }
 
   getSurfaceHeight(wx: number): number {
@@ -328,6 +365,7 @@ export class WorldGenerator {
       });
     }
     this.decorateChunkSurface(chunk, origin.wx, origin.wy);
+    this.applyStructureFeatures(chunk, origin.wx, origin.wy);
     return chunk;
   }
 
@@ -982,6 +1020,281 @@ export class WorldGenerator {
     }
     const fill = this.sediment.getFill(wx, wy);
     return this.granite.applyToStoneFill(wx, wy, surfaceY, fill);
+  }
+
+  private applyStructureFeatures(chunk: Chunk, originWx: number, originWy: number): void {
+    if (this._structureFeatures.length === 0) {
+      return;
+    }
+    const chunkX = Math.floor(originWx / CHUNK_SIZE);
+    const chunkY = Math.floor(originWy / CHUNK_SIZE);
+    for (let i = 0; i < this._structureFeatures.length; i++) {
+      const feature = this._structureFeatures[i]!;
+      if (feature.structures.length === 0) {
+        continue;
+      }
+      const h = this.hash2(chunkX * 7919 + i * 149, chunkY * 6151 + 97);
+      const pick = (h >>> 20) % feature.structures.length;
+      const structure = feature.structures[pick]!;
+      const roll = (h % 1_000_000) / 1_000_000;
+      if (roll >= feature.placement.frequency) {
+        continue;
+      }
+      const anchorLx = (h >>> 8) % CHUNK_SIZE;
+      const anchorWx = originWx + anchorLx;
+      const originX = anchorWx;
+      let originY = originWy;
+      if (feature.placement.pass === "underground") {
+        const minDepth = Math.max(0, feature.placement.min_depth);
+        const maxDepth = Math.max(minDepth, feature.placement.max_depth);
+        const depth = minDepth + ((h >>> 12) % (maxDepth - minDepth + 1));
+        originY = -depth;
+      } else {
+        const padX = feature.placement.terrain?.pad_x ?? 0;
+        const sampleMin = originX - padX;
+        const sampleMax = originX + structure.width - 1 + padX;
+        let minSurface = Number.POSITIVE_INFINITY;
+        let maxSurface = Number.NEGATIVE_INFINITY;
+        let sumSurface = 0;
+        let samples = 0;
+        for (let wx = sampleMin; wx <= sampleMax; wx++) {
+          const sy = this.terrain.getSurfaceHeight(wx);
+          minSurface = Math.min(minSurface, sy);
+          maxSurface = Math.max(maxSurface, sy);
+          sumSurface += sy;
+          samples++;
+        }
+        const maxSlope = feature.placement.terrain?.max_slope ?? 999;
+        if (maxSurface - minSurface > maxSlope) {
+          continue;
+        }
+        const targetGroundY =
+          feature.placement.terrain?.mode === "flatten"
+            ? Math.round(sumSurface / Math.max(1, samples))
+            : this.terrain.getSurfaceHeight(originX);
+        originY = targetGroundY - (structure.height - 1);
+        if (feature.placement.terrain?.mode === "flatten") {
+          this.flattenColumns(
+            chunk,
+            originWx,
+            originWy,
+            originX - padX,
+            originX + structure.width - 1 + padX,
+            targetGroundY,
+          );
+        }
+      }
+      // Allow multi-chunk structures (e.g. mineshafts), but skip chunks with no overlap.
+      if (
+        originX + structure.width <= originWx ||
+        originX >= originWx + CHUNK_SIZE ||
+        originY + structure.height <= originWy ||
+        originY >= originWy + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      this.stampStructure(chunk, originWx, originWy, originX, originY, structure, i);
+      if (feature.placement.suppress_vegetation) {
+        const pad = feature.placement.terrain?.pad_x ?? 0;
+        this.clearVegetationInRange(
+          chunk,
+          originWx,
+          originWy,
+          originX - pad,
+          originX + structure.width - 1 + pad,
+          originY,
+          originY + structure.height - 1,
+        );
+      }
+    }
+  }
+
+  /**
+   * Deterministically resolves structure tile-entities that land inside `coord`.
+   * Used by World after procedural chunk generation to materialize barrels/chests/furnaces.
+   */
+  getStructureEntitiesForChunk(coord: ChunkCoord): GeneratedStructureEntity[] {
+    if (this._structureFeatures.length === 0) {
+      return [];
+    }
+    const out: GeneratedStructureEntity[] = [];
+    const origin = chunkToWorldOrigin(coord);
+    const originWx = origin.wx;
+    const originWy = origin.wy;
+    const chunkX = Math.floor(originWx / CHUNK_SIZE);
+    const chunkY = Math.floor(originWy / CHUNK_SIZE);
+    for (let i = 0; i < this._structureFeatures.length; i++) {
+      const feature = this._structureFeatures[i]!;
+      if (feature.structures.length === 0) {
+        continue;
+      }
+      const h = this.hash2(chunkX * 7919 + i * 149, chunkY * 6151 + 97);
+      const pick = (h >>> 20) % feature.structures.length;
+      const structure = feature.structures[pick]!;
+      const roll = (h % 1_000_000) / 1_000_000;
+      if (roll >= feature.placement.frequency) {
+        continue;
+      }
+      const anchorLx = (h >>> 8) % CHUNK_SIZE;
+      const anchorWx = originWx + anchorLx;
+      const originX = anchorWx;
+      let originY = originWy;
+      if (feature.placement.pass === "underground") {
+        const minDepth = Math.max(0, feature.placement.min_depth);
+        const maxDepth = Math.max(minDepth, feature.placement.max_depth);
+        const depth = minDepth + ((h >>> 12) % (maxDepth - minDepth + 1));
+        originY = -depth;
+      } else {
+        const targetGroundY = this.terrain.getSurfaceHeight(originX);
+        originY = targetGroundY - (structure.height - 1);
+      }
+      if (
+        originX + structure.width <= originWx ||
+        originX >= originWx + CHUNK_SIZE ||
+        originY + structure.height <= originWy ||
+        originY >= originWy + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      for (const e of structure.entities) {
+        const wx = originX + e.x;
+        const wy = originY + e.y;
+        if (
+          wx < originWx ||
+          wx >= originWx + CHUNK_SIZE ||
+          wy < originWy ||
+          wy >= originWy + CHUNK_SIZE
+        ) {
+          continue;
+        }
+        if (e.type === "furnace") {
+          out.push({ type: "furnace", wx, wy, state: e.state });
+        } else {
+          out.push({
+            type: "container",
+            wx,
+            wy,
+            lootTable: e.lootTable,
+            items: e.items ?? undefined,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  private flattenColumns(
+    chunk: Chunk,
+    originWx: number,
+    originWy: number,
+    minWx: number,
+    maxWx: number,
+    targetGroundY: number,
+  ): void {
+    for (let wx = minWx; wx <= maxWx; wx++) {
+      const lx = wx - originWx;
+      if (lx < 0 || lx >= CHUNK_SIZE) continue;
+      let topSolidLy = -1;
+      for (let ly = CHUNK_SIZE - 1; ly >= 0; ly--) {
+        if (chunk.blocks[localIndex(lx, ly)] !== this.airId) {
+          topSolidLy = ly;
+          break;
+        }
+      }
+      const targetLy = targetGroundY - originWy;
+      if (targetLy < 1 || targetLy >= CHUNK_SIZE) continue;
+      if (topSolidLy >= 0 && topSolidLy > targetLy) {
+        for (let ly = targetLy + 1; ly <= topSolidLy; ly++) {
+          const idx = localIndex(lx, ly);
+          chunk.blocks[idx] = this.airId;
+          chunk.metadata[idx] = 0;
+        }
+      } else if (topSolidLy >= 0 && topSolidLy < targetLy) {
+        for (let ly = topSolidLy + 1; ly <= targetLy; ly++) {
+          const idx = localIndex(lx, ly);
+          chunk.blocks[idx] = this.dirtId;
+          chunk.metadata[idx] = 0;
+        }
+      }
+      const topIdx = localIndex(lx, targetLy);
+      chunk.blocks[topIdx] = this.grassId;
+      chunk.metadata[topIdx] = 0;
+    }
+  }
+
+  private clearVegetationInRange(
+    chunk: Chunk,
+    originWx: number,
+    originWy: number,
+    minWx: number,
+    maxWx: number,
+    minWy: number,
+    maxWy: number,
+  ): void {
+    const wipe = new Set<number>([
+      this.shortGrassId,
+      this.tallGrassBottomId,
+      this.tallGrassTopId,
+      this.dandelionId,
+      this.poppyId,
+      this.deadBushId,
+      this.cactusId,
+      this.oakLeavesId,
+      this.spruceLeavesId,
+      this.birchLeavesId,
+    ]);
+    for (let wx = minWx; wx <= maxWx; wx++) {
+      const lx = wx - originWx;
+      if (lx < 0 || lx >= CHUNK_SIZE) continue;
+      for (let wy = minWy; wy <= maxWy; wy++) {
+        const ly = wy - originWy;
+        if (ly < 0 || ly >= CHUNK_SIZE) continue;
+        const idx = localIndex(lx, ly);
+        if (wipe.has(chunk.blocks[idx]!)) {
+          chunk.blocks[idx] = this.airId;
+          chunk.metadata[idx] = 0;
+        }
+      }
+    }
+  }
+
+  private stampStructure(
+    chunk: Chunk,
+    originWx: number,
+    originWy: number,
+    placeWx: number,
+    placeWy: number,
+    structure: ParsedStructure,
+    featureIndex: number,
+  ): void {
+    for (const cell of structure.blocks) {
+      const wx = placeWx + cell.x;
+      const wy = placeWy + cell.y;
+      const lx = wx - originWx;
+      const ly = wy - originWy;
+      if (lx < 0 || lx >= CHUNK_SIZE || ly < 0 || ly >= CHUNK_SIZE) continue;
+      const idx = localIndex(lx, ly);
+      if (this.blockRegistry.isRegistered(cell.foreground.identifier)) {
+        const fgId = this.blockRegistry.getByIdentifier(cell.foreground.identifier).id;
+        const shouldThinTorch =
+          this.torchId !== null &&
+          fgId === this.torchId &&
+          STRUCTURE_TORCH_KEEP_PERIOD > 1 &&
+          this.shouldThinStructureTorch(wx, wy, featureIndex);
+        chunk.blocks[idx] = shouldThinTorch ? this.airId : fgId;
+        // Structure stamps must overwrite inherited terrain flags/orientation bits.
+        chunk.metadata[idx] = shouldThinTorch ? 0 : (cell.foreground.metadata ?? 0);
+      }
+      if (this.blockRegistry.isRegistered(cell.background.identifier)) {
+        chunk.background[idx] = this.blockRegistry.getByIdentifier(cell.background.identifier).id;
+      }
+    }
+  }
+
+  /** Deterministic structure torch thinning to cap emitter density in generated chunks. */
+  private shouldThinStructureTorch(wx: number, wy: number, featureIndex: number): boolean {
+    const h = this.hash2(wx * 31337 + featureIndex * 97, wy * 911);
+    return h % STRUCTURE_TORCH_KEEP_PERIOD !== 0;
   }
 
   /** Temperate: 1 grass + 4 dirt. Desert: 3–5 sand + 2–3 sandstone (per-column hash). */

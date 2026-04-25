@@ -96,6 +96,7 @@ export class InventoryUI {
   private readonly overlay: HTMLDivElement;
   private readonly chestMount: HTMLDivElement;
   private readonly craftingMount: HTMLDivElement;
+  private readonly creativeMount: HTMLDivElement;
   private readonly overlayRowEl: HTMLDivElement;
   private readonly invPanelEl: HTMLDivElement;
   private readonly panelResizeObserver: ResizeObserver;
@@ -126,6 +127,7 @@ export class InventoryUI {
   private readonly layerModeFrontSquareEl: HTMLDivElement;
   private layerModeKeybindHint = "(tab)";
   private lastLayerModeActive: boolean | null = null;
+  private lastLayerModeToggleKeyCode: string | null | undefined = undefined;
 
   private pointerDownSlot: number | null = null;
   private pointerDownSlotEl: HTMLElement | null = null;
@@ -714,9 +716,14 @@ export class InventoryUI {
     craftingMount.className = "inv-crafting-mount";
     this.craftingMount = craftingMount;
 
+    const creativeMount = document.createElement("div");
+    creativeMount.className = "inv-creative-mount";
+    this.creativeMount = creativeMount;
+
     overlayRow.appendChild(armorPanel);
     overlayRow.appendChild(panel);
     overlayRow.appendChild(chestMount);
+    overlayRow.appendChild(creativeMount);
     overlayRow.appendChild(craftingMount);
     overlay.appendChild(overlayRow);
     root.appendChild(overlay);
@@ -869,6 +876,11 @@ export class InventoryUI {
   /** Mount point for {@link CraftingPanel} (sibling of the inventory panel). */
   getCraftingMount(): HTMLElement {
     return this.craftingMount;
+  }
+
+  /** Mount point for {@link CreativePanel} (between chest and crafting sidebars). */
+  getCreativeMount(): HTMLElement {
+    return this.creativeMount;
   }
 
   /** Slot cell inside the open inventory overlay (not the world hotbar). */
@@ -1298,30 +1310,40 @@ export class InventoryUI {
 
   /** Tab foreground vs background build layer: always-visible badge beside the hotbar. */
   setBackgroundEditMode(active: boolean, toggleKeyCode: string | null = null): void {
-    if (toggleKeyCode !== null) {
-      const glyph = keyCodeToInputPromptGlyph(toggleKeyCode);
-      if (glyph !== null) {
-        this.layerModeKeybindTextEl.textContent = `(${glyph})`;
-        this.layerModeKeybindTextEl.classList.add("inv-layer-mode-keybind--prompt");
-        this.layerModeKeybindHint = `(${formatKeyCode(toggleKeyCode)})`;
+    const keybindChanged = this.lastLayerModeToggleKeyCode !== toggleKeyCode;
+    const modeChanged = this.lastLayerModeActive !== active;
+    if (!keybindChanged && !modeChanged) {
+      return;
+    }
+    if (keybindChanged) {
+      this.lastLayerModeToggleKeyCode = toggleKeyCode;
+      if (toggleKeyCode !== null) {
+        const glyph = keyCodeToInputPromptGlyph(toggleKeyCode);
+        if (glyph !== null) {
+          this.layerModeKeybindTextEl.textContent = `(${glyph})`;
+          this.layerModeKeybindTextEl.classList.add("inv-layer-mode-keybind--prompt");
+          this.layerModeKeybindHint = `(${formatKeyCode(toggleKeyCode)})`;
+        } else {
+          this.layerModeKeybindHint = `(${formatKeyCode(toggleKeyCode).toLowerCase()})`;
+          this.layerModeKeybindTextEl.textContent = this.layerModeKeybindHint;
+          this.layerModeKeybindTextEl.classList.remove("inv-layer-mode-keybind--prompt");
+        }
       } else {
-        this.layerModeKeybindHint = `(${formatKeyCode(toggleKeyCode).toLowerCase()})`;
-        this.layerModeKeybindTextEl.textContent = this.layerModeKeybindHint;
+        this.layerModeKeybindTextEl.textContent = "(unbound)";
         this.layerModeKeybindTextEl.classList.remove("inv-layer-mode-keybind--prompt");
+        this.layerModeKeybindHint = "(unbound)";
       }
-    } else {
-      this.layerModeKeybindTextEl.textContent = "(unbound)";
-      this.layerModeKeybindTextEl.classList.remove("inv-layer-mode-keybind--prompt");
-      this.layerModeKeybindHint = "(unbound)";
     }
     const indicator = this.layerModeIndicatorEl;
-    indicator.setAttribute(
-      "title",
-      active
-        ? `Building in background ${this.layerModeKeybindHint}`
-        : `Building in foreground ${this.layerModeKeybindHint}`,
-    );
-    if (this.lastLayerModeActive === active) {
+    if (keybindChanged || modeChanged) {
+      indicator.setAttribute(
+        "title",
+        active
+          ? `Building in background ${this.layerModeKeybindHint}`
+          : `Building in foreground ${this.layerModeKeybindHint}`,
+      );
+    }
+    if (!modeChanged) {
       return;
     }
     this.lastLayerModeActive = active;

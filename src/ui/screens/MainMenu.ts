@@ -13,6 +13,7 @@ import type {
   IndexedDBStore,
   WorldMetadata,
 } from "../../persistence/IndexedDBStore";
+import { normalizeWorldGameMode, type WorldGameMode } from "../../core/types";
 import { mountSettingsPanel } from "../settings/mountSettingsPanel";
 import { HOST_PEER_SUFFIX_ALPHABET } from "../../network/hostPeerId";
 import {
@@ -29,9 +30,10 @@ import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
 import { MenuBackground } from "./MenuBackground";
 import { runMainMenuStartupIntro } from "./mainMenuStartupIntro";
 import { WorkshopScreen } from "./WorkshopScreen";
+import { parseJsoncText } from "../../core/jsonc";
 
 export type MainMenuResult =
-  | { action: "new"; name: string; seed: number }
+  | { action: "new"; name: string; seed: number; gameMode: WorldGameMode }
   | { action: "load"; uuid: string }
   | { action: "multiplayer-join"; roomCode: string; password?: string }
   | {
@@ -738,6 +740,33 @@ function injectStyles(base: string): void {
       width: 100%;
       accent-color: #aeaeb2;
       cursor: pointer;
+    }
+    .mm-create-mode-select {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      box-sizing: border-box;
+      min-height: 44px;
+      min-width: 120px;
+      padding: 10px 36px 10px 14px;
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      background:
+        linear-gradient(45deg, transparent 50%, var(--mm-ink-mid) 50%) calc(100% - 18px) calc(50% - 3px) / 7px 7px no-repeat,
+        linear-gradient(135deg, var(--mm-ink-mid) 50%, transparent 50%) calc(100% - 12px) calc(50% - 3px) / 7px 7px no-repeat,
+        var(--mm-surface-deep);
+      color: var(--mm-ink);
+      font-family: 'BoldPixels', monospace;
+      font-size: 17px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.14s ease;
+    }
+    .mm-create-mode-select:focus {
+      outline: none;
+      border-color: var(--mm-border-strong);
     }
     .mm-field + .mm-btn { margin-top: 10px; }
     .mm-note {
@@ -3384,6 +3413,19 @@ export class MainMenu {
         seedInput.placeholder = "Random if empty";
         seedField.appendChild(seedInput);
 
+        const modeField = makeField("Game mode");
+        const modeSelect = document.createElement("select");
+        modeSelect.className = "mm-create-mode-select";
+        const survivalOpt = document.createElement("option");
+        survivalOpt.value = "survival";
+        survivalOpt.textContent = "Survival Mode";
+        const sandboxOpt = document.createElement("option");
+        sandboxOpt.value = "sandbox";
+        sandboxOpt.textContent = "Sandbox Mode";
+        modeSelect.appendChild(survivalOpt);
+        modeSelect.appendChild(sandboxOpt);
+        modeField.appendChild(modeSelect);
+
         const actions = document.createElement("div");
         actions.className = "mm-modal-actions";
         const cancelBtn = makeBtn("Cancel", "mm-btn mm-btn-subtle");
@@ -3392,7 +3434,8 @@ export class MainMenu {
         createBtn.addEventListener("click", () => {
           const name = nameInput.value.trim() || "My World";
           const seed = parseSeedInput(seedInput.value);
-          exitToGame({ action: "new", name, seed });
+          const gameMode = modeSelect.value === "sandbox" ? "sandbox" : "survival";
+          exitToGame({ action: "new", name, seed, gameMode });
         });
         actions.appendChild(cancelBtn);
         actions.appendChild(createBtn);
@@ -3400,6 +3443,7 @@ export class MainMenu {
         card.appendChild(heading);
         card.appendChild(nameField);
         card.appendChild(seedField);
+        card.appendChild(modeField);
         card.appendChild(actions);
         modal.appendChild(card);
         modal.addEventListener("click", (ev) => {
@@ -3692,7 +3736,7 @@ export class MainMenu {
                 const bytes = new Uint8Array(buf);
                 const rawBytes = isGzipBytes(bytes) ? gunzipSync(bytes) : bytes;
                 const text = new TextDecoder().decode(rawBytes);
-                const parsed: unknown = JSON.parse(text);
+                const parsed: unknown = parseJsoncText(text, "imported world json");
                 const newUuid = await store.importWorldBundle(parsed);
                 const imported = await store.loadWorld(newUuid);
                 importFeedback.textContent =
@@ -3861,6 +3905,34 @@ export class MainMenu {
           descriptionInput.value = fresh.description ?? "";
           descriptionField.appendChild(descriptionInput);
 
+          const modeField = makeField("World game mode");
+          const modeSelect = document.createElement("select");
+          modeSelect.className = "mm-create-mode-select";
+          const survivalModeOpt = document.createElement("option");
+          survivalModeOpt.value = "survival";
+          survivalModeOpt.textContent = "Survival Mode";
+          const sandboxModeOpt = document.createElement("option");
+          sandboxModeOpt.value = "sandbox";
+          sandboxModeOpt.textContent = "Sandbox Mode";
+          modeSelect.appendChild(survivalModeOpt);
+          modeSelect.appendChild(sandboxModeOpt);
+          modeSelect.value = normalizeWorldGameMode(fresh.gameMode);
+          modeField.appendChild(modeSelect);
+
+          const cheatsRow = document.createElement("div");
+          cheatsRow.className = "mm-settings-row";
+          cheatsRow.style.marginBottom = "10px";
+          const cheatsLabel = document.createElement("label");
+          cheatsLabel.textContent =
+            opts.mode === "host"
+              ? "Enable cheats for operators"
+              : "Enable cheats";
+          const cheatsToggle = document.createElement("input");
+          cheatsToggle.type = "checkbox";
+          cheatsToggle.checked = fresh.enableCheats === true;
+          cheatsRow.appendChild(cheatsLabel);
+          cheatsRow.appendChild(cheatsToggle);
+
           let privCb: HTMLInputElement | undefined;
           let passInput: HTMLInputElement | undefined;
 
@@ -3999,6 +4071,8 @@ export class MainMenu {
                 ...prev,
                 name: nextName,
                 description: nextDescription,
+                gameMode: modeSelect.value === "sandbox" ? "sandbox" : "survival",
+                enableCheats: cheatsToggle.checked,
                 workshopBehaviorMods: patch.workshopBehaviorMods,
                 workshopResourceMods: patch.workshopResourceMods,
                 requirePacksBeforeJoin: patch.requirePacksBeforeJoin,
@@ -4113,6 +4187,8 @@ export class MainMenu {
           const generalPanel = document.createElement("div");
           generalPanel.appendChild(nameField);
           generalPanel.appendChild(descriptionField);
+          generalPanel.appendChild(modeField);
+          generalPanel.appendChild(cheatsRow);
           if (
             opts.mode === "host" &&
             roomListingNote !== undefined &&

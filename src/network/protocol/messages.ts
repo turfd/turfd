@@ -7,6 +7,7 @@ import {
   type BlockUpdateWirePayload,
 } from "./BinarySerializer";
 import type { WorkshopModRef } from "../../persistence/IndexedDBStore";
+import type { WorldGameMode } from "../../core/types";
 import type { FurnacePersistedChunk } from "../../world/furnace/furnacePersisted";
 import type { ChestPersistedChunk } from "../../world/chest/chestPersisted";
 
@@ -97,6 +98,8 @@ export enum MessageType {
   ARROW_SPAWN = 0x2b,
   /** Client → host: melee hit request on a player peer id. */
   PLAYER_HIT_REQUEST = 0x2c,
+  /** Host → one client: authoritative teleport to feet world coordinates. */
+  PLAYER_TELEPORT = 0x2d,
 }
 
 /** Back-compat alias used across the codebase. */
@@ -133,6 +136,8 @@ export type WorldSyncMsg = {
   type: MessageType.WORLD_SYNC;
   seed: number;
   worldTimeMs: number;
+  gameMode: WorldGameMode;
+  cheatsEnabled: boolean;
 };
 
 export type WorldTimeMsg = {
@@ -505,6 +510,12 @@ export type SleepTransitionMsg = {
   durationMs: number;
 };
 
+export type PlayerTeleportMsg = {
+  type: MessageType.PLAYER_TELEPORT;
+  x: number;
+  y: number;
+};
+
 export type PlayerSkinDataMsg = {
   type: MessageType.PLAYER_SKIN_DATA;
   /** Peer id of the player whose skin data is being sent (for relay). */
@@ -567,6 +578,7 @@ export type NetworkMessage =
   | AssignedSpawnMsg
   | SleepRequestMsg
   | SleepTransitionMsg
+  | PlayerTeleportMsg
   | ChestTakeRequestMsg
   | FurnaceSlotRequestMsg
   | ChestPutRequestMsg
@@ -944,8 +956,22 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       return buf;
     }
 
+    case MessageType.PLAYER_TELEPORT: {
+      const buf = new ArrayBuffer(17);
+      const v = new DataView(buf);
+      v.setUint8(0, MessageType.PLAYER_TELEPORT);
+      v.setFloat64(1, msg.x, LE);
+      v.setFloat64(9, msg.y, LE);
+      return buf;
+    }
+
     case MessageType.WORLD_SYNC: {
-      return BinarySerializer.serializeWorldSync(msg.seed, msg.worldTimeMs);
+      return BinarySerializer.serializeWorldSync(
+        msg.seed,
+        msg.worldTimeMs,
+        msg.gameMode,
+        msg.cheatsEnabled,
+      );
     }
 
     case MessageType.PACK_STACK: {
@@ -1613,6 +1639,17 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       };
     }
 
+    case MessageType.PLAYER_TELEPORT: {
+      if (v.byteLength < 17) {
+        throw new Error("PLAYER_TELEPORT: buffer too short");
+      }
+      return {
+        type: MessageType.PLAYER_TELEPORT,
+        x: v.getFloat64(1, LE),
+        y: v.getFloat64(9, LE),
+      };
+    }
+
     case MessageType.WORLD_SYNC: {
       const payload: WorldSyncWirePayload = BinarySerializer.deserializeWorldSync(
         buf,
@@ -1621,6 +1658,8 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         type: MessageType.WORLD_SYNC,
         seed: payload.seed,
         worldTimeMs: payload.worldTimeMs,
+        gameMode: payload.gameMode,
+        cheatsEnabled: payload.cheatsEnabled,
       };
     }
 

@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:zombie",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:rotten_flesh",
+        "countMin": 1,
+        "countMax": 2,
+        "chance": 0.5
+      }
+    ]
+  }
+}

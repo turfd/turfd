@@ -13,7 +13,8 @@ import {
   type MultiplayerHostFromMenuSpec,
   type PlayerSavedState,
 } from "./core/Game";
-import type { GameEvent } from "./core/types";
+import type { GameEvent, WorldGameMode } from "./core/types";
+import { normalizeWorldGameMode } from "./core/types";
 import { AudioEngine } from "./audio/AudioEngine";
 import { OstPlaylistController } from "./audio/ostPlaylist";
 import { readVolumeStored, VOL_KEYS } from "./audio/volumeSettings";
@@ -402,9 +403,46 @@ function wireWorkshopHandlers(
   });
 
   menuBus.on("workshop:dev-folder-picked", async (e) => {
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H1",location:"main.ts:on:dev-folder-picked",message:"received dev-folder-picked",data:{hasHandle:e.handle!==null,handleName:e.handle?.name??null},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     try {
       await store.openDB();
       await modRepo.setDevFolder(e.handle);
+      menuBus.emit({
+        type: "workshop:dev-sync-ok",
+        packCount: modRepo.getInstalled().length,
+      } satisfies GameEvent);
+    } catch (err) {
+      menuBus.emit({
+        type: "workshop:dev-sync-error",
+        message: loadingErrorMessage(err),
+      } satisfies GameEvent);
+    }
+  });
+
+  menuBus.on("workshop:dev-zips-picked", async (e) => {
+    try {
+      await store.openDB();
+      await modRepo.importDevZipFiles(e.files);
+      menuBus.emit({
+        type: "workshop:dev-sync-ok",
+        packCount: modRepo.getInstalled().length,
+      } satisfies GameEvent);
+    } catch (err) {
+      menuBus.emit({
+        type: "workshop:dev-sync-error",
+        message: loadingErrorMessage(err),
+      } satisfies GameEvent);
+    }
+  });
+  menuBus.on("workshop:dev-folder-files-picked", async (e) => {
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H1",location:"main.ts:on:dev-folder-files-picked",message:"received dev-folder-files-picked",data:{fileCount:e.files.length,sample:e.files.slice(0,3).map((f)=>f.relativePath)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    try {
+      await store.openDB();
+      await modRepo.importDevFolderFiles(e.files);
       menuBus.emit({
         type: "workshop:dev-sync-ok",
         packCount: modRepo.getInstalled().length,
@@ -705,6 +743,7 @@ async function main(): Promise<void> {
     let multiplayerJoinPassword: string | undefined;
     let multiplayerHostFromMenu: MultiplayerHostFromMenuSpec | undefined;
     let initialWorldTimeMs: number | undefined;
+    let gameMode: WorldGameMode = "survival";
     let game: Game | null = null;
     let loadingBackdrop: MenuBackground | null = null;
     try {
@@ -712,6 +751,7 @@ async function main(): Promise<void> {
         worldUuid = crypto.randomUUID();
         seed = result.seed;
         worldName = result.name.trim() || "My World";
+        gameMode = result.gameMode;
         localStorage.setItem("stratum_worldUuid", worldUuid);
       } else if (result.action === "load") {
         worldUuid = result.uuid;
@@ -721,6 +761,7 @@ async function main(): Promise<void> {
         }
         seed = meta.seed;
         worldName = meta.name;
+        gameMode = normalizeWorldGameMode(meta.gameMode);
         playerSavedState = {
           x: meta.playerX,
           y: meta.playerY,
@@ -739,6 +780,7 @@ async function main(): Promise<void> {
         }
         seed = meta.seed;
         worldName = meta.name;
+        gameMode = normalizeWorldGameMode(meta.gameMode);
         playerSavedState = {
           x: meta.playerX,
           y: meta.playerY,
@@ -765,10 +807,12 @@ async function main(): Promise<void> {
           worldUuid = joinReuse.uuid;
           seed = 0;
           worldName = joinReuse.name;
+          gameMode = normalizeWorldGameMode(joinReuse.gameMode);
         } else {
           worldUuid = crypto.randomUUID();
           seed = 0;
           worldName = "Multiplayer World";
+          gameMode = "survival";
         }
         multiplayerJoinRoomCode = result.roomCode;
         multiplayerJoinPassword = result.password;
@@ -798,6 +842,7 @@ async function main(): Promise<void> {
         worldUuid,
         store,
         worldName,
+        gameMode,
         multiplayerJoinRoomCode,
         multiplayerJoinPassword,
         multiplayerHostFromMenu,

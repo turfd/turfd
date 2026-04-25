@@ -20,12 +20,18 @@ export const BehaviorPackManifestSchema = z
     name: z.string().min(1),
     description: z.string().default(""),
     uuid: z.string().uuid().optional(),
-    blocks: z.array(z.string()),
-    items: z.array(z.string()),
-    recipes: z.array(z.string()).default([]),
-    loot: z.array(z.string()).default([]),
-    smelting: z.array(z.string()).default([]),
-    furnace_fuel: z.array(z.string()).default([]),
+    /**
+     * Deprecated: behavior content is discovered from folder layout.
+     * These arrays remain optional for backward compatibility.
+     */
+    blocks: z.array(z.string()).optional(),
+    items: z.array(z.string()).optional(),
+    recipes: z.array(z.string()).optional(),
+    loot: z.array(z.string()).optional(),
+    smelting: z.array(z.string()).optional(),
+    furnace_fuel: z.array(z.string()).optional(),
+    structures: z.array(z.string()).optional(),
+    features: z.array(z.string()).optional(),
   })
   .strip();
 

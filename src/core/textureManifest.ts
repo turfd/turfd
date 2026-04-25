@@ -2,6 +2,7 @@
 
 import type { ItemRegistry } from "../items/ItemRegistry";
 import { withBuildCacheBust } from "./assetCache";
+import { parseJsoncResponse } from "./jsonc";
 
 /** Site-root-relative prefix for built-in Stratum Core textures (`resource_packs/stratum-core/textures/`). */
 export const STRATUM_CORE_TEXTURES_BASE =
@@ -41,7 +42,7 @@ export async function fetchTextureManifestJson(
   if (!res.ok) {
     throw new Error(`Texture manifest failed to load: ${jsonUrl} (${res.status})`);
   }
-  const manifest = (await res.json()) as TextureManifestJson;
+  const manifest = await parseJsoncResponse<TextureManifestJson>(res, jsonUrl);
   if (manifest.textures === null || typeof manifest.textures !== "object") {
     throw new Error(`Invalid manifest: ${jsonUrl}`);
   }

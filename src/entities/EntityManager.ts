@@ -147,6 +147,7 @@ import {
   TORCH_FLAME_TIP_PX_Y,
 } from "../core/constants";
 import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
+import { parseJsoncResponse } from "../core/jsonc";
 import type { SkinTextureSet } from "../skins/skinTypes";
 import {
   resolveBuiltinSkinUrl,
@@ -504,7 +505,7 @@ async function tryFetchPlayerBodyAtlasRects(): Promise<
     if (!res.ok) {
       return null;
     }
-    const raw: unknown = await res.json();
+    const raw: unknown = await parseJsoncResponse(res, url);
     const parsed = playerBodyAtlasJsonZ.safeParse(raw);
     if (
       !parsed.success ||

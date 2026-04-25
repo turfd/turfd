@@ -6,6 +6,7 @@
 import { z } from "zod";
 import { unixRandom01 } from "../core/unixRandom";
 import type { AudioEngine } from "./AudioEngine";
+import { parseJsoncResponse } from "../core/jsonc";
 
 export const MUSIC_MANIFEST_FILENAME = "music_manifest.json";
 
@@ -84,7 +85,7 @@ export class OstPlaylistController {
         console.warn(`OstPlaylistController: no manifest ${url} (${res.status})`);
         return;
       }
-      const raw: unknown = await res.json();
+      const raw: unknown = await parseJsoncResponse(res, url);
       const m = musicManifestSchema.parse(raw);
       this.menuUrls = [...m.menu];
       this.gameUrls = [...m.game];

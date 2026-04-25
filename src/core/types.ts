@@ -8,6 +8,16 @@ import type {
   ModTypeFilter,
 } from "../mods/workshopTypes";
 
+export type WorldGameMode = "survival" | "sandbox";
+
+/** Back-compat parser for persisted/networked world mode values. */
+export function normalizeWorldGameMode(raw: unknown): WorldGameMode {
+  if (raw === "sandbox" || raw === "creative") {
+    return "sandbox";
+  }
+  return "survival";
+}
+
 /**
  * Application-wide events for EventBus (extend as systems are added).
  * Discriminated by `type` for exhaustive handling.
@@ -225,6 +235,11 @@ export type GameEvent =
   | { type: "workshop:post-comment"; recordId: string; body: string }
   | { type: "workshop:post-rating"; recordId: string; stars: number }
   | { type: "workshop:dev-folder-picked"; handle: FileSystemDirectoryHandle | null }
+  | { type: "workshop:dev-zips-picked"; files: readonly { name: string; bytes: Uint8Array }[] }
+  | {
+      type: "workshop:dev-folder-files-picked";
+      files: readonly { name: string; relativePath: string; bytes: Uint8Array }[];
+    }
   | { type: "workshop:dev-sync-ok"; packCount: number }
   | { type: "workshop:dev-sync-error"; message: string }
   | {

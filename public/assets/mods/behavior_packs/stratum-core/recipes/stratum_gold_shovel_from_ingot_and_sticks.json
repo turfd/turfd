@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:gold_shovel_from_ingot_and_sticks",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:gold_ingot",
+        "count": 1
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 2
+      }
+    ],
+    "output": {
+      "itemId": "stratum:gold_shovel",
+      "count": 1
+    }
+  }
+}

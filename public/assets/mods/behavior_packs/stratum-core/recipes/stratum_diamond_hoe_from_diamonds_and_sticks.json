@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:diamond_hoe_from_diamonds_and_sticks",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:diamond",
+        "count": 2
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 2
+      }
+    ],
+    "output": {
+      "itemId": "stratum:diamond_hoe",
+      "count": 1
+    }
+  }
+}

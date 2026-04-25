@@ -1,0 +1,13 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:pig",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:porkchop",
+        "countMin": 1,
+        "countMax": 3
+      }
+    ]
+  }
+}

@@ -7,6 +7,8 @@
  * when the tab becomes visible again, when the window gains focus, and when the browser goes online.
  */
 
+import { parseJsoncResponse } from "./core/jsonc";
+
 const BANNER_Z = 25000;
 const MIN_CHECK_INTERVAL_MS = 60_000;
 
@@ -34,7 +36,7 @@ async function fetchServerBuildId(): Promise<string | null> {
     if (!res.ok) {
       return null;
     }
-    const data = (await res.json()) as BuildJson;
+    const data = await parseJsoncResponse<BuildJson>(res, url);
     const id = data.buildId;
     return typeof id === "string" && id.length > 0 ? id : null;
   } catch {

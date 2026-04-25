@@ -435,6 +435,15 @@ function tryPlaceSimpleForeground(
   ) {
     return fail();
   }
+  if (
+    placedDef.identifier === "stratum:barrel" &&
+    (
+      world.getBlock(wx - 1, wy).identifier === "stratum:barrel" ||
+      world.getBlock(wx + 1, wy).identifier === "stratum:barrel"
+    )
+  ) {
+    return fail();
+  }
   const placedDefForSfx = registry.getById(placesBlockId);
   const stairMeta =
     placedDefForSfx.isStair === true

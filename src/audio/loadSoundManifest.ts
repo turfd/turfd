@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import type { AudioEngine } from "./AudioEngine";
+import { parseJsoncResponse } from "../core/jsonc";
 import { withBuildCacheBust } from "../core/assetCache";
 
 const pathOrPaths = z.union([
@@ -257,6 +258,6 @@ export async function fetchAndLoadSoundManifest(
     console.warn(`fetchAndLoadSoundManifest: ${url} (${res.status})`);
     return;
   }
-  const raw: unknown = await res.json();
+  const raw: unknown = await parseJsoncResponse(res, url);
   await loadSoundManifestJson(audio, packBaseUrl, raw);
 }

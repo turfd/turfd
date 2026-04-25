@@ -19,6 +19,7 @@ import {
 import type { IndexedDBStore } from "../persistence/IndexedDBStore";
 import { findPackPngBytes } from "./cachedModPackIcon";
 import { WorkshopUnavailableError } from "./WorkshopUnavailableError";
+import { parseJsoncText } from "../core/jsonc";
 import type { IModRepository } from "./IModRepository";
 import {
   asModRecordId,
@@ -84,7 +85,7 @@ function readManifestFromFiles(files: Record<string, Uint8Array>): WorkshopManif
     const u = files[c];
     if (u !== undefined) {
       const text = new TextDecoder().decode(u);
-      const json: unknown = JSON.parse(text);
+      const json: unknown = parseJsoncText(text, "manifest.json");
       return WorkshopManifestSchema.parse(json);
     }
   }
@@ -101,7 +102,7 @@ function readManifestFromFiles(files: Record<string, Uint8Array>): WorkshopManif
   }
   const key = nested[0]!;
   const text = new TextDecoder().decode(files[key]!);
-  const json: unknown = JSON.parse(text);
+  const json: unknown = parseJsoncText(text, key);
   return WorkshopManifestSchema.parse(json);
 }
 
@@ -135,29 +136,95 @@ export class ModRepository implements IModRepository {
 
   async setDevFolder(handle: FileSystemDirectoryHandle | null): Promise<void> {
     this.devDir = handle;
-    await this.store.saveDevPackDirectoryHandle(handle);
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H1",location:"ModRepository.ts:setDevFolder",message:"setDevFolder called",data:{hasHandle:handle!==null,handleName:handle?.name??null},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     await this.syncDevFolderPacks();
+    try {
+      await this.store.saveDevPackDirectoryHandle(handle);
+    } catch {
+      // Some environments reject persisting FileSystem handles in IndexedDB.
+      // Keep the in-memory handle active for this session.
+    }
+  }
+
+  async importDevZipFiles(files: readonly { name: string; bytes: Uint8Array }[]): Promise<void> {
+    const byModId = new Map<string, string>();
+    for (const file of files) {
+      const lower = file.name.toLowerCase();
+      if (!lower.endsWith(".zip")) {
+        continue;
+      }
+      const cached = this.parseDevZipToCached(file.name, file.bytes, byModId);
+      const key = workshopModCacheKey(cached.modId, cached.version);
+      await this.store.putModCache(key, cached);
+      this.cacheByKey.set(key, cached);
+    }
+  }
+
+  async importDevFolderFiles(
+    files: readonly { name: string; relativePath: string; bytes: Uint8Array }[],
+  ): Promise<void> {
+    const byModId = new Map<string, string>();
+    const normalized = files
+      .map((f) => ({
+        ...f,
+        rel: f.relativePath.replace(/\\/g, "/").replace(/^\//, ""),
+      }))
+      .filter((f) => f.rel.length > 0);
+    const manifests = normalized.filter((f) => {
+      const base = f.rel.split("/").pop() ?? "";
+      return base === "manifest.json" || base === "Manifest.json";
+    });
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H2",location:"ModRepository.ts:importDevFolderFiles:start",message:"importDevFolderFiles start",data:{inputCount:files.length,normalizedCount:normalized.length,manifestCount:manifests.length,manifestPaths:manifests.map((m)=>m.rel)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    for (const m of manifests) {
+      const parts = m.rel.split("/");
+      const packRoot = parts.slice(0, -1).join("/");
+      const prefix = packRoot.length > 0 ? `${packRoot}/` : "";
+      const packFiles: Record<string, Uint8Array> = {};
+      for (const f of normalized) {
+        if (prefix.length > 0) {
+          if (!f.rel.startsWith(prefix)) {
+            continue;
+          }
+          packFiles[f.rel.slice(prefix.length)] = f.bytes;
+        } else {
+          packFiles[f.rel] = f.bytes;
+        }
+      }
+      if (packFiles["manifest.json"] === undefined && packFiles["Manifest.json"] === undefined) {
+        continue;
+      }
+      const cached = this.cachedFromPackFiles(`folder:${packRoot || "."}`, packFiles, byModId);
+      const key = workshopModCacheKey(cached.modId, cached.version);
+      await this.store.putModCache(key, cached);
+      this.cacheByKey.set(key, cached);
+      // #region agent log
+      fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H2",location:"ModRepository.ts:importDevFolderFiles:cached",message:"cached pack from folder files",data:{packRoot:packRoot||".",modId:cached.modId,type:cached.manifest.mod_type,fileCount:Object.keys(packFiles).length},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+    }
   }
 
   async syncDevFolderPacks(): Promise<void> {
     const dir = this.devDir;
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H1",location:"ModRepository.ts:syncDevFolderPacks:start",message:"syncDevFolderPacks start",data:{hasDir:dir!==null,dirName:dir?.name??null,currentCacheSize:this.cacheByKey.size},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (dir == null) {
       return;
     }
-    // Best-effort permission check (Chromium). If denied, just keep existing cache.
+    // If this handle was granted by showDirectoryPicker, avoid re-requesting permission
+    // in a later async path (can lose user-gesture context and fail in Chromium).
     try {
       // @ts-expect-error queryPermission is not in lib.dom for all TS targets
       const q = await dir.queryPermission?.({ mode: "read" });
       if (q === "denied") {
-        return;
-      }
-      // @ts-expect-error requestPermission is not in lib.dom for all TS targets
-      const r = await dir.requestPermission?.({ mode: "read" });
-      if (r === "denied") {
-        return;
+        throw new Error("Developer folder access was denied. Re-select the folder.");
       }
     } catch {
-      // ignore
+      // Ignore query failures and proceed to actual reads.
     }
 
     const found: Array<{
@@ -167,50 +234,130 @@ export class ModRepository implements IModRepository {
     }> = [];
     const byModId = new Map<string, string>(); // modId -> filename
 
+    // Support selecting a pack root directly (folder contains manifest.json at root).
+    try {
+      const rootFiles = await this.readFilesFromDirectoryHandle(dir);
+      if (
+        rootFiles["manifest.json"] !== undefined ||
+        rootFiles["Manifest.json"] !== undefined
+      ) {
+        const cached = this.cachedFromPackFiles("folder:.", rootFiles, byModId);
+        const key = workshopModCacheKey(cached.modId, cached.version);
+        await this.store.putModCache(key, cached);
+        this.cacheByKey.set(key, cached);
+        found.push({ filename: ".", cached, cacheKey: key });
+        // #region agent log
+        fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H2",location:"ModRepository.ts:syncDevFolderPacks:root",message:"detected root pack",data:{modId:cached.modId,version:cached.version,manifestType:cached.manifest.mod_type,fileCount:Object.keys(rootFiles).length},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+      }
+    } catch {
+      // Ignore root parse errors here; child entries may still contain valid packs.
+    }
+
     // @ts-expect-error File System Access API iteration is not in all TS lib.dom versions
     for await (const [name, handle] of dir.entries()) {
-      if (handle.kind !== "file") {
+      if (handle.kind === "file") {
+        const lower = name.toLowerCase();
+        if (!lower.endsWith(".zip")) {
+          continue;
+        }
+        const file = await (handle as FileSystemFileHandle).getFile();
+        const buf = await file.arrayBuffer();
+        const zipBytes = new Uint8Array(buf);
+        const cached = this.parseDevZipToCached(name, zipBytes, byModId);
+        const key = workshopModCacheKey(cached.modId, cached.version);
+        await this.store.putModCache(key, cached);
+        this.cacheByKey.set(key, cached);
+        found.push({ filename: name, cached, cacheKey: key });
         continue;
       }
-      const lower = name.toLowerCase();
-      if (!lower.endsWith(".zip")) {
-        continue;
+      if (handle.kind === "directory") {
+        const files = await this.readFilesFromDirectoryHandle(
+          handle as FileSystemDirectoryHandle,
+        );
+        if (files["manifest.json"] === undefined && files["Manifest.json"] === undefined) {
+          // Not a pack root; ignore ordinary folders in the dev directory.
+          continue;
+        }
+        const cached = this.cachedFromPackFiles(`folder:${name}`, files, byModId);
+        const key = workshopModCacheKey(cached.modId, cached.version);
+        await this.store.putModCache(key, cached);
+        this.cacheByKey.set(key, cached);
+        found.push({ filename: name, cached, cacheKey: key });
+        // #region agent log
+        fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H2",location:"ModRepository.ts:syncDevFolderPacks:childDir",message:"detected child folder pack",data:{folder:name,modId:cached.modId,version:cached.version,manifestType:cached.manifest.mod_type,fileCount:Object.keys(files).length},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
       }
-      const file = await (handle as FileSystemFileHandle).getFile();
-      const buf = await file.arrayBuffer();
-      const zipBytes = new Uint8Array(buf);
-      let rawFiles: Record<string, Uint8Array>;
-      try {
-        rawFiles = unzipSync(zipBytes) as Record<string, Uint8Array>;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "Invalid ZIP.";
-        throw new Error(`Dev pack "${name}": ${msg}`);
-      }
-      const files = normalizeZipEntries(rawFiles);
-      const manifest = readManifestFromFiles(files);
-      const modId = manifest.id;
-      const prior = byModId.get(modId);
-      if (prior !== undefined) {
-        throw new Error(
-          `Two packs detected with same UUID/id ("${modId}"): ${prior} and ${name}.`,
+    }
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H4",location:"ModRepository.ts:syncDevFolderPacks:end",message:"syncDevFolderPacks complete",data:{foundCount:found.length,cacheSize:this.cacheByKey.size,found:found.map((f)=>({filename:f.filename,modId:f.cached.modId,type:f.cached.manifest.mod_type}))},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+  }
+
+  private parseDevZipToCached(
+    filename: string,
+    zipBytes: Uint8Array,
+    byModId: Map<string, string>,
+  ): CachedMod {
+    let rawFiles: Record<string, Uint8Array>;
+    try {
+      rawFiles = unzipSync(zipBytes) as Record<string, Uint8Array>;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Invalid ZIP.";
+      throw new Error(`Dev pack "${filename}": ${msg}`);
+    }
+    const files = normalizeZipEntries(rawFiles);
+    return this.cachedFromPackFiles(filename, files, byModId);
+  }
+
+  private cachedFromPackFiles(
+    sourceName: string,
+    files: Record<string, Uint8Array>,
+    byModId: Map<string, string>,
+  ): CachedMod {
+    const manifest = readManifestFromFiles(files);
+    const modId = manifest.id;
+    const prior = byModId.get(modId);
+    if (prior !== undefined) {
+      throw new Error(
+        `Two packs detected with same UUID/id ("${modId}"): ${prior} and ${sourceName}.`,
+      );
+    }
+    byModId.set(modId, sourceName);
+    const recordId = asModRecordId(`dev:${modId}:${manifest.version}`);
+    return {
+      recordId,
+      modId: manifest.id,
+      version: manifest.version,
+      fetchedAt: Date.now(),
+      files,
+      manifest,
+    };
+  }
+
+  private async readFilesFromDirectoryHandle(
+    root: FileSystemDirectoryHandle,
+  ): Promise<Record<string, Uint8Array>> {
+    const out: Record<string, Uint8Array> = {};
+    const walk = async (
+      dir: FileSystemDirectoryHandle,
+      prefix: string,
+    ): Promise<void> => {
+      // @ts-expect-error File System Access API iteration is not in all TS lib.dom versions
+      for await (const [entryName, entryHandle] of dir.entries()) {
+        const nextRel = prefix.length > 0 ? `${prefix}/${entryName}` : entryName;
+        if (entryHandle.kind === "directory") {
+          await walk(entryHandle as FileSystemDirectoryHandle, nextRel);
+          continue;
+        }
+        const file = await (entryHandle as FileSystemFileHandle).getFile();
+        out[nextRel.replace(/\\/g, "/").replace(/^\//, "")] = new Uint8Array(
+          await file.arrayBuffer(),
         );
       }
-      byModId.set(modId, name);
-
-      const recordId = asModRecordId(`dev:${modId}:${manifest.version}`);
-      const cached: CachedMod = {
-        recordId,
-        modId: manifest.id,
-        version: manifest.version,
-        fetchedAt: Date.now(),
-        files,
-        manifest,
-      };
-      const key = workshopModCacheKey(manifest.id, manifest.version);
-      await this.store.putModCache(key, cached);
-      this.cacheByKey.set(key, cached);
-      found.push({ filename: name, cached, cacheKey: key });
-    }
+    };
+    await walk(root, "");
+    return out;
   }
 
   async list(opts: {
@@ -322,7 +469,7 @@ export class ModRepository implements IModRepository {
       const text = new TextDecoder().decode(jsonBytes);
       let parsed: unknown;
       try {
-        parsed = JSON.parse(text) as unknown;
+        parsed = parseJsoncText(text, `${entry.modId}.stratum-world.json`) as unknown;
       } catch {
         throw new Error("Downloaded world JSON is invalid.");
       }
@@ -478,7 +625,11 @@ export class ModRepository implements IModRepository {
   }
 
   getInstalled(): readonly CachedMod[] {
-    return [...this.cacheByKey.values()];
+    const installed = [...this.cacheByKey.values()];
+    // #region agent log
+    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H4",location:"ModRepository.ts:getInstalled",message:"getInstalled called",data:{count:installed.length,mods:installed.map((m)=>({modId:m.modId,type:m.manifest.mod_type,version:m.version}))},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    return installed;
   }
 
   getCached(modId: string, version: string): CachedMod | undefined {

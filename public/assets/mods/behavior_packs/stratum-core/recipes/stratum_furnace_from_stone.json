@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:furnace_from_stone",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "tag": "stratum:furnace_material",
+        "count": 8
+      }
+    ],
+    "output": {
+      "itemId": "stratum:furnace",
+      "count": 1
+    }
+  }
+}

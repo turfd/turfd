@@ -13,6 +13,7 @@ import type { TextureManifestJson } from "../core/textureManifest";
 import { BLOCK_TEXTURE_MANIFEST_PATH } from "../core/textureManifest";
 import { resolveTextureMapKey } from "../core/textureKeyResolve";
 import { withBuildCacheBust } from "../core/assetCache";
+import { parseJsoncResponse } from "../core/jsonc";
 
 const MAX_PACK_DIMENSION = 4096;
 
@@ -180,7 +181,7 @@ export class AtlasLoader {
     if (!res.ok) {
       throw new Error(`Texture manifest failed to load: ${jsonUrl} (${res.status})`);
     }
-    const manifest = (await res.json()) as TextureManifestJson;
+    const manifest = await parseJsoncResponse<TextureManifestJson>(res, jsonUrl);
     const raw = manifest.textures;
     if (raw === null || typeof raw !== "object") {
       throw new Error(`${this.manifestRelativePath}: "textures" must be an object`);

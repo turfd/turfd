@@ -44,6 +44,8 @@ const WORLD_SYNC_TYPE_BYTE = 8;
 const FURNACE_SNAPSHOT_TYPE_BYTE = 0x0e;
 /** Must match `MessageType.CHEST_SNAPSHOT` in `messages.ts`. */
 const CHEST_SNAPSHOT_TYPE_BYTE = 0x0f;
+const WORLD_MODE_SURVIVAL_BYTE = 0;
+const WORLD_MODE_CREATIVE_BYTE = 1;
 
 /** Number of blocks per chunk (CHUNK_SIZE × CHUNK_SIZE). */
 const CHUNK_CELLS = CHUNK_SIZE * CHUNK_SIZE;
@@ -101,6 +103,10 @@ export type WorldSyncWirePayload = {
   seed: number;
   /** Authoritative world clock (ms); absent in legacy 5-byte packets → treated as 0. */
   worldTimeMs: number;
+  /** Authoritative world mode; absent in legacy packets → `survival`. */
+  gameMode: "survival" | "sandbox";
+  /** Authoritative world cheat toggle; absent in legacy packets → `false`. */
+  cheatsEnabled: boolean;
 };
 
 export type ChunkDataWirePayload = {
@@ -312,13 +318,23 @@ export class BinarySerializer {
     };
   }
 
-  /** Serialize authoritative world metadata (seed + clock for lighting sync). */
-  public static serializeWorldSync(seed: number, worldTimeMs: number): ArrayBuffer {
-    const buffer = new ArrayBuffer(1 + 4 + 8);
+  /** Serialize authoritative world metadata (seed + clock + game mode). */
+  public static serializeWorldSync(
+    seed: number,
+    worldTimeMs: number,
+    gameMode: "survival" | "sandbox",
+    cheatsEnabled: boolean,
+  ): ArrayBuffer {
+    const buffer = new ArrayBuffer(1 + 4 + 8 + 1 + 1);
     const view = new DataView(buffer);
     view.setUint8(0, WORLD_SYNC_TYPE_BYTE);
     view.setUint32(1, seed >>> 0, LE);
     view.setFloat64(5, worldTimeMs, LE);
+    view.setUint8(
+      13,
+      gameMode === "sandbox" ? WORLD_MODE_CREATIVE_BYTE : WORLD_MODE_SURVIVAL_BYTE,
+    );
+    view.setUint8(14, cheatsEnabled ? 1 : 0);
     return buffer;
   }
 
@@ -339,7 +355,16 @@ export class BinarySerializer {
     if (buffer.byteLength >= 13) {
       worldTimeMs = view.getFloat64(5, LE);
     }
-    return { seed, worldTimeMs };
+    let gameMode: "survival" | "sandbox" = "survival";
+    let cheatsEnabled = false;
+    if (buffer.byteLength >= 14) {
+      gameMode =
+        view.getUint8(13) === WORLD_MODE_CREATIVE_BYTE ? "sandbox" : "survival";
+      if (buffer.byteLength >= 15) {
+        cheatsEnabled = view.getUint8(14) !== 0;
+      }
+    }
+    return { seed, worldTimeMs, gameMode, cheatsEnabled };
   }
 
   private static readonly FURNACE_LEGACY_ENTRY_BYTES = 38;

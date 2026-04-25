@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:gold_boots_from_ingots",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:gold_ingot",
+        "count": 4
+      }
+    ],
+    "output": {
+      "itemId": "stratum:gold_boots",
+      "count": 1
+    }
+  }
+}

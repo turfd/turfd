@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:smooth_stone_at_stonecutter",
+    "category": "Stonecutter",
+    "station": "stratum:stonecutter",
+    "ingredients": [
+      {
+        "tag": "stratum:stonecutter_cut_source",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:smooth_stone",
+      "count": 1
+    }
+  }
+}

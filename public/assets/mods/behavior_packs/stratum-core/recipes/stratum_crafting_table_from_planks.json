@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:crafting_table_from_planks",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "tag": "stratum:planks",
+        "count": 4
+      }
+    ],
+    "output": {
+      "itemId": "stratum:crafting_table",
+      "count": 1
+    }
+  }
+}

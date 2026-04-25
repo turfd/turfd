@@ -36,6 +36,39 @@ function isEditableDocumentFocus(el: Element | null): boolean {
   return false;
 }
 
+function isBrowserShortcutKey(code: string): boolean {
+  switch (code) {
+    case "KeyA":
+    case "KeyD":
+    case "KeyE":
+    case "KeyF":
+    case "KeyG":
+    case "KeyH":
+    case "KeyI":
+    case "KeyJ":
+    case "KeyL":
+    case "KeyN":
+    case "KeyO":
+    case "KeyP":
+    case "KeyR":
+    case "KeyS":
+    case "KeyT":
+    case "KeyU":
+    case "KeyW":
+    case "Equal":
+    case "Minus":
+    case "Digit0":
+    case "BracketLeft":
+    case "BracketRight":
+    case "Tab":
+    case "Slash":
+    case "F5":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export class InputManager {
   readonly mouseWorldPos = { x: 0, y: 0 };
 
@@ -73,9 +106,20 @@ export class InputManager {
   private canvasResizeObserver: ResizeObserver | null = null;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
+    const editableFocus = isEditableDocumentFocus(document.activeElement);
+    const gameplayInputActive = !this.worldInputBlocked && !this.chatOpen;
+    if (
+      gameplayInputActive &&
+      !editableFocus &&
+      (e.ctrlKey || e.metaKey) &&
+      isBrowserShortcutKey(e.code)
+    ) {
+      // Keep browser shortcuts from stealing focus / closing tabs while in-game.
+      e.preventDefault();
+    }
     if (
       (e.code === "Space" || e.code === "Tab") &&
-      !isEditableDocumentFocus(document.activeElement)
+      !editableFocus
     ) {
       e.preventDefault();
     }
@@ -303,6 +347,14 @@ export class InputManager {
     return this.mouseDown.has(btn);
   }
 
+  /** Raw keyboard code state (e.g. `ControlLeft`) for mode-specific controls. */
+  isKeyCodeDown(code: string): boolean {
+    if (this.chatOpen) {
+      return false;
+    }
+    return this.downCodes.has(code);
+  }
+
   /** Call once per fixed tick after all systems have read input. */
   postUpdate(): void {
     this.justPressed.clear();
@@ -322,6 +374,14 @@ export class InputManager {
     this.suppressBreakWhileHeld = true;
     // Prevent this frame from also registering as "just pressed break".
     this.mouseJustDown.delete(MOUSE_BREAK);
+  }
+
+  /**
+   * Suppress world "place" for the current frame.
+   * Useful when RMB is repurposed for tools that should not also place blocks.
+   */
+  suppressPlaceThisFrame(): void {
+    this.mouseJustDown.delete(MOUSE_PLACE);
   }
 
   updateMouseWorldPos(camera: Camera): void {

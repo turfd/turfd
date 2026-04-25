@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:spruce_door_top",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:spruce_door",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 1
+      }
+    ]
+  }
+}

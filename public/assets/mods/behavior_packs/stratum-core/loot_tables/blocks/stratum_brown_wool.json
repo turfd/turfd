@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:brown_wool",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:brown_wool",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 1
+      }
+    ]
+  }
+}

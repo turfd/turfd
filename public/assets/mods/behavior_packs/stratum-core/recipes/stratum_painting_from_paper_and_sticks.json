@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:painting_from_paper_and_sticks",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:paper",
+        "count": 1
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 2
+      }
+    ],
+    "output": {
+      "itemId": "stratum:painting",
+      "count": 1
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:stone_axe_from_cobble_and_sticks",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:cobblestone",
+        "count": 3
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 2
+      }
+    ],
+    "output": {
+      "itemId": "stratum:stone_axe",
+      "count": 1
+    }
+  }
+}

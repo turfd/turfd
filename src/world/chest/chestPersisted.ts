@@ -43,6 +43,8 @@ export type ChestPersistedChunk = {
   format: 1 | 2;
   slotCount: number;
   slots: ChestPersistedSlot[];
+  lootTableId?: string;
+  lootRolled?: boolean;
 };
 
 export function byteLengthChestPersistedV1(p: ChestPersistedChunk): number {
@@ -296,6 +298,8 @@ export function chestTileToPersisted(
     format: 2,
     slotCount: state.slots.length,
     slots: state.slots.map((s) => chestStackToPersisted(s, items)),
+    ...(state.lootTableId !== undefined ? { lootTableId: state.lootTableId } : {}),
+    ...(state.lootRolled !== undefined ? { lootRolled: state.lootRolled } : {}),
   };
 }
 
@@ -308,7 +312,16 @@ export function persistedToChestTile(
   for (let i = 0; i < n && i < p.slots.length; i++) {
     slots[i] = chestStackFromPersisted(p.slots[i] ?? null, items);
   }
-  return { slots };
+  const lootTableId =
+    typeof p.lootTableId === "string" && p.lootTableId.length > 0
+      ? p.lootTableId
+      : undefined;
+  const lootRolled = p.lootRolled === true;
+  return {
+    slots,
+    ...(lootTableId !== undefined ? { lootTableId } : {}),
+    ...(lootTableId !== undefined ? { lootRolled } : {}),
+  };
 }
 
 export function normalizeChestPersistedChunk(raw: unknown): ChestPersistedChunk | undefined {
@@ -327,6 +340,8 @@ export function normalizeChestPersistedChunk(raw: unknown): ChestPersistedChunk 
       ? slotCountRaw
       : CHEST_SINGLE_SLOTS;
   const slotsRaw = o.slots;
+  const lootTableIdRaw = o.lootTableId;
+  const lootRolledRaw = o.lootRolled;
   const slots: ChestPersistedSlot[] = [];
   let sawKey = false;
   if (Array.isArray(slotsRaw)) {
@@ -370,5 +385,14 @@ export function normalizeChestPersistedChunk(raw: unknown): ChestPersistedChunk 
     slots.push(null);
   }
   const format: 1 | 2 = sawKey ? 2 : 1;
-  return { lx, ly, format, slotCount: sc, slots };
+  return {
+    lx,
+    ly,
+    format,
+    slotCount: sc,
+    slots,
+    ...(typeof lootTableIdRaw === "string" && lootTableIdRaw.length > 0
+      ? { lootTableId: lootTableIdRaw, lootRolled: lootRolledRaw === true }
+      : {}),
+  };
 }

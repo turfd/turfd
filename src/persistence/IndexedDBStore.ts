@@ -10,6 +10,7 @@ import type { ChestPersistedChunk } from "../world/chest/chestPersisted";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 import type { CachedMod } from "../mods/workshopTypes";
 import type { KeybindableAction } from "../input/bindings";
+import type { WorldGameMode } from "../core/types";
 import {
   buildStratumWorldExportV1,
   parseStratumWorldImportV1,
@@ -52,6 +53,8 @@ export type WorldMetadata = {
   /** Optional note shown in the world list and editable in Edit World. */
   description?: string;
   seed: number;
+  /** Optional world rules preset; absent in older saves defaults to `"survival"` at load sites. Legacy `"creative"` maps to `"sandbox"` at load. */
+  gameMode?: WorldGameMode;
   createdAt: number;
   lastPlayedAt: number;
   playerX: number;
@@ -82,6 +85,8 @@ export type WorldMetadata = {
   workshopResourceMods?: readonly WorkshopModRef[];
   /** When true, joining players should download packs first (enforcement TBD). */
   requirePacksBeforeJoin?: boolean;
+  /** Enables cheat-like commands (`/give`, `/summon`, `/weather`, `/tp`) for this world. */
+  enableCheats?: boolean;
   /**
    * Index = numeric block id at last save, value = block identifier.
    * Used to remap chunk cells when `stratum:numeric_id` assignments change.

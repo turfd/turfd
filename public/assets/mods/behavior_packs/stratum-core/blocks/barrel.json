@@ -1,0 +1,26 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": {
+      "identifier": "stratum:barrel"
+    },
+    "components": {
+      "stratum:display_name": "Barrel",
+      "stratum:texture": {
+        "all": "barrel"
+      },
+      "stratum:solid": false,
+      "stratum:collision": false,
+      "stratum:transparent": false,
+      "stratum:water": false,
+      "stratum:hardness": 2.5,
+      "stratum:harvest_tool": "axe",
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 0,
+      "stratum:material": "chest",
+      "stratum:loot_table": "stratum:barrel",
+      "stratum:no_block_item": true,
+      "stratum:numeric_id": 89
+    }
+  }
+}

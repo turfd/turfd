@@ -692,6 +692,131 @@
   overflow: hidden;
 }
 
+/* Creative sidebar closed: remove mount from layout so it doesn't reserve width. */
+#inventory-ui-root .inv-creative-mount:not(:has(.inv-creative-sidebar--open)) {
+  display: none;
+}
+
+#inventory-ui-root .inv-creative-mount {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  align-self: flex-start;
+  --inv-creative-cols: 4;
+  --inv-creative-grid-inner-width: calc(
+    var(--inv-creative-cols) * var(--inv-slot-px, 58px) +
+      (var(--inv-creative-cols) - 1) * var(--inv-grid-gap, 10px)
+  );
+  width: clamp(240px, 32vw, calc(var(--inv-creative-grid-inner-width) + 40px));
+  max-width: calc(var(--inv-creative-grid-inner-width) + 40px);
+  height: var(--inv-panel-sync-height, min(72vh, 520px));
+  max-height: var(--inv-panel-sync-height, min(72vh, 520px));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#inventory-ui-root .inv-creative-sidebar {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: rgba(40, 40, 42, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  corner-shape: squircle;
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--inv-anim-ms, 300ms) cubic-bezier(0.22, 1, 0.36, 1),
+    opacity var(--inv-anim-ms, 300ms) ease;
+}
+
+#inventory-ui-root .inv-creative-sidebar.inv-creative-sidebar--open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#inventory-ui-root .inv-creative-sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 12px 14px;
+  gap: 10px;
+}
+
+#inventory-ui-root .inv-creative-title {
+  font-family: "M5x7", monospace;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #aeaeb2;
+  flex-shrink: 0;
+}
+
+#inventory-ui-root .inv-creative-search {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(18, 18, 20, 0.85);
+  color: #f2f2f7;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: "M5x7", monospace;
+  font-size: 17px;
+  outline: none;
+}
+
+#inventory-ui-root .inv-creative-search::placeholder {
+  color: #8e8e93;
+}
+
+#inventory-ui-root .inv-creative-search:focus {
+  border-color: rgba(152, 208, 255, 0.8);
+}
+
+#inventory-ui-root .inv-creative-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  padding-right: 10px;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) rgba(0, 0, 0, 0.25);
+}
+
+#inventory-ui-root .inv-creative-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+#inventory-ui-root .inv-creative-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+#inventory-ui-root .inv-creative-scroll::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+#inventory-ui-root .inv-creative-grid {
+  display: grid;
+  gap: var(--inv-grid-gap, 10px);
+  align-content: start;
+}
+
 /* Recipe sidebar closed (e.g. chest open): drop mount from layout so inventory+chest center. */
 #inventory-ui-root .inv-crafting-mount:not(:has(.inv-crafting-sidebar--open)) {
   display: none;

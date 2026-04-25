@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:iron_axe_from_ingots_and_sticks",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:iron_ingot",
+        "count": 3
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 2
+      }
+    ],
+    "output": {
+      "itemId": "stratum:iron_axe",
+      "count": 1
+    }
+  }
+}

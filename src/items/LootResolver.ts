@@ -12,16 +12,21 @@ export type LootEntry = {
   chance: number;
 };
 
-/** `each`: every entry rolls its `chance` independently. `one_of`: pick exactly one entry, weighted by `chance` (relative weights). */
+/** `each`: every entry rolls its `chance` independently. `one_of`: pick weighted unique entries. */
 export type LootRollMode = "each" | "one_of";
 
 export type LootTable = {
   entries: LootEntry[];
   roll?: LootRollMode;
+  /** For `one_of`: min unique entries to pick (default 1). */
+  picksMin?: number;
+  /** For `one_of`: max unique entries to pick (default picksMin). */
+  picksMax?: number;
 };
 
 export class LootResolver implements ILootResolver {
   private readonly _tables = new Map<number, LootTable>();
+  private readonly _tablesById = new Map<string, LootTable>();
   /** Mob type id (see `MobType`) → loot table. */
   private readonly _entityTables = new Map<number, LootTable>();
   private readonly _items: ItemRegistry;
@@ -36,6 +41,10 @@ export class LootResolver implements ILootResolver {
    */
   registerTable(blockId: number, table: LootTable): void {
     this._tables.set(blockId, table);
+  }
+
+  registerNamedTable(tableId: string, table: LootTable): void {
+    this._tablesById.set(tableId, table);
   }
 
   /** Register a loot table for a mob type id (wire `entityType`). */
@@ -74,31 +83,52 @@ export class LootResolver implements ILootResolver {
     return drops;
   }
 
-  /** Picks one entry by relative weights (`chance`), then rolls count within min–max. */
+  /** Picks weighted unique entries, then rolls each count within min–max. */
   private resolveOneOfWeighted(entries: LootEntry[], rng: LootRng): ItemStack[] {
-    const weighted = entries.filter((e) => e.chance > 0);
-    if (weighted.length === 0) return [];
+    return this.resolveOneOfWeightedMulti(entries, rng, 1, 1);
+  }
 
-    let total = 0;
-    for (const e of weighted) total += e.chance;
-
-    let r = rng.nextFloat() * total;
-    let chosen = weighted[weighted.length - 1]!;
-    for (const e of weighted) {
-      r -= e.chance;
-      if (r <= 0) {
-        chosen = e;
-        break;
+  private resolveOneOfWeightedMulti(
+    entries: LootEntry[],
+    rng: LootRng,
+    picksMin: number,
+    picksMax: number,
+  ): ItemStack[] {
+    const pool = entries.filter((e) => e.chance > 0);
+    if (pool.length === 0) return [];
+    const minPicks = Math.max(1, Math.min(pool.length, Math.floor(picksMin)));
+    const maxPicks = Math.max(minPicks, Math.min(pool.length, Math.floor(picksMax)));
+    const pickCount =
+      minPicks + Math.floor(rng.nextFloat() * (maxPicks - minPicks + 1));
+    const chosen: LootEntry[] = [];
+    for (let p = 0; p < pickCount && pool.length > 0; p++) {
+      let total = 0;
+      for (let i = 0; i < pool.length; i++) total += pool[i]!.chance;
+      let r = rng.nextFloat() * total;
+      let pickIdx = pool.length - 1;
+      for (let i = 0; i < pool.length; i++) {
+        r -= pool[i]!.chance;
+        if (r <= 0) {
+          pickIdx = i;
+          break;
+        }
+      }
+      const [picked] = pool.splice(pickIdx, 1);
+      if (picked !== undefined) {
+        chosen.push(picked);
       }
     }
-
-    const def = this._items.getByKey(chosen.itemKey);
-    if (def === undefined) return [];
-
-    const range = chosen.countMax - chosen.countMin;
-    const count = chosen.countMin + Math.floor(rng.nextFloat() * (range + 1));
-    if (count <= 0) return [];
-    return [{ itemId: def.id, count }];
+    const drops: ItemStack[] = [];
+    for (let i = 0; i < chosen.length; i++) {
+      const pick = chosen[i]!;
+      const def = this._items.getByKey(pick.itemKey);
+      if (def === undefined) continue;
+      const range = pick.countMax - pick.countMin;
+      const count = pick.countMin + Math.floor(rng.nextFloat() * (range + 1));
+      if (count <= 0) continue;
+      drops.push({ itemId: def.id, count });
+    }
+    return drops;
   }
 
   /** Resolve item id from registry key; used for code-driven drops (e.g. sheep wool color). */
@@ -111,7 +141,38 @@ export class LootResolver implements ILootResolver {
     const table = this._entityTables.get(entityTypeId);
     if (table === undefined) return [];
     if (table.roll === "one_of") {
-      return this.resolveOneOfWeighted(table.entries, rng);
+      return this.resolveOneOfWeightedMulti(
+        table.entries,
+        rng,
+        table.picksMin ?? 1,
+        table.picksMax ?? (table.picksMin ?? 1),
+      );
+    }
+    const drops: ItemStack[] = [];
+    for (const entry of table.entries) {
+      if (rng.nextFloat() > entry.chance) continue;
+      const def = this._items.getByKey(entry.itemKey);
+      if (def === undefined) continue;
+      const range = entry.countMax - entry.countMin;
+      const count = entry.countMin + Math.floor(rng.nextFloat() * (range + 1));
+      if (count <= 0) continue;
+      drops.push({ itemId: def.id, count });
+    }
+    return drops;
+  }
+
+  resolveNamedTable(tableId: string, rng: LootRng): ItemStack[] {
+    const table = this._tablesById.get(tableId);
+    if (table === undefined) {
+      return [];
+    }
+    if (table.roll === "one_of") {
+      return this.resolveOneOfWeightedMulti(
+        table.entries,
+        rng,
+        table.picksMin ?? 1,
+        table.picksMax ?? (table.picksMin ?? 1),
+      );
     }
     const drops: ItemStack[] = [];
     for (const entry of table.entries) {

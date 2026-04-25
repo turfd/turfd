@@ -1,0 +1,2461 @@
+{
+  "format": "stratum-structure-v1",
+  "exportedAt": "2026-04-25T07:30:17.273Z",
+  "world": {
+    "uuid": "b981be63-cf40-4853-836a-23b5abbf9c7e",
+    "name": "My World",
+    "seed": 354935,
+    "gameMode": "sandbox"
+  },
+  "selection": {
+    "start": {
+      "wx": 11,
+      "wy": -15
+    },
+    "end": {
+      "wx": 37,
+      "wy": -20
+    },
+    "bounds": {
+      "minWx": 11,
+      "minWy": -20,
+      "maxWx": 37,
+      "maxWy": -15
+    },
+    "size": {
+      "width": 27,
+      "height": 6
+    }
+  },
+  "player": {
+    "feetX": 521.0280444444493,
+    "feetY": -287.58448000000016
+  },
+  "blocks": [
+    {
+      "x": 0,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 12,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 13,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 14,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 15,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 16,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 17,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 18,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 19,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 20,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 21,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 22,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 23,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 24,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 25,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 26,
+      "y": 0,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "foreground": {
+        "id": 89,
+        "identifier": "stratum:barrel",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "foreground": {
+        "id": 42,
+        "identifier": "stratum:furnace",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "foreground": {
+        "id": 42,
+        "identifier": "stratum:furnace",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 12,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 13,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 14,
+      "y": 1,
+      "foreground": {
+        "id": 89,
+        "identifier": "stratum:barrel",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 15,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 16,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 17,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 18,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 19,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 20,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 21,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 22,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 23,
+      "y": 1,
+      "foreground": {
+        "id": 89,
+        "identifier": "stratum:barrel",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 24,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 25,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 26,
+      "y": 1,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "foreground": {
+        "id": 23,
+        "identifier": "stratum:torch",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "foreground": {
+        "id": 42,
+        "identifier": "stratum:furnace",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "foreground": {
+        "id": 23,
+        "identifier": "stratum:torch",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 12,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 13,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 14,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 15,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 16,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 17,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 18,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 19,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 20,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 21,
+      "y": 2,
+      "foreground": {
+        "id": 23,
+        "identifier": "stratum:torch",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 22,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 23,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 24,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 25,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 26,
+      "y": 2,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 0,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 4,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 6,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 12,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 13,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 14,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 15,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 16,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 17,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 18,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 19,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 20,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 21,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 22,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 23,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 24,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 25,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 26,
+      "y": 3,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 1,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 2,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 13,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 14,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 15,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 16,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 17,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 18,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 19,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 20,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 21,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 22,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 23,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 24,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 25,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 26,
+      "y": 4,
+      "foreground": {
+        "id": 0,
+        "identifier": "stratum:air",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 0,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 3,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 6,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 12,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 13,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 14,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 15,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 16,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 17,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 18,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 19,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 20,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 21,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 18,
+        "identifier": "stratum:oak_log",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 22,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 23,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 24,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 25,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    },
+    {
+      "x": 26,
+      "y": 5,
+      "foreground": {
+        "id": 39,
+        "identifier": "stratum:oak_planks",
+        "metadata": 0
+      },
+      "background": {
+        "id": 10,
+        "identifier": "stratum:stone",
+        "metadata": 0
+      }
+    }
+  ],
+  "tileEntities": {
+    "entities": [
+      {
+        "type": "container",
+        "x": 2,
+        "y": 1,
+        "identifier": "stratum:barrel",
+        "lootTable": "stratum:mineshaft_barrel",
+        "items": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      {
+        "type": "furnace",
+        "x": 8,
+        "y": 1,
+        "state": {
+          "outputSlots": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "fuel": null,
+          "fuelRemainingSec": 0,
+          "cookProgressSec": 0,
+          "queue": [],
+          "lastProcessedWorldTimeMs": 456200.00000128616
+        }
+      },
+      {
+        "type": "furnace",
+        "x": 9,
+        "y": 1,
+        "state": {
+          "outputSlots": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "fuel": null,
+          "fuelRemainingSec": 0,
+          "cookProgressSec": 0,
+          "queue": [],
+          "lastProcessedWorldTimeMs": 456200.00000128616
+        }
+      },
+      {
+        "type": "container",
+        "x": 14,
+        "y": 1,
+        "identifier": "stratum:barrel",
+        "lootTable": "stratum:mineshaft_barrel",
+        "items": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      {
+        "type": "container",
+        "x": 23,
+        "y": 1,
+        "identifier": "stratum:barrel",
+        "lootTable": "stratum:mineshaft_barrel",
+        "items": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      {
+        "type": "furnace",
+        "x": 9,
+        "y": 2,
+        "state": {
+          "outputSlots": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "fuel": null,
+          "fuelRemainingSec": 0,
+          "cookProgressSec": 0,
+          "queue": [],
+          "lastProcessedWorldTimeMs": 456200.00000128616
+        }
+      }
+    ]
+  }
+}

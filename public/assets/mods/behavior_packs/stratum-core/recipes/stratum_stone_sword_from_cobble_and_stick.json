@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:stone_sword_from_cobble_and_stick",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:cobblestone",
+        "count": 2
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:stone_sword",
+      "count": 1
+    }
+  }
+}

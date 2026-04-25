@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:oak_planks_from_log",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:oak_log",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:oak_planks",
+      "count": 4
+    }
+  }
+}

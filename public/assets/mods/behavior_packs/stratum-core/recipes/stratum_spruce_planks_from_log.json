@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:spruce_planks_from_log",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:spruce_log",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:spruce_planks",
+      "count": 4
+    }
+  }
+}

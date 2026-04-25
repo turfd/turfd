@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:gold_ore",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:gold_ore",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 1
+      }
+    ]
+  }
+}

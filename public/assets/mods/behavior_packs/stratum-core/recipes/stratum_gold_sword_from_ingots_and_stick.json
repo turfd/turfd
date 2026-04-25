@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:gold_sword_from_ingots_and_stick",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:gold_ingot",
+        "count": 2
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:gold_sword",
+      "count": 1
+    }
+  }
+}

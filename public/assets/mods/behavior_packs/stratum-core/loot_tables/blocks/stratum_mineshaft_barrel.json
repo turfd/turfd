@@ -1,0 +1,53 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:mineshaft_barrel",
+  "table": {
+    "roll": "one_of",
+    "picksMin": 3,
+    "picksMax": 5,
+    "entries": [
+      {
+        "itemKey": "stratum:bread",
+        "countMin": 1,
+        "countMax": 3,
+        "chance": 0.75
+      },
+      {
+        "itemKey": "stratum:wheat_seeds",
+        "countMin": 2,
+        "countMax": 8,
+        "chance": 0.72
+      },
+      {
+        "itemKey": "stratum:cobblestone",
+        "countMin": 8,
+        "countMax": 24,
+        "chance": 0.55
+      },
+      {
+        "itemKey": "stratum:wooden_pickaxe",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 0.28
+      },
+      {
+        "itemKey": "stratum:stone_pickaxe",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 0.18
+      },
+      {
+        "itemKey": "stratum:gold_ingot",
+        "countMin": 1,
+        "countMax": 3,
+        "chance": 0.11
+      },
+      {
+        "itemKey": "stratum:diamond",
+        "countMin": 1,
+        "countMax": 2,
+        "chance": 0.03
+      }
+    ]
+  }
+}

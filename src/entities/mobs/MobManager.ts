@@ -2162,15 +2162,7 @@ export class MobManager {
             halfW: playerHalfW,
             height: PLAYER_HEIGHT,
           }))
-        : [
-            {
-              peerId: null as string | null,
-              x: localPlayerFeet.x,
-              y: localPlayerFeet.y,
-              halfW: playerHalfW,
-              height: PLAYER_HEIGHT,
-            },
-          ];
+        : [];
 
     const worldTimeSec = worldTimeMs / 1000;
 

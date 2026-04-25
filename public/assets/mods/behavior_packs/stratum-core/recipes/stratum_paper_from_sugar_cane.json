@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:paper_from_sugar_cane",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:sugar_cane",
+        "count": 3
+      }
+    ],
+    "output": {
+      "itemId": "stratum:paper",
+      "count": 3
+    }
+  }
+}

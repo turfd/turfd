@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:bread_from_wheat",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:wheat",
+        "count": 3
+      }
+    ],
+    "output": {
+      "itemId": "stratum:bread",
+      "count": 2
+    }
+  }
+}

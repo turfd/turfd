@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:wooden_sword_from_planks_and_stick",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "tag": "stratum:planks",
+        "count": 2
+      },
+      {
+        "itemId": "stratum:stick",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:wooden_sword",
+      "count": 1
+    }
+  }
+}

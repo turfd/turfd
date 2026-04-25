@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:spruce_log_stairs_from_logs",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:spruce_log",
+        "count": 6
+      }
+    ],
+    "output": {
+      "itemId": "stratum:spruce_log_stairs",
+      "count": 4
+    }
+  }
+}

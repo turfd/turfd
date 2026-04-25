@@ -84,6 +84,14 @@ export type ChatHostControllerDeps = {
   executeWeather: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/summon` (spawn mobs near players). */
   executeSummon: (issuerPeerId: string, rest: string) => void;
+  /** Host-only: `/tp` (self/other teleport). */
+  executeTeleport: (issuerPeerId: string, rest: string) => void;
+  /** Host-only: `/structure ...` helpers. */
+  executeStructure: (issuerPeerId: string, rest: string) => void;
+  /** Host-only: `/wand` toggle helpers. */
+  executeWand: (issuerPeerId: string, rest: string) => void;
+  /** World setting gate for cheat-like commands. */
+  isCheatsEnabled: () => boolean;
 };
 
 export class ChatHostController {
@@ -100,6 +108,10 @@ export class ChatHostController {
 
   private canModerate(issuerPeerId: string): boolean {
     return this.isHostIssuer(issuerPeerId) || this.d.opPeerIds.has(issuerPeerId);
+  }
+
+  private canUseCheatCommands(issuerPeerId: string): boolean {
+    return this.canModerate(issuerPeerId) && this.d.isCheatsEnabled();
   }
 
   private canOp(issuerPeerId: string): boolean {
@@ -157,10 +169,12 @@ export class ChatHostController {
     }
 
     if (cmd === "give") {
-      if (!this.canModerate(fromPeerId)) {
+      if (!this.canUseCheatCommands(fromPeerId)) {
         this.d.sendSystemTo(
           fromPeerId as PeerId,
-          "You do not have permission to use this command.",
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
         );
         return true;
       }
@@ -169,10 +183,12 @@ export class ChatHostController {
     }
 
     if (cmd === "weather") {
-      if (!this.canModerate(fromPeerId)) {
+      if (!this.canUseCheatCommands(fromPeerId)) {
         this.d.sendSystemTo(
           fromPeerId as PeerId,
-          "You do not have permission to use this command.",
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
         );
         return true;
       }
@@ -181,14 +197,58 @@ export class ChatHostController {
     }
 
     if (cmd === "summon") {
-      if (!this.canModerate(fromPeerId)) {
+      if (!this.canUseCheatCommands(fromPeerId)) {
         this.d.sendSystemTo(
           fromPeerId as PeerId,
-          "You do not have permission to use this command.",
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
         );
         return true;
       }
       this.d.executeSummon(fromPeerId, rest);
+      return true;
+    }
+
+    if (cmd === "tp") {
+      if (!this.canUseCheatCommands(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
+        );
+        return true;
+      }
+      this.d.executeTeleport(fromPeerId, rest);
+      return true;
+    }
+
+    if (cmd === "structure") {
+      if (!this.canUseCheatCommands(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
+        );
+        return true;
+      }
+      this.d.executeStructure(fromPeerId, rest);
+      return true;
+    }
+
+    if (cmd === "wand") {
+      if (!this.canUseCheatCommands(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
+        );
+        return true;
+      }
+      this.d.executeWand(fromPeerId, rest);
       return true;
     }
 

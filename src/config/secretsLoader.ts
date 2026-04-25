@@ -3,6 +3,8 @@
  * Copy `public/secrets.local.example.json` to `public/secrets.local.json` (gitignored).
  */
 
+import { parseJsoncResponse } from "../core/jsonc";
+
 let loaded: Record<string, string> | undefined;
 
 function normalizeEntries(raw: unknown): Record<string, string> {
@@ -35,7 +37,7 @@ export async function loadLocalSecretsFile(): Promise<void> {
     if (!res.ok) {
       return;
     }
-    loaded = normalizeEntries(await res.json());
+    loaded = normalizeEntries(await parseJsoncResponse(res, "secrets.local.json"));
   } catch {
     // Missing file or invalid JSON — rely on env only.
   }

@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:birch_planks_from_log",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:birch_log",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:birch_planks",
+      "count": 4
+    }
+  }
+}

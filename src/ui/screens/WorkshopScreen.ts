@@ -22,6 +22,12 @@ import {
   BLOCK_TEXTURE_MANIFEST_PATH,
   ITEM_TEXTURE_MANIFEST_PATH,
 } from "../../core/textureManifest";
+import { parseJsoncResponse, parseJsoncText } from "../../core/jsonc";
+
+const templateBehaviorPackJsonFiles = import.meta.glob(
+  "/public/assets/mods/behavior_packs/stratum-core/{blocks,items,recipes,loot_tables,smelting,furnace_fuel,features,structures}/**/*.json",
+  { eager: false },
+);
 
 export type WorkshopScreenDeps = {
   bus: EventBus;
@@ -84,7 +90,7 @@ async function fetchJson(url: string): Promise<unknown> {
   if (!res.ok) {
     throw new Error(res.statusText || `Failed to fetch (${res.status})`);
   }
-  return res.json() as Promise<unknown>;
+  return parseJsoncResponse(res, url);
 }
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
@@ -98,6 +104,17 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
 
 function safeZipName(s: string): string {
   return (s.trim().slice(0, 72) || "pack").replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, "_");
+}
+
+function discoverCorePackPaths(globMap: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const path of Object.keys(globMap)) {
+    if (!path.startsWith("/public/")) {
+      continue;
+    }
+    out.push(path.slice("/public/".length));
+  }
+  return [...new Set(out)].sort((a, b) => a.localeCompare(b));
 }
 
 function formatWorkshopDownloadCount(n: number): string {
@@ -244,6 +261,12 @@ export class WorkshopScreen {
 
   /** Blob URLs for pack icons in My Library; revoked on next library render / unmount. */
   private readonly libraryBlobUrls: string[] = [];
+
+  /** Developer folder status shown in Templates tab. */
+  private devFolderDisplayPath: string | null = null;
+  private devFolderState: "idle" | "syncing" | "ready" | "error" = "idle";
+  private devFolderPackCount = 0;
+  private devFolderError: string | null = null;
 
   constructor(deps: WorkshopScreenDeps) {
     this.deps = deps;
@@ -555,19 +578,26 @@ export class WorkshopScreen {
     );
     this.unsubs.push(
       b.on("workshop:dev-sync-ok", (e) => {
+        this.devFolderState = "ready";
+        this.devFolderPackCount = e.packCount;
+        this.devFolderError = null;
         if (this.subView === "templates") {
           this.showWorkshopActionFeedback(
             e.packCount > 0
               ? `Developer packs loaded (${e.packCount} installed).`
               : "Developer pack folder set.",
           );
+          this.renderTemplates();
         }
       }),
     );
     this.unsubs.push(
       b.on("workshop:dev-sync-error", (e) => {
+        this.devFolderState = "error";
+        this.devFolderError = e.message;
         if (this.subView === "templates") {
           this.showWorkshopActionFeedback(e.message);
+          this.renderTemplates();
         }
       }),
     );
@@ -1744,7 +1774,7 @@ export class WorkshopScreen {
           const text = new TextDecoder().decode(jsonBytes);
           let parsed: any;
           try {
-            parsed = JSON.parse(text) as any;
+            parsed = parseJsoncText(text, "uploaded world json") as any;
           } catch {
             throw new Error("World JSON is invalid.");
           }
@@ -1849,6 +1879,70 @@ export class WorkshopScreen {
     const err = el("p", "mm-workshop-publish-err");
     err.textContent = "";
 
+    const devStatus = el("div", "mm-workshop-owned-row");
+    devStatus.style.display = "block";
+    devStatus.style.padding = "12px";
+    devStatus.style.borderRadius = "10px";
+    devStatus.style.background = "rgba(255,255,255,0.03)";
+    devStatus.style.border = "1px solid rgba(255,255,255,0.10)";
+    devStatus.style.marginBottom = "14px";
+    const devStateRow = el("div");
+    devStateRow.style.display = "flex";
+    devStateRow.style.alignItems = "center";
+    devStateRow.style.gap = "8px";
+    const devStateTitle = el("strong");
+    devStateTitle.textContent = "Developer folder";
+    const devStatePill = el("span");
+    devStatePill.style.display = "inline-flex";
+    devStatePill.style.alignItems = "center";
+    devStatePill.style.padding = "2px 8px";
+    devStatePill.style.borderRadius = "999px";
+    devStatePill.style.fontSize = "12px";
+    devStatePill.style.letterSpacing = "0.04em";
+    devStatePill.style.textTransform = "uppercase";
+    if (this.devFolderState === "ready") {
+      devStatePill.textContent = "ready";
+      devStatePill.style.background = "rgba(83,183,106,0.20)";
+      devStatePill.style.border = "1px solid rgba(83,183,106,0.45)";
+      devStatePill.style.color = "#b7f0c5";
+    } else if (this.devFolderState === "syncing") {
+      devStatePill.textContent = "syncing";
+      devStatePill.style.background = "rgba(255,189,89,0.20)";
+      devStatePill.style.border = "1px solid rgba(255,189,89,0.45)";
+      devStatePill.style.color = "#ffe3a8";
+    } else if (this.devFolderState === "error") {
+      devStatePill.textContent = "error";
+      devStatePill.style.background = "rgba(220,89,89,0.20)";
+      devStatePill.style.border = "1px solid rgba(220,89,89,0.45)";
+      devStatePill.style.color = "#ffc5c5";
+    } else {
+      devStatePill.textContent = "not set";
+      devStatePill.style.background = "rgba(160,170,190,0.18)";
+      devStatePill.style.border = "1px solid rgba(160,170,190,0.35)";
+      devStatePill.style.color = "#d7deec";
+    }
+    devStateRow.appendChild(devStateTitle);
+    devStateRow.appendChild(devStatePill);
+    devStatus.appendChild(devStateRow);
+    const devPath = el("p", "mm-note");
+    devPath.style.margin = "8px 0 4px";
+    devPath.textContent =
+      this.devFolderDisplayPath !== null
+        ? `Path: ${this.devFolderDisplayPath}`
+        : "Path: (none selected)";
+    devStatus.appendChild(devPath);
+    const devMeta = el("p", "mm-note");
+    devMeta.style.margin = "0";
+    if (this.devFolderState === "ready") {
+      devMeta.textContent = `Loaded packs: ${this.devFolderPackCount}`;
+    } else if (this.devFolderState === "error") {
+      devMeta.textContent = this.devFolderError ?? "Developer folder sync failed.";
+    } else {
+      devMeta.textContent = "Choose a folder to enable local dev packs.";
+    }
+    devStatus.appendChild(devMeta);
+    stack.appendChild(devStatus);
+
     const mkRow = (
       title: string,
       desc: string,
@@ -1896,22 +1990,41 @@ export class WorkshopScreen {
               files["manifest.json"] = new TextEncoder().encode(
                 JSON.stringify(manifest, null, 2),
               );
-              const blocks: string[] = Array.isArray(manifest.blocks) ? manifest.blocks : [];
-              const items: string[] = Array.isArray(manifest.items) ? manifest.items : [];
-              const recipes: string[] = Array.isArray(manifest.recipes) ? manifest.recipes : [];
-              const loot: string[] = Array.isArray(manifest.loot) ? manifest.loot : [];
-              const smelting: string[] = Array.isArray(manifest.smelting) ? manifest.smelting : [];
-              const fuel: string[] = Array.isArray(manifest.furnace_fuel)
+              const listedBlocks: string[] = Array.isArray(manifest.blocks) ? manifest.blocks : [];
+              const listedItems: string[] = Array.isArray(manifest.items) ? manifest.items : [];
+              const listedRecipes: string[] = Array.isArray(manifest.recipes) ? manifest.recipes : [];
+              const listedLoot: string[] = Array.isArray(manifest.loot) ? manifest.loot : [];
+              const listedSmelting: string[] = Array.isArray(manifest.smelting) ? manifest.smelting : [];
+              const listedFuel: string[] = Array.isArray(manifest.furnace_fuel)
                 ? manifest.furnace_fuel
                 : [];
-
-              const jobs: Array<{ rel: string; zipPath: string }> = [];
-              for (const f of blocks) jobs.push({ rel: `blocks/${f}`, zipPath: `blocks/${f}` });
-              for (const f of items) jobs.push({ rel: `items/${f}`, zipPath: `items/${f}` });
-              for (const rel of recipes) jobs.push({ rel, zipPath: rel });
-              for (const rel of loot) jobs.push({ rel, zipPath: rel });
-              for (const rel of smelting) jobs.push({ rel, zipPath: rel });
-              for (const rel of fuel) jobs.push({ rel, zipPath: rel });
+              const listedFeatures: string[] = Array.isArray(manifest.features) ? manifest.features : [];
+              const listedStructures: string[] = Array.isArray(manifest.structures)
+                ? manifest.structures
+                : [];
+              const listedAll = [
+                ...listedRecipes,
+                ...listedLoot,
+                ...listedSmelting,
+                ...listedFuel,
+                ...listedFeatures,
+                ...listedStructures,
+                ...listedBlocks.map((f) => `blocks/${f}`),
+                ...listedItems.map((f) => `items/${f}`),
+              ];
+              const discoveredAll = discoverCorePackPaths(templateBehaviorPackJsonFiles).filter((p) =>
+                p.startsWith("assets/mods/behavior_packs/stratum-core/"),
+              );
+              const relPaths =
+                listedAll.length > 0
+                  ? [...new Set(listedAll)].sort((a, b) => a.localeCompare(b))
+                  : discoveredAll.map((p) =>
+                      p.slice("assets/mods/behavior_packs/stratum-core/".length),
+                    );
+              const jobs: Array<{ rel: string; zipPath: string }> = relPaths.map((rel) => ({
+                rel,
+                zipPath: rel,
+              }));
 
               const fetched = await Promise.all(
                 jobs.map(async (j) => ({ zipPath: j.zipPath, bytes: await fetchBytes(`${packBase}${j.rel}`) })),
@@ -2044,27 +2157,123 @@ export class WorkshopScreen {
     devDesc.style.color = "#8e8e93";
     devDesc.style.marginTop = "6px";
     devDesc.textContent =
-      "Pick a folder of workshop-style .zip packs. Refreshing the page reloads them into your Library.";
+      "Pick a folder containing workshop .zip packs and/or unpacked pack folders. Refresh to sync live edits.";
     devLabel.appendChild(devDesc);
     devBlock.appendChild(devLabel);
     const devAside = el("div", "mm-workshop-owned-aside");
     const pick = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
     pick.type = "button";
     pick.textContent = "Choose folder";
-    pick.disabled = typeof (window as any).showDirectoryPicker !== "function";
+    const folderFallbackInput = el("input", "mm-workshop-file-native") as HTMLInputElement;
+    folderFallbackInput.type = "file";
+    folderFallbackInput.hidden = true;
+    // Chromium fallback when showDirectoryPicker is unavailable.
+    (
+      folderFallbackInput as HTMLInputElement & {
+        webkitdirectory?: boolean;
+        directory?: boolean;
+      }
+    ).webkitdirectory = true;
+    (
+      folderFallbackInput as HTMLInputElement & {
+        webkitdirectory?: boolean;
+        directory?: boolean;
+      }
+    ).directory = true;
+    folderFallbackInput.addEventListener("change", () => {
+      const selected = folderFallbackInput.files;
+      const selectedFiles = selected !== null ? Array.from(selected) : [];
+      if (selectedFiles.length > 0) {
+        const firstRel =
+          (selectedFiles[0] as File & { webkitRelativePath?: string }).webkitRelativePath ?? "";
+        const root = firstRel.split("/")[0] ?? "";
+        this.devFolderDisplayPath = root.length > 0 ? root : selectedFiles[0]!.name;
+        this.devFolderState = "syncing";
+        this.devFolderError = null;
+        this.renderTemplates();
+      }
+      // #region agent log
+      fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:folderFallbackInput:change",message:"folder fallback changed",data:{selectedCount:selectedFiles.length},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      folderFallbackInput.value = "";
+      if (selectedFiles.length === 0) {
+        // #region agent log
+        fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run4",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:emptyAfterSnapshot",message:"no files in snapshot",data:{},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+        return;
+      }
+      void (async () => {
+        try {
+          err.textContent = "";
+          const out: Array<{ name: string; relativePath: string; bytes: Uint8Array }> = [];
+          // #region agent log
+          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run3",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:read:start",message:"starting fallback file reads",data:{selectedCount:selectedFiles.length},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          for (let i = 0; i < selectedFiles.length; i++) {
+            const f = selectedFiles[i]!;
+            const rel =
+              (f as File & { webkitRelativePath?: string }).webkitRelativePath ?? f.name;
+            out.push({
+              name: f.name,
+              relativePath: rel,
+              bytes: new Uint8Array(await f.arrayBuffer()),
+            });
+            if (i === 0 || i === selectedFiles.length - 1 || (i + 1) % 50 === 0) {
+              // #region agent log
+              fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run3",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:read:progress",message:"fallback read progress",data:{readCount:i+1,total:selectedFiles.length,lastPath:rel},timestamp:Date.now()})}).catch(()=>{});
+              // #endregion
+            }
+          }
+          // #region agent log
+          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run3",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:read:done",message:"finished fallback file reads",data:{outCount:out.length},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          this.deps.bus.emit({
+            type: "workshop:dev-folder-files-picked",
+            files: out,
+          } satisfies GameEvent);
+          // #region agent log
+          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:emit:dev-folder-files-picked",message:"emitted folder files event",data:{fileCount:out.length,sample:out.slice(0,3).map((f)=>f.relativePath)},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          this.showWorkshopActionFeedback("Folder selected. Loading dev packs…");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          // #region agent log
+          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:folderFallbackInput:error",message:"folder fallback read failed",data:{error:msg},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          err.textContent = msg;
+        }
+      })();
+    });
     pick.addEventListener("click", () => {
       void (async () => {
         try {
           err.textContent = "";
+          // #region agent log
+          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:pick:click",message:"choose folder clicked",data:{hasShowDirectoryPicker:typeof (window as any).showDirectoryPicker==="function"},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          if (typeof (window as any).showDirectoryPicker !== "function") {
+            folderFallbackInput.click();
+            return;
+          }
           // @ts-expect-error showDirectoryPicker is not in all DOM lib targets
           const h = (await window.showDirectoryPicker()) as FileSystemDirectoryHandle;
+          this.devFolderDisplayPath = h.name;
+          this.devFolderState = "syncing";
+          this.devFolderError = null;
+          this.renderTemplates();
           this.deps.bus.emit({
             type: "workshop:dev-folder-picked",
             handle: h,
           } satisfies GameEvent);
+          // #region agent log
+          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:emit:dev-folder-picked",message:"emitted folder handle event",data:{handleName:h?.name??null},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
           this.showWorkshopActionFeedback("Folder selected. Reloading dev packs…");
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          // #region agent log
+          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:pick:error",message:"choose folder flow failed",data:{error:msg},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
           err.textContent = msg;
         }
       })();
@@ -2073,13 +2282,19 @@ export class WorkshopScreen {
     clear.type = "button";
     clear.textContent = "Clear";
     clear.addEventListener("click", () => {
+      this.devFolderDisplayPath = null;
+      this.devFolderState = "idle";
+      this.devFolderPackCount = 0;
+      this.devFolderError = null;
       this.deps.bus.emit({
         type: "workshop:dev-folder-picked",
         handle: null,
       } satisfies GameEvent);
       this.showWorkshopActionFeedback("Developer folder cleared.");
+      this.renderTemplates();
     });
     devAside.appendChild(pick);
+    devAside.appendChild(folderFallbackInput);
     devAside.appendChild(clear);
     devBlock.appendChild(devAside);
     stack.appendChild(devBlock);

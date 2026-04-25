@@ -39,6 +39,13 @@ const recipesFileSchema = z
   })
   .strict();
 
+const singleRecipeFileSchema = z
+  .object({
+    format_version: z.literal("1.0.0"),
+    recipe: recipeEntrySchema,
+  })
+  .strict();
+
 function toIngredientSlot(s: z.infer<typeof ingredientSlotSchema>): IngredientSlot {
   return { itemId: s.itemId, tag: s.tag, count: s.count };
 }
@@ -47,6 +54,49 @@ function toIngredientSlot(s: z.infer<typeof ingredientSlotSchema>): IngredientSl
  * Parse and validate recipe JSON. Unknown top-level or recipe keys fail Zod `.strict()`.
  */
 export function parseRecipeJson(raw: unknown): readonly RecipeDefinition[] {
+  const parsedArray = recipesFileSchema.safeParse(raw);
+  if (parsedArray.success) {
+    const out: RecipeDefinition[] = [];
+    for (const r of parsedArray.data.recipes) {
+      out.push({
+        id: r.id,
+        category: r.category,
+        station: r.station,
+        ingredients: r.ingredients.map(toIngredientSlot),
+        output: { itemId: r.output.itemId, count: r.output.count },
+      });
+    }
+    return out;
+  }
+
+  const parsedSingle = singleRecipeFileSchema.safeParse(raw);
+  if (parsedSingle.success) {
+    const r = parsedSingle.data.recipe;
+    return [
+      {
+        id: r.id,
+        category: r.category,
+        station: r.station,
+        ingredients: r.ingredients.map(toIngredientSlot),
+        output: { itemId: r.output.itemId, count: r.output.count },
+      },
+    ];
+  }
+
+  const parsedLooseEntry = recipeEntrySchema.safeParse(raw);
+  if (parsedLooseEntry.success) {
+    const r = parsedLooseEntry.data;
+    return [
+      {
+        id: r.id,
+        category: r.category,
+        station: r.station,
+        ingredients: r.ingredients.map(toIngredientSlot),
+        output: { itemId: r.output.itemId, count: r.output.count },
+      },
+    ];
+  }
+
   const parsed = recipesFileSchema.parse(raw);
   const out: RecipeDefinition[] = [];
   for (const r of parsed.recipes) {

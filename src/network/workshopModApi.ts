@@ -11,6 +11,7 @@ import {
   normalizeWorkshopRowModType,
 } from "../mods/workshopTypes";
 import { MOD_PAGE_SIZE } from "../core/constants";
+import { parseJsoncText } from "../core/jsonc";
 
 function asObjectArray(raw: unknown): Record<string, unknown>[] {
   if (!Array.isArray(raw)) {
@@ -28,7 +29,7 @@ function modListFromRpcJson(data: unknown): ModListEntry[] {
     rows = data;
   } else if (typeof data === "string") {
     try {
-      const parsed = JSON.parse(data) as unknown;
+      const parsed = parseJsoncText(data, "list_stratum_mods rpc payload") as unknown;
       rows = Array.isArray(parsed) ? parsed : [];
     } catch {
       rows = [];
@@ -115,7 +116,7 @@ export async function getLatestPublishedStratumModByModId(
   let parsed: unknown = data;
   if (typeof data === "string") {
     try {
-      parsed = JSON.parse(data) as unknown;
+      parsed = parseJsoncText(data, "latest mod rpc payload") as unknown;
     } catch {
       return null;
     }
@@ -163,7 +164,7 @@ export async function getStratumModJson(
   let parsed: unknown = data;
   if (typeof data === "string") {
     try {
-      parsed = JSON.parse(data) as unknown;
+      parsed = parseJsoncText(data, "get_stratum_mod rpc payload") as unknown;
     } catch {
       return null;
     }
@@ -210,7 +211,7 @@ export async function listStratumModComments(
   let rowsRaw: unknown = data;
   if (typeof data === "string") {
     try {
-      rowsRaw = JSON.parse(data) as unknown;
+      rowsRaw = parseJsoncText(data, "list_stratum_mod_comments rpc payload") as unknown;
     } catch {
       return [];
     }

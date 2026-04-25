@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:bucket_from_iron_ingots",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:iron_ingot",
+        "count": 3
+      }
+    ],
+    "output": {
+      "itemId": "stratum:bucket",
+      "count": 1
+    }
+  }
+}

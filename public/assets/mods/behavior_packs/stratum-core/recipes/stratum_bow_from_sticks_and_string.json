@@ -1,0 +1,22 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:bow_from_sticks_and_string",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:stick",
+        "count": 3
+      },
+      {
+        "itemId": "stratum:string",
+        "count": 3
+      }
+    ],
+    "output": {
+      "itemId": "stratum:bow",
+      "count": 1
+    }
+  }
+}

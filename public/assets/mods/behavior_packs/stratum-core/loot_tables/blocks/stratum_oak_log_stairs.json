@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:oak_log_stairs",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:oak_log_stairs",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 1
+      }
+    ]
+  }
+}

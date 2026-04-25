@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:chiseled_stone_bricks_at_stonecutter",
+    "category": "Stonecutter",
+    "station": "stratum:stonecutter",
+    "ingredients": [
+      {
+        "itemId": "stratum:stone_bricks",
+        "count": 1
+      }
+    ],
+    "output": {
+      "itemId": "stratum:chiseled_stone_bricks",
+      "count": 1
+    }
+  }
+}

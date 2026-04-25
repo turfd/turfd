@@ -19,13 +19,59 @@ const lootTableSchema = z
   .object({
     entries: z.array(lootEntrySchema),
     roll: z.enum(["each", "one_of"]).optional(),
+    picksMin: z.number().int().positive().optional(),
+    picksMax: z.number().int().positive().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.picksMin !== undefined && value.roll !== "one_of") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "picksMin is only valid when roll is 'one_of'.",
+        path: ["picksMin"],
+      });
+    }
+    if (value.picksMax !== undefined && value.roll !== "one_of") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "picksMax is only valid when roll is 'one_of'.",
+        path: ["picksMax"],
+      });
+    }
+    if (
+      value.picksMin !== undefined &&
+      value.picksMax !== undefined &&
+      value.picksMax < value.picksMin
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "picksMax must be >= picksMin.",
+        path: ["picksMax"],
+      });
+    }
+  });
 
 const lootFileSchema = z
   .object({
     format_version: z.literal("1.0.0"),
     loot_tables: z.record(z.string(), lootTableSchema),
+  })
+  .strict();
+
+const singleLootTableFileSchema = z
+  .object({
+    format_version: z.literal("1.0.0"),
+    table_id: z.string(),
+    table: lootTableSchema,
+  })
+  .strict();
+
+const inlineSingleLootTableFileSchema = z
+  .object({
+    format_version: z.literal("1.0.0"),
+    identifier: z.string(),
+    entries: z.array(lootEntrySchema),
+    roll: z.enum(["each", "one_of"]).optional(),
   })
   .strict();
 
@@ -44,6 +90,68 @@ function normalizeEntry(raw: z.infer<typeof lootEntrySchema>): LootEntry {
 }
 
 export function parseLootTablesJson(raw: unknown): LootTablesFile {
+  const parsedMany = lootFileSchema.safeParse(raw);
+  if (parsedMany.success) {
+    const loot_tables: Record<string, LootTable> = {};
+    for (const [key, table] of Object.entries(parsedMany.data.loot_tables)) {
+      const t: LootTable = {
+        entries: table.entries.map(normalizeEntry),
+      };
+      if (table.roll !== undefined) {
+        t.roll = table.roll;
+      }
+      if (table.picksMin !== undefined) {
+        t.picksMin = table.picksMin;
+      }
+      if (table.picksMax !== undefined) {
+        t.picksMax = table.picksMax;
+      }
+      loot_tables[key] = t;
+    }
+    return {
+      format_version: "1.0.0",
+      loot_tables,
+    };
+  }
+
+  const parsedSingle = singleLootTableFileSchema.safeParse(raw);
+  if (parsedSingle.success) {
+    const t: LootTable = {
+      entries: parsedSingle.data.table.entries.map(normalizeEntry),
+    };
+    if (parsedSingle.data.table.roll !== undefined) {
+      t.roll = parsedSingle.data.table.roll;
+    }
+    if (parsedSingle.data.table.picksMin !== undefined) {
+      t.picksMin = parsedSingle.data.table.picksMin;
+    }
+    if (parsedSingle.data.table.picksMax !== undefined) {
+      t.picksMax = parsedSingle.data.table.picksMax;
+    }
+    return {
+      format_version: "1.0.0",
+      loot_tables: {
+        [parsedSingle.data.table_id]: t,
+      },
+    };
+  }
+
+  const parsedInlineSingle = inlineSingleLootTableFileSchema.safeParse(raw);
+  if (parsedInlineSingle.success) {
+    const t: LootTable = {
+      entries: parsedInlineSingle.data.entries.map(normalizeEntry),
+    };
+    if (parsedInlineSingle.data.roll !== undefined) {
+      t.roll = parsedInlineSingle.data.roll;
+    }
+    return {
+      format_version: "1.0.0",
+      loot_tables: {
+        [parsedInlineSingle.data.identifier]: t,
+      },
+    };
+  }
+
   const parsed = lootFileSchema.parse(raw);
   const loot_tables: Record<string, LootTable> = {};
   for (const [key, table] of Object.entries(parsed.loot_tables)) {
@@ -52,6 +160,12 @@ export function parseLootTablesJson(raw: unknown): LootTablesFile {
     };
     if (table.roll !== undefined) {
       t.roll = table.roll;
+    }
+    if (table.picksMin !== undefined) {
+      t.picksMin = table.picksMin;
+    }
+    if (table.picksMax !== undefined) {
+      t.picksMax = table.picksMax;
     }
     loot_tables[key] = t;
   }
@@ -67,6 +181,9 @@ export function registerLootTablesForBlocks(
   resolver: LootResolver,
   data: LootTablesFile,
 ): void {
+  for (const [tableId, table] of Object.entries(data.loot_tables)) {
+    resolver.registerNamedTable(tableId, table);
+  }
   for (let i = 0; i < registry.size; i++) {
     const block = registry.getById(i);
     const key = block.lootTable;

@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:birch_door",
+  "table": {
+    "entries": [
+      {
+        "itemKey": "stratum:birch_door",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 1
+      }
+    ]
+  }
+}

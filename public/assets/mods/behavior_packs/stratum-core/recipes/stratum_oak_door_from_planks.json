@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:oak_door_from_planks",
+    "category": "Workbench",
+    "station": "stratum:crafting_table",
+    "ingredients": [
+      {
+        "itemId": "stratum:oak_planks",
+        "count": 6
+      }
+    ],
+    "output": {
+      "itemId": "stratum:oak_door",
+      "count": 1
+    }
+  }
+}

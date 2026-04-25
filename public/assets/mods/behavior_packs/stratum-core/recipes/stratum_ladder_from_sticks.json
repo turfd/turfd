@@ -1,0 +1,18 @@
+{
+  "format_version": "1.0.0",
+  "recipe": {
+    "id": "stratum:ladder_from_sticks",
+    "category": "Basic",
+    "station": null,
+    "ingredients": [
+      {
+        "itemId": "stratum:stick",
+        "count": 7
+      }
+    ],
+    "output": {
+      "itemId": "stratum:ladder",
+      "count": 3
+    }
+  }
+}

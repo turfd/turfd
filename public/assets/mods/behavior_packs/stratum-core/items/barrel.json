@@ -1,0 +1,14 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:barrel"
+    },
+    "components": {
+      "stratum:display_name": "Barrel",
+      "stratum:texture_key": "barrel",
+      "stratum:places_block": "stratum:barrel",
+      "stratum:numeric_id": 150
+    }
+  }
+}

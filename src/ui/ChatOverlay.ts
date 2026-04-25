@@ -15,10 +15,14 @@ const CMD_HINTS: Record<string, string> = {
   unmute: "/unmute <player|uuid> — Unmute a player",
   ping: "/ping — Round-trip time to the host (when connected)",
   give: "/give @s <item> [count] — Give items (host / OP); /give <player> <item> [count]",
+  tp: "/tp <x> <y> or /tp <player|@s> <x> <y> — Teleport self/players (host / OP)",
   summon:
     "/summon <sheep|pig|duck|zombie|slime> [blockX] [woolColor] — Mobs at feet or surface column; sheep wool color optional (host / OP)",
+  structure:
+    "/structure export | /structure place <id> [x y] — Export selection or place a structure (host / OP, cheats)",
   op: "/op <player> — Grant operator (host only)",
   deop: "/deop <player|uuid> — Revoke operator (host only)",
+  wand: "/wand — Toggle wooden-axe wand selection mode (host / OP, cheats)",
 };
 
 const CMD_ORDER = [
@@ -30,9 +34,12 @@ const CMD_ORDER = [
   "op",
   "ping",
   "summon",
+  "structure",
+  "tp",
   "unban",
   "unmute",
   "version",
+  "wand",
 ] as const;
 
 const MAX_LOG_LINES = 120;

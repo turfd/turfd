@@ -5,6 +5,10 @@ export type ChestStack = ItemStack | null;
 
 export type ChestTileState = {
   readonly slots: ChestStack[];
+  /** Optional deferred loot-table id for one-time roll when opened. */
+  readonly lootTableId?: string;
+  /** True after loot has been rolled once from {@link lootTableId}. */
+  readonly lootRolled?: boolean;
 };
 
 export function chestCellKey(wx: number, wy: number): string {
@@ -16,6 +20,12 @@ export function createEmptyChestTile(slotCount: number): ChestTileState {
 }
 
 export function chestTilesEqual(a: ChestTileState, b: ChestTileState): boolean {
+  if ((a.lootTableId ?? "") !== (b.lootTableId ?? "")) {
+    return false;
+  }
+  if ((a.lootRolled ?? false) !== (b.lootRolled ?? false)) {
+    return false;
+  }
   if (a.slots.length !== b.slots.length) {
     return false;
   }

@@ -4,6 +4,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { parseJsoncText } from "../core/jsonc";
 
 export type ListedRoom = {
   room_code: string;
@@ -36,7 +37,7 @@ function roomListRowsFromRpc(data: unknown): Record<string, unknown>[] {
     rows = data;
   } else if (typeof data === "string") {
     try {
-      const parsed = JSON.parse(data) as unknown;
+      const parsed = parseJsoncText(data, "list_stratum_rooms rpc payload") as unknown;
       rows = Array.isArray(parsed) ? parsed : [];
     } catch {
       rows = [];

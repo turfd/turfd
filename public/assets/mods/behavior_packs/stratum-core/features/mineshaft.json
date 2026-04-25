@@ -1,0 +1,43 @@
+{
+  "format_version": "1.0.0",
+  // Example underground structure feature config.
+  // Copy this file, update description.identifier, and point structures[] to your own ids.
+  // For cave content use pass="underground" + min_depth/max_depth.
+  // For terrain-aligned content use pass="surface".
+  // Keep frequency conservative (large structures often start around 0.05-0.35).
+  "stratum:feature": {
+    "description": {
+      // Feature id referenced by the registry.
+      "identifier": "stratum:mineshaft_feature",
+      // Candidate structures: one is chosen deterministically per chunk.
+      "structures": [
+        "stratum:mineshaft",
+        "stratum:mineshaft2"
+      ]
+    },
+    "placement": {
+      "pass": "underground",
+      "biomes": [
+        "any"
+      ],
+      "min_depth": 20,
+      "max_depth": 90,
+      // Chance (0..1) this feature attempts placement per chunk.
+      // Performance note: fewer structures/light emitters means less lighting + mesh work.
+      "frequency": 0.15,
+      // top_left means structure (0,0) aligns to the chosen world anchor.
+      "anchor": "top_left",
+      "terrain": {
+        // "none" keeps terrain as-is. "flatten" is mainly useful for surface structures.
+        "mode": "none",
+        "pad_x": 0,
+        "pad_y": 0,
+        "max_slope": 999
+      },
+      "clearance": {
+        "height": 0
+      },
+      "suppress_vegetation": false
+    }
+  }
+}

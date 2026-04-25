@@ -6,6 +6,8 @@ import type { GameEvent } from "../core/types";
 import type { Player } from "../entities/Player";
 import type { World } from "../world/World";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
+import type { WorldGameMode } from "../core/types";
+import { normalizeWorldGameMode } from "../core/types";
 import { ITEM_ID_LAYOUT_REVISION_CURRENT } from "../items/itemIdLayoutMigration";
 import {
   IndexedDBStore,
@@ -21,6 +23,8 @@ export class SaveGame {
   private readonly worldName: string;
   private readonly bus: EventBus;
   private readonly getWorldTimeMs: () => number;
+  private readonly getWorldGameMode: (() => WorldGameMode) | null;
+  private readonly getCheatsEnabled: (() => boolean) | null;
   /** Returns a small JPEG data URL for the world list, or null if capture fails. */
   private readonly capturePreview: (() => string | null) | null;
   /** When set (host / solo), merged into world metadata on save. */
@@ -84,6 +88,8 @@ export class SaveGame {
     worldName: string,
     bus: EventBus,
     getWorldTimeMs: () => number,
+    getWorldGameMode?: () => WorldGameMode,
+    getCheatsEnabled?: () => boolean,
     capturePreview?: () => string | null,
     getModerationForSave?: () => WorldModerationPersisted | undefined,
     mergeMultiplayerLastPositions?: (
@@ -119,6 +125,8 @@ export class SaveGame {
     this.worldName = worldName;
     this.bus = bus;
     this.getWorldTimeMs = getWorldTimeMs;
+    this.getWorldGameMode = getWorldGameMode ?? null;
+    this.getCheatsEnabled = getCheatsEnabled ?? null;
     this.capturePreview = capturePreview ?? null;
     this.getModerationForSave = getModerationForSave ?? null;
     this.mergeMultiplayerLastPositions = mergeMultiplayerLastPositions ?? null;
@@ -225,6 +233,10 @@ export class SaveGame {
       name: existing?.name ?? this.worldName,
       description: existing?.description,
       seed: this.world.getSeed(),
+      gameMode: normalizeWorldGameMode(
+        this.getWorldGameMode?.() ?? existing?.gameMode,
+      ),
+      enableCheats: this.getCheatsEnabled?.() ?? existing?.enableCheats ?? false,
       createdAt: existing?.createdAt ?? now,
       lastPlayedAt: now,
       playerX: playerFeetForSave.x,

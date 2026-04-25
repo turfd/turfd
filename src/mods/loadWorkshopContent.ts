@@ -22,8 +22,16 @@ import {
   registerEntityLootTables,
   registerLootTablesForBlocks,
 } from "./parseLootTablesJson";
+import {
+  parseStructureFeatureJson,
+  parseStructureJson,
+  type ParsedStructure,
+  type ParsedStructureFeature,
+} from "../world/structure/structureSchema";
+import { structureIdFromPath } from "../world/structure/structureIdFromPath";
 import type { LootResolver } from "../items/LootResolver";
 import type { WorkshopModRef } from "../persistence/IndexedDBStore";
+import { parseJsoncText } from "../core/jsonc";
 
 const WorkshopAtlasPatchSchema = z
   .object({
@@ -58,7 +66,33 @@ function readUtf8Json(files: Record<string, Uint8Array>, rel: string): unknown {
     throw new Error(`Missing file in mod ZIP: ${rel}`);
   }
   const text = new TextDecoder().decode(u);
-  return JSON.parse(text) as unknown;
+  return parseJsoncText(text, rel);
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
+
+function discoverZipJsonPaths(files: Record<string, Uint8Array>, prefix: string): string[] {
+  const exactPrefix = `${prefix}/`;
+  const out: string[] = [];
+  for (const p of Object.keys(files)) {
+    if (!p.startsWith(exactPrefix) || !p.endsWith(".json")) {
+      continue;
+    }
+    out.push(p);
+  }
+  return sortedUnique(out);
+}
+
+function selectManifestOrDiscoveredPaths(
+  manifestEntries: readonly string[],
+  discovered: readonly string[],
+): string[] {
+  if (manifestEntries.length > 0) {
+    return sortedUnique(manifestEntries);
+  }
+  return sortedUnique(discovered);
 }
 
 export async function collectWorkshopCachedMods(
@@ -90,7 +124,11 @@ export async function loadWorkshopBlocksIntoRegistry(
     if (!shouldLoadBlocks(c.manifest)) {
       continue;
     }
-    for (const path of c.manifest.blocks) {
+    const blockPaths = selectManifestOrDiscoveredPaths(
+      c.manifest.blocks,
+      discoverZipJsonPaths(c.files, "blocks"),
+    );
+    for (const path of blockPaths) {
       jobs.push({ modId: c.modId, path });
     }
   }
@@ -123,7 +161,11 @@ export function loadWorkshopItemsIntoRegistry(
     if (!shouldLoadBlocks(c.manifest)) {
       continue;
     }
-    for (const path of c.manifest.items) {
+    const itemPaths = selectManifestOrDiscoveredPaths(
+      c.manifest.items,
+      discoverZipJsonPaths(c.files, "items"),
+    );
+    for (const path of itemPaths) {
       const raw = readUtf8Json(c.files, path);
       parsed.push(parseItemJson(raw));
     }
@@ -140,7 +182,11 @@ export function loadWorkshopLootIntoResolver(
     if (!shouldLoadBlocks(c.manifest)) {
       continue;
     }
-    for (const rel of c.manifest.loot) {
+    const lootPaths = selectManifestOrDiscoveredPaths(
+      c.manifest.loot,
+      discoverZipJsonPaths(c.files, "loot_tables"),
+    );
+    for (const rel of lootPaths) {
       const raw = readUtf8Json(c.files, rel);
       const data = parseLootTablesJson(raw);
       registerLootTablesForBlocks(registry, lootResolver, data);
@@ -158,7 +204,11 @@ export function loadWorkshopRecipesIntoRegistry(
     if (!shouldLoadBlocks(c.manifest)) {
       continue;
     }
-    for (const path of c.manifest.recipes) {
+    const recipePaths = selectManifestOrDiscoveredPaths(
+      c.manifest.recipes,
+      discoverZipJsonPaths(c.files, "recipes"),
+    );
+    for (const path of recipePaths) {
       const raw = readUtf8Json(c.files, path);
       const recipes = parseRecipeJson(raw);
       for (const recipe of recipes) {
@@ -186,6 +236,48 @@ export function loadWorkshopRecipesIntoRegistry(
       recipeRegistry.registerAll(recipes);
     }
   }
+}
+
+export function loadWorkshopStructures(
+  cachedMods: readonly CachedMod[],
+): Map<string, ParsedStructure> {
+  const out = new Map<string, ParsedStructure>();
+  for (const c of cachedMods) {
+    if (!shouldLoadBlocks(c.manifest)) {
+      continue;
+    }
+    const structurePaths = selectManifestOrDiscoveredPaths(
+      c.manifest.structures,
+      discoverZipJsonPaths(c.files, "structures"),
+    );
+    for (const rel of structurePaths) {
+      const raw = readUtf8Json(c.files, rel);
+      const parsed = parseStructureJson(raw);
+      const id = structureIdFromPath(rel);
+      out.set(id, parsed);
+    }
+  }
+  return out;
+}
+
+export function loadWorkshopFeatures(
+  cachedMods: readonly CachedMod[],
+): ParsedStructureFeature[] {
+  const out: ParsedStructureFeature[] = [];
+  for (const c of cachedMods) {
+    if (!shouldLoadBlocks(c.manifest)) {
+      continue;
+    }
+    const featurePaths = selectManifestOrDiscoveredPaths(
+      c.manifest.features,
+      discoverZipJsonPaths(c.files, "features"),
+    );
+    for (const rel of featurePaths) {
+      const raw = readUtf8Json(c.files, rel);
+      out.push(parseStructureFeatureJson(raw));
+    }
+  }
+  return out;
 }
 
 export async function applyWorkshopTexturesToBlockAtlas(

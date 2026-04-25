@@ -16,7 +16,7 @@ import {
   getDamageHitSound,
 } from "../audio/damageSounds";
 import type { EventBus } from "../core/EventBus";
-import type { GameEvent } from "../core/types";
+import type { GameEvent, WorldGameMode } from "../core/types";
 import {
   ARROW_SPEED_MAX_PX,
   ARROW_SPEED_MIN_PX,
@@ -123,6 +123,12 @@ const SPRINT_JUMP_HORIZONTAL_BLOCKS_PER_SEC = 7.127;
 
 const WALK_SPEED = PLAYER_WALK_SPEED_PX;
 const SPRINT_SPEED = PLAYER_SPRINT_SPEED_PX;
+const CREATIVE_FLY_SPEED = SPRINT_SPEED;
+const CREATIVE_FLY_SPRINT_MULT = 1.35;
+const CREATIVE_FLY_CTRL_MULT = 1.7;
+const CREATIVE_FLY_TOGGLE_TAP_WINDOW_SEC = 0.3;
+const CREATIVE_FLY_ACCEL = 1600;
+const CREATIVE_FLY_DECEL = 520;
 /** Sprint + airborne + strafe: higher horizontal cap so repeated sprint-jumps match ~7.127 m/s average. */
 const SPRINT_AIR_SPEED = SPRINT_JUMP_HORIZONTAL_BLOCKS_PER_SEC * BLOCK_SIZE;
 const GRAVITY = 640;
@@ -469,8 +475,6 @@ export class Player {
   private fallDistanceBlocks = 0;
   /** Previous physics tick ended overlapping a ladder (smooths one-frame AABB gaps for fall damage). */
   private _prevLadderOverlap = false;
-  /** Throttle system chat hint when mining without correct tool (no drops). */
-  private _lastWrongToolNoDropHintMs = 0;
   /** Previous tick: AABB overlapped water (for enter/exit splash). */
   private wasInWater = false;
   /** Accumulator for periodic {@link WATER_SWIM_SFX_INTERVAL_SEC} swim strokes. */
@@ -481,6 +485,9 @@ export class Player {
   private lastMovedBlockY = Number.NaN;
   /** Optional callback to check if any mob overlaps the given AABB (for block placement). */
   private _mobOverlapCheck: ((aabb: AABB) => boolean) | null = null;
+  private _gameMode: WorldGameMode = "survival";
+  private _sandboxFlightEnabled = false;
+  private _sandboxFlightTapWindowSec = 0;
 
   constructor(registry: BlockRegistry, bus: EventBus, audio: AudioEngine, itemRegistry: ItemRegistry) {
     this.bus = bus;
@@ -489,6 +496,30 @@ export class Player {
     this.itemRegistry = itemRegistry;
     this.inventory = new PlayerInventory(itemRegistry);
     this.airId = registry.getByIdentifier("stratum:air").id;
+  }
+
+  setGameMode(mode: WorldGameMode): void {
+    this._gameMode = mode;
+    if (mode !== "sandbox") {
+      this._sandboxFlightEnabled = false;
+      this._sandboxFlightTapWindowSec = 0;
+      return;
+    }
+    if (this.state.dead) {
+      this.state.dead = false;
+      this.state.deathAnimT = null;
+      this.state.health = PLAYER_MAX_HEALTH;
+      this.state.temporaryHealth = 0;
+      this.state.temporaryHealthRemainSec = 0;
+      this.state.damageTintRemainSec = 0;
+    }
+  }
+
+  private consumeOneFromHotbarForUse(hotbarSlot: number): boolean {
+    if (this._gameMode === "sandbox") {
+      return true;
+    }
+    return this.inventory.consumeOneFromSlot(hotbarSlot);
   }
 
   /** Sets the callback used to check if any mob overlaps a given AABB during block placement. */
@@ -589,6 +620,9 @@ export class Player {
     amount: number,
     opts?: { skipHurtSound?: boolean; skipArmor?: boolean },
   ): void {
+    if (this._gameMode === "sandbox") {
+      return;
+    }
     if (this.state.dead || amount <= 0) {
       return;
     }
@@ -706,7 +740,7 @@ export class Player {
     if (eatHp === undefined) {
       return;
     }
-    if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+    if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
       return;
     }
     if (def.eatTemporaryDurationSec !== undefined) {
@@ -883,6 +917,25 @@ export class Player {
     state.prevPosition.y = state.position.y;
     state.coyoteTimeRemaining = Math.max(0, state.coyoteTimeRemaining - dt);
     state.jumpBufferRemaining = Math.max(0, state.jumpBufferRemaining - dt);
+    if (this._gameMode === "sandbox") {
+      this._sandboxFlightTapWindowSec = Math.max(
+        0,
+        this._sandboxFlightTapWindowSec - dt,
+      );
+      if (input.isJustPressed("jump")) {
+        if (this._sandboxFlightTapWindowSec > 0) {
+          this._sandboxFlightEnabled = !this._sandboxFlightEnabled;
+          this._sandboxFlightTapWindowSec = 0;
+          state.jumpBufferRemaining = 0;
+          state.coyoteTimeRemaining = 0;
+          if (!this._sandboxFlightEnabled) {
+            state.velocity.y = 0;
+          }
+        } else {
+          this._sandboxFlightTapWindowSec = CREATIVE_FLY_TOGGLE_TAP_WINDOW_SEC;
+        }
+      }
+    }
 
     let moveInput = 0;
     if (input.isDown("left")) {
@@ -891,6 +944,50 @@ export class Player {
     if (input.isDown("right")) {
       moveInput += 1;
     }
+    if (this._gameMode === "sandbox" && this._sandboxFlightEnabled) {
+      const descendHeld = input.isDown("sprint");
+      const flyFastHeld =
+        input.isKeyCodeDown("ControlLeft") || input.isKeyCodeDown("ControlRight");
+      const flyInput =
+        (input.isDown("jump") ? -1 : 0) + (descendHeld ? 1 : 0);
+      const speed =
+        CREATIVE_FLY_SPEED *
+        (descendHeld ? CREATIVE_FLY_SPRINT_MULT : 1) *
+        (flyFastHeld ? CREATIVE_FLY_CTRL_MULT : 1);
+      const targetVx = moveInput * speed;
+      const targetVy = flyInput * speed;
+      state.velocity.x = approach(
+        state.velocity.x,
+        targetVx,
+        (moveInput !== 0 ? CREATIVE_FLY_ACCEL : CREATIVE_FLY_DECEL) * dt,
+      );
+      state.velocity.y = approach(
+        state.velocity.y,
+        targetVy,
+        (flyInput !== 0 ? CREATIVE_FLY_ACCEL : CREATIVE_FLY_DECEL) * dt,
+      );
+      const mover = feetToScreenAABB(state.position);
+      const dx = state.velocity.x * dt;
+      const dy = state.velocity.y * dt;
+      const query = createAABB(
+        Math.min(mover.x, mover.x + dx) - 4,
+        Math.min(mover.y, mover.y + dy) - 4,
+        Math.abs(dx) + mover.width + 8,
+        Math.abs(dy) + mover.height + 8,
+      );
+      getSolidAABBs(world, query, this.solidScratch);
+      sweepAABB(mover, dx, dy, this.solidScratch);
+      const feet = screenAABBTofeet(mover);
+      state.position.x = feet.x;
+      state.position.y = feet.y;
+      state.onGround = isOnGround(mover, this.solidScratch);
+      this.fallDistanceBlocks = 0;
+      this.wasInWater = false;
+      this.waterSwimSfxAccum = 0;
+      this._prevLadderOverlap = false;
+      state.jumpBufferRemaining = 0;
+      state.coyoteTimeRemaining = 0;
+    } else {
     const sprintHeld = input.isDown("sprint");
     const inWater = playerAabbOverlapsWater(world, state.position);
     const waterMult = inWater ? PLAYER_WATER_SPEED_MULT : 1;
@@ -1036,7 +1133,10 @@ export class Player {
           });
         }
       }
-      let fallDmg = playerFallDamageFromDistance(this.fallDistanceBlocks);
+      let fallDmg =
+        this._gameMode === "sandbox"
+          ? 0
+          : playerFallDamageFromDistance(this.fallDistanceBlocks);
       if (fallDmg > 0 && world.getRegistry().isRegistered("stratum:water")) {
         const wDepth = maxWaterDepthAboveFooting(
           world,
@@ -1127,6 +1227,7 @@ export class Player {
       this.waterSwimSfxAccum = 0;
     }
     this.wasInWater = inWaterAfterMove;
+    }
 
     if (moveInput > 0) {
       state.facingRight = true;
@@ -1296,7 +1397,10 @@ export class Player {
         const heldSlot = state.hotbarSlot % HOTBAR_SIZE;
         const heldStack = this.inventory.getStack(heldSlot);
         const heldItemDef = heldStack !== null ? this.itemRegistry.getById(heldStack.itemId) : undefined;
-        const breakTime = getBreakTimeSeconds(def, heldItemDef);
+        const breakTime =
+          this._gameMode === "sandbox"
+            ? Number.EPSILON
+            : getBreakTimeSeconds(def, heldItemDef);
 
         if (
           state.breakTarget !== null &&
@@ -1304,7 +1408,7 @@ export class Player {
           state.breakTarget.wy === wy &&
           state.breakTarget.layer === layer
         ) {
-          state.breakAccum += dt;
+          state.breakAccum += this._gameMode === "sandbox" ? breakTime : dt;
           state.breakProgress = Math.min(
             1,
             state.breakAccum / breakTime,
@@ -1346,21 +1450,6 @@ export class Player {
               this.startHandSwingVisual();
             } else {
             const dropsLoot = canHarvestDrops(def, heldItemDef);
-            if (
-              !dropsLoot &&
-              def.requiresToolForDrops &&
-              layer === "fg"
-            ) {
-              const now = performance.now();
-              if (now - this._lastWrongToolNoDropHintMs > 3500) {
-                this._lastWrongToolNoDropHintMs = now;
-                this.bus.emit({
-                  type: "ui:chat-line",
-                  kind: "system",
-                  text: "Wrong tool — no drops from this block.",
-                } satisfies GameEvent);
-              }
-            }
             if (layer === "bg") {
               if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
               world.setBackgroundBlock(wx, wy, 0);
@@ -1448,7 +1537,10 @@ export class Player {
               if (def.identifier === "stratum:furnace") {
                 world.spawnFurnaceItemDropsAt(wx, wy);
               }
-              if (def.identifier === "stratum:chest") {
+            if (
+              def.identifier === "stratum:chest" ||
+              def.identifier === "stratum:barrel"
+            ) {
                 world.destroyChestForPlayerBreak(wx, wy, dropsLoot);
               } else {
                 if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
@@ -1475,8 +1567,13 @@ export class Player {
           }
         } else {
           state.breakTarget = { wx, wy, layer };
-          state.breakAccum = 0;
-          state.breakProgress = 0;
+          if (this._gameMode === "sandbox") {
+            state.breakAccum = breakTime;
+            state.breakProgress = 1;
+          } else {
+            state.breakAccum = 0;
+            state.breakProgress = 0;
+          }
           this.miningDigSoundAccum = 0;
           this.sfxAtBlock(wx, wy, getDigSound(def.material), {
             volume: 0.5,
@@ -1546,7 +1643,10 @@ export class Player {
         cell.id === this.airId || cell.replaceable || cell.water;
 
       if (placeEdgeWithInventoryOpen && !canPlaceInCell) {
-        if (cell.identifier === "stratum:chest") {
+        if (
+          cell.identifier === "stratum:chest" ||
+          cell.identifier === "stratum:barrel"
+        ) {
           this.bus.emit({
             type: "chest:open-request",
             wx,
@@ -1704,7 +1804,7 @@ export class Player {
                       world.setBlock(wx, wy, this.airId);
                     }
                     if (world.setBlock(wx, wy, wheat0)) {
-                      if (this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                      if (this.consumeOneFromHotbarForUse(hotbarSlot)) {
                         placeHandled = true;
                         this.startHandSwingVisual();
                         this.sfxAtBlock(wx, wy, getPlaceSound("grass"), {
@@ -1784,7 +1884,7 @@ export class Player {
                 );
                 this.startHandSwingVisual();
               } else if (world.setBackgroundBlock(wx, wy, placesBlockId)) {
-                if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
                   world.setBackgroundBlock(wx, wy, 0);
                 } else {
                   this.startHandSwingVisual();
@@ -1925,7 +2025,7 @@ export class Player {
                     // vertical bounds
                   } else if (!world.setBlock(wx, wy + 1, topId)) {
                     world.setBlock(wx, wy, 0);
-                  } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                  } else if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
                     world.setBlock(wx, wy, 0);
                     world.setBlock(wx, wy + 1, 0);
                   } else {
@@ -2030,7 +2130,7 @@ export class Player {
                         })
                       ) {
                         world.setBlock(wx, wy, 0);
-                      } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                      } else if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
                         world.setBlock(wx, wy, 0);
                         world.setBlock(hx, wy, 0);
                       } else {
@@ -2087,7 +2187,7 @@ export class Player {
                         world.setBlock(wx + ox, wy + oy, 0);
                       }
                     }
-                  } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                  } else if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
                     for (let oy = 0; oy < pv.height; oy++) {
                       for (let ox = 0; ox < pv.width; ox++) {
                         world.setBlock(wx + ox, wy + oy, 0);
@@ -2191,7 +2291,7 @@ export class Player {
                         })
                       ) {
                         world.setBlock(wx, wy, 0);
-                      } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                      } else if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
                         world.setBlock(wx, wy, 0);
                         world.setBlock(wx, wy + 1, 0);
                       } else {
@@ -2270,7 +2370,7 @@ export class Player {
                         : world.setBlock(wx, wy, placesBlockId);
                   if (!placedCellOk) {
                     // vertical bounds
-                  } else if (!this.inventory.consumeOneFromSlot(hotbarSlot)) {
+                  } else if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
                     world.setBlock(wx, wy, this.airId);
                   } else {
                     if (itemDef?.key === "stratum:water_bucket") {
@@ -2325,7 +2425,10 @@ export class Player {
             }
           }
         }
-      } else if (cell.identifier === "stratum:chest") {
+      } else if (
+        cell.identifier === "stratum:chest" ||
+        cell.identifier === "stratum:barrel"
+      ) {
         this.bus.emit({
           type: "chest:open-request",
           wx,

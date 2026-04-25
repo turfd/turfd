@@ -76,7 +76,12 @@ import {
   decodePaintingMeta,
 } from "./painting/paintingData";
 import { GeneratorContext } from "./gen/GeneratorContext";
-import { WorldGenerator } from "./gen/WorldGenerator";
+import {
+  WorldGenerator,
+  type GeneratedStructureEntity,
+} from "./gen/WorldGenerator";
+import type { ParsedStructure } from "./structure/structureSchema";
+import type { StructureFeatureEntry } from "./structure/StructureRegistry";
 import { resimulateWaterFromSources, tickWaterFlow } from "./water/WaterSimulation";
 import { createAABB, type AABB } from "../entities/physics/AABB";
 import { RemotePlayer } from "./entities/RemotePlayer";
@@ -286,6 +291,7 @@ export class World {
   private readonly _furnaceTiles = new Map<string, FurnaceTileState>();
 
   private _chestBlockId: number | null = null;
+  private _barrelBlockId: number | null = null;
   private readonly _chestTiles = new Map<string, ChestTileState>();
 
   /** Required to (de)serialize chest/furnace tiles with stable item keys; set before {@link init}. */
@@ -392,6 +398,16 @@ export class World {
   /** Enables queued-ingredient drops when the furnace block is destroyed (solo/host). */
   setSmeltingRegistryForQueueRefund(r: SmeltingRegistry): void {
     this._smeltingRegistryForQueueRefund = r;
+  }
+
+  setStructureFeatures(
+    features: Array<{
+      identifier: string;
+      structures: ParsedStructure[];
+      placement: StructureFeatureEntry["placement"];
+    }>,
+  ): void {
+    this.worldGen.setStructureFeatures(features);
   }
 
   /** Multiplayer client: load missing chunks from host instead of {@link WorldGenerator}. */
@@ -1390,10 +1406,7 @@ export class World {
     if (oldId !== this.airId && !this.registry.getById(oldId).water) {
       return false;
     }
-    if (
-      this._chestBlockId !== null &&
-      (oldId === this._chestBlockId || newId === this._chestBlockId)
-    ) {
+    if (this.isStorageBlockId(oldId) || this.isStorageBlockId(newId)) {
       return false;
     }
     const fid = this._furnaceBlockId;
@@ -1435,11 +1448,7 @@ export class World {
     ) {
       return true;
     }
-    if (
-      this._chestBlockId !== null &&
-      oldId === this._chestBlockId &&
-      id !== this._chestBlockId
-    ) {
+    if (this.isStorageBlockId(oldId) && !this.isStorageBlockId(id)) {
       this.breakChestBeforeBlockChange(wx, wy);
     }
     const coord = worldToChunk(wx, wy);
@@ -1450,14 +1459,16 @@ export class World {
     const newMeta = opts?.cellMetadata ?? 0;
     chunk.metadata[localIndex(lx, ly)] = newMeta;
     this.syncFurnaceTileAfterBlockChange(wx, wy, id);
-    if (this._chestBlockId !== null) {
+    if (this._chestBlockId !== null || this._barrelBlockId !== null) {
       if (id === this._chestBlockId) {
         tryMergeChestAfterPlace(wx, wy, this.chestMergeContext());
+        this.ensureChestTileAt(wx, wy);
+      } else if (id === this._barrelBlockId) {
         this.ensureChestTileAt(wx, wy);
       } else {
         this._chestTiles.delete(chestCellKey(wx, wy));
       }
-      if (oldId === this._chestBlockId || id === this._chestBlockId) {
+      if (this.isStorageBlockId(oldId) || this.isStorageBlockId(id)) {
         this.markChunksDirtyForHorizontalChestNeighbors(wx, wy);
       }
     }
@@ -1733,12 +1744,7 @@ export class World {
     ) {
       return true;
     }
-    if (
-      !opts?.skipChestBreak &&
-      this._chestBlockId !== null &&
-      oldId === this._chestBlockId &&
-      id !== this._chestBlockId
-    ) {
+    if (!opts?.skipChestBreak && this.isStorageBlockId(oldId) && !this.isStorageBlockId(id)) {
       this.breakChestBeforeBlockChange(wx, wy);
     }
     const coord = worldToChunk(wx, wy);
@@ -1748,14 +1754,16 @@ export class World {
     setBlock(chunk, lx, ly, id);
     chunk.metadata[localIndex(lx, ly)] = 0;
     this.syncFurnaceTileAfterBlockChange(wx, wy, id);
-    if (this._chestBlockId !== null) {
+    if (this._chestBlockId !== null || this._barrelBlockId !== null) {
       if (id === this._chestBlockId) {
         tryMergeChestAfterPlace(wx, wy, this.chestMergeContext());
+        this.ensureChestTileAt(wx, wy);
+      } else if (id === this._barrelBlockId) {
         this.ensureChestTileAt(wx, wy);
       } else {
         this._chestTiles.delete(chestCellKey(wx, wy));
       }
-      if (oldId === this._chestBlockId || id === this._chestBlockId) {
+      if (this.isStorageBlockId(oldId) || this.isStorageBlockId(id)) {
         this.markChunksDirtyForHorizontalChestNeighbors(wx, wy);
       }
     }
@@ -1924,6 +1932,69 @@ export class World {
     this._activeWaterChunkKeys.clear();
   }
 
+  private _toChestItemStackFromStructureEntity(
+    slot: { key: string; count: number; damage?: number } | null,
+  ): ItemStack | null {
+    if (slot === null || slot.count <= 0) {
+      return null;
+    }
+    const item = this.requireItemRegistry().getByKey(slot.key);
+    if (item === undefined) {
+      return null;
+    }
+    return {
+      itemId: item.id,
+      count: slot.count,
+      ...(slot.damage !== undefined && slot.damage > 0 ? { damage: slot.damage } : {}),
+    };
+  }
+
+  private _findGeneratedContainerEntityAt(
+    wx: number,
+    wy: number,
+  ): Extract<GeneratedStructureEntity, { type: "container" }> | null {
+    const { cx, cy } = worldToChunk(wx, wy);
+    const entities = this.worldGen.getStructureEntitiesForChunk({ cx, cy });
+    for (let i = 0; i < entities.length; i++) {
+      const e = entities[i]!;
+      if (e.type === "container" && e.wx === wx && e.wy === wy) {
+        return e;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Materialize deterministic structure tile-entities for freshly generated chunks.
+   * This keeps worldgen barrels/chests wired to their deferred loot tables.
+   */
+  private _applyGeneratedStructureEntitiesForChunk(cx: number, cy: number): void {
+    const entities = this.worldGen.getStructureEntitiesForChunk({ cx, cy });
+    if (entities.length === 0) {
+      return;
+    }
+    for (let i = 0; i < entities.length; i++) {
+      const e: GeneratedStructureEntity = entities[i]!;
+      if (e.type === "furnace") {
+        this.setFurnaceTile(e.wx, e.wy, e.state as FurnaceTileState);
+        continue;
+      }
+      const anchor = this.getChestStorageAnchorForCell(e.wx, e.wy) ?? {
+        ax: e.wx,
+        ay: e.wy,
+      };
+      const rawItems = e.items ?? [];
+      const items = rawItems.map((s) => this._toChestItemStackFromStructureEntity(s));
+      if (items.length === 0) {
+        items.push(...Array.from({ length: CHEST_SINGLE_SLOTS }, () => null));
+      }
+      this.setChestTileAtAnchor(anchor.ax, anchor.ay, {
+        slots: items,
+        ...(e.lootTable !== undefined ? { lootTableId: e.lootTable, lootRolled: false } : {}),
+      });
+    }
+  }
+
   getChunkAt(wx: number, wy: number): Chunk | undefined {
     return this.chunks.getChunk(worldToChunk(wx, wy));
   }
@@ -1966,6 +2037,7 @@ export class World {
       this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
     } else {
       this.chunks.putChunk(this._chunkGen(coord));
+      this._applyGeneratedStructureEntitiesForChunk(coord.cx, coord.cy);
       this.invalidateSkyTopStripForChunk(coord.cx);
       this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
     }
@@ -2198,6 +2270,7 @@ export class World {
         });
       } else {
         this.chunks.putChunk(this._chunkGen(coord));
+        this._applyGeneratedStructureEntitiesForChunk(coord.cx, coord.cy);
         this.invalidateSkyTopStripForChunk(coord.cx);
         this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
         loaded++;
@@ -2379,12 +2452,13 @@ export class World {
     this._pendingBlockChangedEvents.length = 0;
   }
 
-  /** Flush pending light recomputes up to `LIGHT_RECOMPUTE_BUDGET_MS` wall time per call. */
-  flushPendingLightRecomputes(): void {
+  /** Flush pending light recomputes up to budgeted wall time per call. */
+  flushPendingLightRecomputes(msBudget: number = LIGHT_RECOMPUTE_BUDGET_MS): void {
     const pending = this._pendingLightChunks;
     if (pending.size === 0) {
       return;
     }
+    const budgetMs = Math.max(0, msBudget);
     const t0 =
       typeof performance !== "undefined" && performance.now !== undefined
         ? performance.now()
@@ -2400,7 +2474,7 @@ export class World {
       if (
         typeof performance !== "undefined" &&
         performance.now !== undefined &&
-        performance.now() - t0 >= LIGHT_RECOMPUTE_BUDGET_MS
+        performance.now() - t0 >= budgetMs
       ) {
         break;
       }
@@ -3011,6 +3085,14 @@ export class World {
     this._chestBlockId = id;
   }
 
+  setBarrelBlockId(id: number | null): void {
+    this._barrelBlockId = id;
+  }
+
+  getBarrelBlockId(): number | null {
+    return this._barrelBlockId;
+  }
+
   getChestBlockId(): number | null {
     return this._chestBlockId;
   }
@@ -3033,24 +3115,29 @@ export class World {
 
   /** Resolve storage anchor for a chest cell (world coords). */
   getChestStorageAnchorForCell(wx: number, wy: number): { ax: number; ay: number } | null {
-    if (this._chestBlockId === null || this.getBlockId(wx, wy) !== this._chestBlockId) {
+    const blockId = this.getBlockId(wx, wy);
+    if (!this.isStorageBlockId(blockId)) {
       return null;
     }
-    const cid = this._chestBlockId;
-    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
-    return chestStorageAnchor(wx, wy, isChest);
+    if (this._chestBlockId !== null && blockId === this._chestBlockId) {
+      const cid = this._chestBlockId;
+      const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
+      return chestStorageAnchor(wx, wy, isChest);
+    }
+    return { ax: wx, ay: wy };
   }
 
   destroyChestForPlayerBreak(wx: number, wy: number, dropsLoot: boolean): void {
-    if (this._chestBlockId === null) {
+    const bid = this.getBlockId(wx, wy);
+    if (!this.isStorageBlockId(bid)) {
       return;
     }
-    const cid = this._chestBlockId;
-    if (this.getBlockId(wx, wy) !== cid) {
-      return;
-    }
-    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
-    const { ax, ay } = chestStorageAnchor(wx, wy, isChest);
+    const chestId = this._chestBlockId;
+    const isDoubleCapable = chestId !== null && bid === chestId;
+    const isChest = (x: number, y: number) => this.getBlockId(x, y) === chestId;
+    const { ax, ay } = isDoubleCapable
+      ? chestStorageAnchor(wx, wy, isChest)
+      : { ax: wx, ay: wy };
     const st = this._chestTiles.get(chestCellKey(ax, ay));
     const px = (ax + 0.5) * BLOCK_SIZE;
     const py = (ay + 0.5) * BLOCK_SIZE;
@@ -3062,11 +3149,11 @@ export class World {
       }
       this._chestTiles.delete(chestCellKey(ax, ay));
     }
-    const dbl = chestIsDoubleAtAnchor(ax, ay, isChest);
+    const dbl = isDoubleCapable && chestIsDoubleAtAnchor(ax, ay, isChest);
     if (dropsLoot) {
-      this.spawnLootForBrokenBlock(cid, ax, ay);
+      this.spawnLootForBrokenBlock(bid, ax, ay);
       if (dbl) {
-        this.spawnLootForBrokenBlock(cid, ax + 1, ay);
+        this.spawnLootForBrokenBlock(bid, ax + 1, ay);
       }
     }
     const cells: [number, number][] = dbl ? [[ax, ay], [ax + 1, ay]] : [[ax, ay]];
@@ -3152,7 +3239,8 @@ export class World {
   }
 
   applyChestSnapshotWorld(wx: number, wy: number, data: ChestPersistedChunk): void {
-    if (this._chestBlockId === null || this.getBlockId(wx, wy) !== this._chestBlockId) {
+    const blockId = this.getBlockId(wx, wy);
+    if (!this.isStorageBlockId(blockId)) {
       return;
     }
     const { lx, ly } = worldToLocalBlock(wx, wy);
@@ -3189,19 +3277,42 @@ export class World {
    * Expands with empty slots when paired; shrinks only when extra slots are empty.
    */
   private ensureChestTileAt(wx: number, wy: number): void {
-    if (this._chestBlockId === null) {
+    const hereId = this.getBlockId(wx, wy);
+    if (!this.isStorageBlockId(hereId)) {
       return;
     }
-    const cid = this._chestBlockId;
-    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
-    const { ax, ay } = chestStorageAnchor(wx, wy, isChest);
+    const chestId = this._chestBlockId;
+    const isDoubleCapable = chestId !== null && hereId === chestId;
+    const isChest = (x: number, y: number) => this.getBlockId(x, y) === chestId;
+    const { ax, ay } = isDoubleCapable
+      ? chestStorageAnchor(wx, wy, isChest)
+      : { ax: wx, ay: wy };
     const k = chestCellKey(ax, ay);
-    const dbl = chestIsDoubleAtAnchor(ax, ay, isChest);
+    const dbl = isDoubleCapable && chestIsDoubleAtAnchor(ax, ay, isChest);
     const want = dbl ? CHEST_DOUBLE_SLOTS : CHEST_SINGLE_SLOTS;
 
     const existing = this._chestTiles.get(k);
     if (existing === undefined) {
-      this._chestTiles.set(k, createEmptyChestTile(want));
+      const generated = this._findGeneratedContainerEntityAt(ax, ay);
+      if (generated !== null) {
+        const rawItems = generated.items ?? [];
+        const items = rawItems.map((s) => this._toChestItemStackFromStructureEntity(s));
+        if (items.length === 0) {
+          items.push(...Array.from({ length: want }, () => null));
+        } else if (items.length < want) {
+          items.push(...Array.from({ length: want - items.length }, () => null));
+        } else if (items.length > want) {
+          items.length = want;
+        }
+        this._chestTiles.set(k, {
+          slots: items,
+          ...(generated.lootTable !== undefined
+            ? { lootTableId: generated.lootTable, lootRolled: false }
+            : {}),
+        });
+      } else {
+        this._chestTiles.set(k, createEmptyChestTile(want));
+      }
       return;
     }
     if (existing.slots.length === want) {
@@ -3225,15 +3336,16 @@ export class World {
 
   /** Spill buffer and clear paired chest cell(s) except (wx,wy); caller then writes (wx,wy). */
   private breakChestBeforeBlockChange(wx: number, wy: number): void {
-    if (this._chestBlockId === null) {
+    const bid = this.getBlockId(wx, wy);
+    if (!this.isStorageBlockId(bid)) {
       return;
     }
-    const cid = this._chestBlockId;
-    if (this.getBlockId(wx, wy) !== cid) {
-      return;
-    }
-    const isChest = (x: number, y: number) => this.getBlockId(x, y) === cid;
-    const { ax, ay } = chestStorageAnchor(wx, wy, isChest);
+    const chestId = this._chestBlockId;
+    const isDoubleCapable = chestId !== null && bid === chestId;
+    const isChest = (x: number, y: number) => this.getBlockId(x, y) === chestId;
+    const { ax, ay } = isDoubleCapable
+      ? chestStorageAnchor(wx, wy, isChest)
+      : { ax: wx, ay: wy };
     const k = chestCellKey(ax, ay);
     const st = this._chestTiles.get(k);
     const px = (ax + 0.5) * BLOCK_SIZE;
@@ -3246,13 +3358,13 @@ export class World {
       }
       this._chestTiles.delete(k);
     }
-    const dbl = chestIsDoubleAtAnchor(ax, ay, isChest);
+    const dbl = isDoubleCapable && chestIsDoubleAtAnchor(ax, ay, isChest);
     const cells: [number, number][] = dbl ? [[ax, ay], [ax + 1, ay]] : [[ax, ay]];
     for (const [cx, cy] of cells) {
       if (cx === wx && cy === wy) {
         continue;
       }
-      if (this.getBlockId(cx, cy) === cid) {
+      if (this.getBlockId(cx, cy) === bid) {
         this.setBlockWithoutPlantCascade(cx, cy, 0, { skipChestBreak: true });
       }
     }
@@ -3272,6 +3384,13 @@ export class World {
         ch.renderDirty = true;
       }
     }
+  }
+
+  private isStorageBlockId(id: number): boolean {
+    return (
+      (this._chestBlockId !== null && id === this._chestBlockId) ||
+      (this._barrelBlockId !== null && id === this._barrelBlockId)
+    );
   }
 
   private syncFurnaceTileAfterBlockChange(wx: number, wy: number, blockId: number): void {

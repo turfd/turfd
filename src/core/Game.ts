@@ -47,7 +47,12 @@ import {
 } from "./constants";
 import { EventBus } from "./EventBus";
 import { GameLoop } from "./GameLoop";
-import type { DynamicLightEmitter, GameEvent } from "./types";
+import {
+  normalizeWorldGameMode,
+  type DynamicLightEmitter,
+  type GameEvent,
+  type WorldGameMode,
+} from "./types";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import {
   CraftingSystem,
@@ -89,18 +94,22 @@ import {
 import {
   fetchBehaviorPackManifest,
   loadBehaviorPackBlocks,
+  loadBehaviorPackFeatures,
   loadBehaviorPackItems,
   loadBehaviorPackLoot,
   loadBehaviorPackRecipes,
+  loadBehaviorPackStructures,
   loadBehaviorPackSmelting,
 } from "../mods/loadInternalBehaviorPack";
 import {
   applyWorkshopTexturesToBlockAtlas,
   collectWorkshopCachedMods,
   loadWorkshopBlocksIntoRegistry,
+  loadWorkshopFeatures,
   loadWorkshopItemsIntoRegistry,
   loadWorkshopLootIntoResolver,
   loadWorkshopRecipesIntoRegistry,
+  loadWorkshopStructures,
 } from "../mods/loadWorkshopContent";
 import type { CachedMod } from "../mods/workshopTypes";
 import {
@@ -138,7 +147,7 @@ import { BreakOverlay } from "../renderer/BreakOverlay";
 import { ChunkRenderer } from "../renderer/chunk/ChunkRenderer";
 import type { FoliageWindInfluence } from "../renderer/chunk/TileDrawBatch";
 import { RenderPipeline } from "../renderer/RenderPipeline";
-import { ChatHostController } from "../network/ChatHostController";
+import { ChatHostController, resolveRosterPeer } from "../network/ChatHostController";
 import { parseGiveCommandRest, resolveGiveItemKey } from "../network/giveCommand";
 import { parseSummonCommandRest } from "../network/summonCommand";
 import {
@@ -146,6 +155,7 @@ import {
   WorldModerationState,
 } from "../network/moderation/WorldModerationState";
 import { ChestPanel } from "../ui/ChestPanel";
+import { CreativePanel } from "../ui/CreativePanel";
 import { CraftingPanel, type FurnaceUiChromeModel } from "../ui/CraftingPanel";
 import { CursorStackUI } from "../ui/CursorStackUI";
 import { ChatOverlay } from "../ui/ChatOverlay";
@@ -163,6 +173,12 @@ import { applyRainLightingTint } from "../world/weather/rainLighting";
 import { WeatherController } from "../world/weather/WeatherController";
 import { BlockInteractions } from "../world/BlockInteractions";
 import { World } from "../world/World";
+import { StructureRegistry } from "../world/structure/StructureRegistry";
+import {
+  loadBuiltinStructureFeatures,
+  loadBuiltinStructures,
+} from "../world/structure/loadBuiltinStructures";
+import { placeStructureAt } from "../world/structure/placeStructure";
 import { applyCommittedBreakOnWorld } from "../world/terrain/applyCommittedBreak";
 import { applyCommittedDoorToggle } from "../world/terrain/applyDoorToggle";
 import {
@@ -223,9 +239,31 @@ const WORLD_TIME_BROADCAST_INTERVAL_MS = 5_000;
 const RAIN_GROWTH_MUL = 1.35;
 const TOOL_SWING_SFX_VOLUME = 0.72;
 const TOOL_SWING_SFX_PITCH_VARIANCE_CENTS = 210;
+const STRUCTURE_EXPORT_FORMAT = "stratum-structure-v1";
 
 const HOST_DISABLED_MULTIPLAYER_REASON =
   "The host closed the room. Return to the main menu to continue.";
+
+function safeStructureExportBasename(worldName: string): string {
+  const trimmed = worldName.trim().slice(0, 64) || "world";
+  const safe = trimmed.replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, "_");
+  return `${safe}.structure.json`;
+}
+
+function triggerJsonDownload(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 /** Host flow from main menu: auto-start multiplayer after world load. */
 export type MultiplayerHostFromMenuSpec = {
@@ -241,6 +279,7 @@ export type GameOptions = {
   worldUuid: string;
   store: IndexedDBStore;
   worldName: string;
+  gameMode?: WorldGameMode;
   multiplayerJoinRoomCode?: string;
   /** When joining a private room from the directory. */
   multiplayerJoinPassword?: string;
@@ -296,6 +335,8 @@ export class Game {
   private readonly worldUuid: string;
   private readonly store: IndexedDBStore;
   private readonly worldName: string;
+  private _worldGameMode: WorldGameMode;
+  private _cheatsEnabled = false;
   private readonly multiplayerJoinRoomCode?: string;
   private readonly multiplayerJoinPassword?: string;
   private readonly multiplayerHostFromMenu?: MultiplayerHostFromMenuSpec;
@@ -321,6 +362,9 @@ export class Game {
   private _nametagOverlay: NametagOverlay | null = null;
   private _damageNumbersOverlay: DamageNumbersOverlay | null = null;
   private _chatOpen = false;
+  private _wandEnabled = true;
+  private _wandStart: { wx: number; wy: number } | null = null;
+  private _wandEnd: { wx: number; wy: number } | null = null;
   /** After init, announce joins/leaves in chat (avoids noise from roster replay). */
   private _chatRoomAnnounceEnabled = false;
   private _pingPendingAt: number | null = null;
@@ -375,8 +419,11 @@ export class Game {
   private _ownsAudioEngine = true;
   private inventoryUI: InventoryUI | null = null;
   private _craftingPanel: CraftingPanel | null = null;
+  private _creativePanel: CreativePanel | null = null;
   private _itemRegistry: ItemRegistry | null = null;
   private _mobManager: MobManager | null = null;
+  private _lootResolver: LootResolver | null = null;
+  private readonly _structureRegistry = new StructureRegistry();
   private readonly _smeltingRegistry = new SmeltingRegistry();
   private readonly _furnaceNetSentAt = new Map<string, number>();
   private readonly _chestNetSentAt = new Map<string, number>();
@@ -551,6 +598,7 @@ export class Game {
     this.worldUuid = options.worldUuid;
     this.store = options.store;
     this.worldName = options.worldName;
+    this._worldGameMode = normalizeWorldGameMode(options.gameMode);
     this.multiplayerJoinRoomCode = options.multiplayerJoinRoomCode;
     this.multiplayerJoinPassword = options.multiplayerJoinPassword;
     this.multiplayerHostFromMenu = options.multiplayerHostFromMenu;
@@ -624,6 +672,14 @@ export class Game {
     );
   }
 
+  private _isSandboxWorld(): boolean {
+    return this._worldGameMode === "sandbox";
+  }
+
+  private _areCheatsEnabled(): boolean {
+    return this._cheatsEnabled;
+  }
+
   waitForStop(): Promise<void> {
     return new Promise<void>((resolve) => {
       this.stopResolve = resolve;
@@ -647,6 +703,12 @@ export class Game {
     await this._initEntryNetworking();
 
     const metaLoaded = await this.store.loadWorld(this.worldUuid);
+    if (this.multiplayerJoinRoomCode === undefined) {
+      this._worldGameMode = normalizeWorldGameMode(
+        metaLoaded?.gameMode ?? this._worldGameMode,
+      );
+      this._cheatsEnabled = metaLoaded?.enableCheats === true;
+    }
     this._moderation.loadFromPersisted(
       migrateModerationMetadata(metaLoaded?.moderation),
     );
@@ -687,7 +749,7 @@ export class Game {
       stage: "Loading block data",
       detail: "Reading core block definitions...",
       current: 0,
-      total: stratumBehManifest.blocks.length,
+      total: stratumBehManifest.blocks?.length ?? 0,
     });
     await loadBehaviorPackBlocks(registry, stratumBehBase, stratumBehManifest, (loaded, total, file) => {
       progressCallback?.({
@@ -739,6 +801,40 @@ export class Game {
         ? await collectWorkshopCachedMods(globalResourceRefs, this._modRepository)
         : [];
 
+    const builtinStructures = await loadBuiltinStructures();
+    for (const [id, s] of builtinStructures) {
+      this._structureRegistry.registerStructure(id, s);
+    }
+    const coreStructures = await loadBehaviorPackStructures(
+      stratumBehBase,
+      stratumBehManifest,
+    );
+    for (const [id, s] of coreStructures) {
+      this._structureRegistry.registerStructure(id, s);
+    }
+    const workshopStructures =
+      behaviorCached.length > 0 ? loadWorkshopStructures(behaviorCached) : new Map();
+    for (const [id, s] of workshopStructures) {
+      this._structureRegistry.registerStructure(id, s);
+    }
+
+    const builtinFeatures = await loadBuiltinStructureFeatures();
+    for (const f of builtinFeatures) {
+      this._structureRegistry.registerFeature(f);
+    }
+    const coreFeatures = await loadBehaviorPackFeatures(
+      stratumBehBase,
+      stratumBehManifest,
+    );
+    for (const f of coreFeatures) {
+      this._structureRegistry.registerFeature(f);
+    }
+    const workshopFeatures =
+      behaviorCached.length > 0 ? loadWorkshopFeatures(behaviorCached) : [];
+    for (const f of workshopFeatures) {
+      this._structureRegistry.registerFeature(f);
+    }
+
     const itemRegistry = new ItemRegistry();
     registerBlockItems(
       Array.from({ length: registry.size }, (_, i) => registry.getById(i)),
@@ -748,7 +844,7 @@ export class Game {
       stage: "Loading items",
       detail: "Reading core item definitions...",
       current: 0,
-      total: stratumBehManifest.items.length,
+      total: stratumBehManifest.items?.length ?? 0,
     });
     await loadBehaviorPackItems(
       registry,
@@ -785,6 +881,7 @@ export class Game {
     this._craftingSystem = new CraftingSystem(itemRegistry, this._recipeRegistry);
 
     const lootResolver = new LootResolver(itemRegistry);
+    this._lootResolver = lootResolver;
     await loadBehaviorPackLoot(registry, lootResolver, stratumBehBase, stratumBehManifest);
     if (behaviorCached.length > 0) {
       loadWorkshopLootIntoResolver(registry, lootResolver, behaviorCached);
@@ -862,11 +959,24 @@ export class Game {
     this._itemRegistry = itemRegistry;
     world.setItemRegistry(itemRegistry);
     world.setSmeltingRegistryForQueueRefund(this._smeltingRegistry);
+    const configuredFeatures = this._structureRegistry
+      .listFeatures()
+      .map((f) => {
+        const structures = f.structureIds
+          .map((id) => this._structureRegistry.getStructure(id))
+          .filter((s): s is NonNullable<typeof s> => s !== undefined);
+        return structures.length === 0 ? null : { ...f, structures };
+      })
+      .filter((v): v is NonNullable<typeof v> => v !== null);
+    world.setStructureFeatures(configuredFeatures);
     if (registry.isRegistered("stratum:furnace")) {
       world.setFurnaceBlockId(registry.getByIdentifier("stratum:furnace").id);
     }
     if (registry.isRegistered("stratum:chest")) {
       world.setChestBlockId(registry.getByIdentifier("stratum:chest").id);
+    }
+    if (registry.isRegistered("stratum:barrel")) {
+      world.setBarrelBlockId(registry.getByIdentifier("stratum:barrel").id);
     }
 
     if (
@@ -1022,6 +1132,7 @@ export class Game {
       },
     });
     this.entityManager = entityManager;
+    entityManager.getPlayer().setGameMode(this._worldGameMode);
     this._mobManager = new MobManager(world, lootResolver, this.bus);
     entityManager.setMobManager(this._mobManager);
     {
@@ -1057,6 +1168,8 @@ export class Game {
       this.worldName,
       this.bus,
       () => this._worldTime.ms,
+      () => this._worldGameMode,
+      () => this._cheatsEnabled,
       () => this.pipeline?.captureWorldPreviewDataUrl() ?? null,
       () =>
         this._shouldPersistModeration()
@@ -1444,6 +1557,32 @@ export class Game {
         this._handleChestSlotMouseEnter(slotIndex, buttons);
       },
     });
+    this._creativePanel = new CreativePanel(
+      inventoryUI.getCreativeMount(),
+      itemRegistry,
+      {
+        getItemIconUrlLookup: () => this.inventoryUI?.getItemIconUrlLookup() ?? null,
+        onPickItem: (itemId, count, button) => {
+          const em = this.entityManager;
+          if (em === null || !this._isSandboxWorld()) {
+            return;
+          }
+          const inv = em.getPlayer().inventory;
+          if (inv.getCursorStack() !== null) {
+            inv.replaceCursorStack(null);
+            return;
+          }
+          if (button !== 0) {
+            return;
+          }
+          if (inv.getCursorStack() === null) {
+            inv.replaceCursorStack({ itemId: itemId as ItemId, count });
+          } else {
+            inv.add(itemId as ItemId, count);
+          }
+        },
+      },
+    );
 
     this.networkUnsubs.push(
       this.bus.on("chest:open-request", (e) => {
@@ -1820,6 +1959,8 @@ export class Game {
     this.cursorStackUI = null;
     this._craftingPanel?.destroy();
     this._craftingPanel = null;
+    this._creativePanel?.destroy();
+    this._creativePanel = null;
     this.inventoryUI?.destroy();
     this.inventoryUI = null;
     this._craftingSystem = null;
@@ -1994,6 +2135,13 @@ export class Game {
         if (msg.type === MsgType.PLAYER_DAMAGE_APPLIED) {
           if (stNet.status === "connected" && stNet.role === "client") {
             this.entityManager?.getPlayer().takeDamage(msg.damage);
+          }
+          return;
+        }
+
+        if (msg.type === MsgType.PLAYER_TELEPORT) {
+          if (stNet.status === "connected" && stNet.role === "client") {
+            this.entityManager?.getPlayer().spawnAt(msg.x, msg.y);
           }
           return;
         }
@@ -2505,6 +2653,9 @@ export class Game {
         if (this._awaitingWorldData && msg.type === MsgType.WORLD_SYNC) {
           this._worldSeed = msg.seed;
           this._worldTime.sync(msg.worldTimeMs);
+          this._worldGameMode = normalizeWorldGameMode(msg.gameMode);
+          this._cheatsEnabled = msg.cheatsEnabled;
+          this.entityManager?.getPlayer().setGameMode(this._worldGameMode);
           this._awaitingWorldData = false;
           return;
         }
@@ -2860,6 +3011,8 @@ export class Game {
             type: MsgType.WORLD_SYNC,
             seed: this._worldSeed,
             worldTimeMs: this._worldTime.ms,
+            gameMode: this._worldGameMode,
+            cheatsEnabled: this._cheatsEnabled,
           });
           this.adapter.broadcast({
             type: MsgType.WORLD_TIME,
@@ -3283,6 +3436,16 @@ export class Game {
       executeSummon: (issuerPeerId, rest) => {
         this._executeSummonCommand(issuerPeerId, rest);
       },
+      executeTeleport: (issuerPeerId, rest) => {
+        this._runTeleportCore(issuerPeerId, rest);
+      },
+      executeStructure: (issuerPeerId, rest) => {
+        this._executeStructureCommand(issuerPeerId, rest);
+      },
+      executeWand: (issuerPeerId, rest) => {
+        this._executeWandCommand(issuerPeerId, rest);
+      },
+      isCheatsEnabled: () => this._cheatsEnabled,
     });
   }
 
@@ -3296,6 +3459,325 @@ export class Game {
       kind: "system",
       text,
     } satisfies GameEvent);
+  }
+
+  private _isLocalIssuer(issuerPeerId: string | null): boolean {
+    if (issuerPeerId === null) {
+      return true;
+    }
+    const local = this.adapter.getLocalPeerId();
+    return local !== null && issuerPeerId === local;
+  }
+
+  private _activeStructureBounds():
+    | { minWx: number; minWy: number; maxWx: number; maxWy: number }
+    | null {
+    if (this._wandStart === null || this._wandEnd === null) {
+      return null;
+    }
+    return {
+      minWx: Math.min(this._wandStart.wx, this._wandEnd.wx),
+      minWy: Math.min(this._wandStart.wy, this._wandEnd.wy),
+      maxWx: Math.max(this._wandStart.wx, this._wandEnd.wx),
+      maxWy: Math.max(this._wandStart.wy, this._wandEnd.wy),
+    };
+  }
+
+  private _executeWandCommand(issuerPeerId: string | null, rest: string): void {
+    if (!this._isLocalIssuer(issuerPeerId)) {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Only the local host can toggle wand mode.",
+      );
+      return;
+    }
+    if (rest.trim() !== "") {
+      this._giveFeedbackToIssuer(issuerPeerId, "Usage: /wand");
+      return;
+    }
+    this._wandEnabled = !this._wandEnabled;
+    if (!this._wandEnabled) {
+      this._wandStart = null;
+      this._wandEnd = null;
+    }
+    this._giveFeedbackToIssuer(
+      issuerPeerId,
+      this._wandEnabled
+        ? "Wand enabled. Left click sets point A, right click sets point B."
+        : "Wand disabled.",
+    );
+  }
+
+  private _executeStructureCommand(issuerPeerId: string | null, rest: string): void {
+    if (!this._isLocalIssuer(issuerPeerId)) {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Only the local host can use structure commands.",
+      );
+      return;
+    }
+    const tokens = rest.trim().split(/\s+/).filter((p) => p.length > 0);
+    if (tokens.length === 0) {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Usage: /structure export | /structure place <identifier> [x y]",
+      );
+      return;
+    }
+    const sub = tokens[0]!.toLowerCase();
+    if (sub === "place") {
+      const world = this.world;
+      const ir = this._itemRegistry;
+      if (world === null || ir === null) {
+        this._giveFeedbackToIssuer(issuerPeerId, "World not ready.");
+        return;
+      }
+      if (tokens.length !== 2 && tokens.length !== 4) {
+        this._giveFeedbackToIssuer(
+          issuerPeerId,
+          "Usage: /structure place <identifier> [x y]",
+        );
+        return;
+      }
+      const id = tokens[1]!;
+      let targetWx: number;
+      let targetWy: number;
+      if (tokens.length === 4) {
+        const x = Number.parseInt(tokens[2]!, 10);
+        const y = Number.parseInt(tokens[3]!, 10);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          this._giveFeedbackToIssuer(
+            issuerPeerId,
+            "Usage: /structure place <identifier> [x y]",
+          );
+          return;
+        }
+        targetWx = x;
+        targetWy = y;
+      } else if (this.input !== null) {
+        targetWx = Math.floor(this.input.mouseWorldPos.x / BLOCK_SIZE);
+        targetWy = Math.floor(-this.input.mouseWorldPos.y / BLOCK_SIZE);
+      } else {
+        this._giveFeedbackToIssuer(issuerPeerId, "Input not ready.");
+        return;
+      }
+      const structure = this._structureRegistry.getStructure(id);
+      if (structure === undefined) {
+        this._giveFeedbackToIssuer(issuerPeerId, `Unknown structure: ${id}`);
+        return;
+      }
+      const placed = placeStructureAt(world, ir, structure, targetWx, targetWy);
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        `Placed ${id} at (${targetWx}, ${targetWy}). Cells: fg ${placed.placedForeground}, bg ${placed.placedBackground}, containers ${placed.placedContainers}, furnaces ${placed.placedFurnaces}.`,
+      );
+      return;
+    }
+    if (sub !== "export") {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Usage: /structure export | /structure place <identifier> [x y]",
+      );
+      return;
+    }
+    const bounds = this._activeStructureBounds();
+    const world = this.world;
+    const em = this.entityManager;
+    const ir = this._itemRegistry;
+    if (bounds === null || world === null || em === null || ir === null) {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Selection is incomplete. Set both wand points first.",
+      );
+      return;
+    }
+    const chestAnchors = new Set<string>();
+    const cells: Array<{
+      x: number;
+      y: number;
+      foreground: { id: number; identifier: string; metadata: number };
+      background: { id: number; identifier: string; metadata: number };
+    }> = [];
+    const entities: Array<
+      | {
+          type: "furnace";
+          x: number;
+          y: number;
+          state: ReturnType<World["getFurnaceTile"]>;
+        }
+      | {
+          type: "container";
+          x: number;
+          y: number;
+          identifier: string;
+          lootTable?: string;
+          items: Array<{ key: string; count: number; damage?: number } | null> | null;
+        }
+    > = [];
+    for (let wy = bounds.minWy; wy <= bounds.maxWy; wy++) {
+      for (let wx = bounds.minWx; wx <= bounds.maxWx; wx++) {
+        const fg = world.getBlock(wx, wy);
+        const bg = world.getBackgroundBlock(wx, wy);
+        const metadata = world.getMetadata(wx, wy);
+        cells.push({
+          x: wx - bounds.minWx,
+          y: wy - bounds.minWy,
+          foreground: {
+            id: fg.id,
+            identifier: fg.identifier,
+            metadata,
+          },
+          background: {
+            id: world.getBackgroundId(wx, wy),
+            identifier: bg.identifier,
+            metadata,
+          },
+        });
+        if (fg.identifier === "stratum:furnace") {
+          const tile = world.getFurnaceTile(wx, wy);
+          if (tile !== undefined) {
+            entities.push({
+              type: "furnace",
+              x: wx - bounds.minWx,
+              y: wy - bounds.minWy,
+              state: structuredClone(tile),
+            });
+          }
+        }
+        if (fg.identifier === "stratum:chest" || fg.identifier === "stratum:barrel") {
+          const anchor = world.getChestStorageAnchorForCell(wx, wy);
+          if (anchor !== null) {
+            const key = `${anchor.ax},${anchor.ay}`;
+            if (!chestAnchors.has(key)) {
+              chestAnchors.add(key);
+              const chest = world.getChestTileAtAnchor(anchor.ax, anchor.ay);
+              if (chest !== undefined) {
+                const items = chest.slots.map((slot) => {
+                  if (slot === null || slot.count <= 0) {
+                    return null;
+                  }
+                  const def = ir.getById(slot.itemId);
+                  if (def === undefined) {
+                    return null;
+                  }
+                  return {
+                    key: def.key,
+                    count: slot.count,
+                    ...(slot.damage !== undefined && slot.damage > 0
+                      ? { damage: slot.damage }
+                      : {}),
+                  };
+                });
+                entities.push({
+                  type: "container",
+                  x: wx - bounds.minWx,
+                  y: wy - bounds.minWy,
+                  identifier: fg.identifier,
+                  ...(chest.lootTableId !== undefined
+                    ? { lootTable: chest.lootTableId }
+                    : {}),
+                  items,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+    const payload = {
+      format: STRUCTURE_EXPORT_FORMAT,
+      exportedAt: new Date().toISOString(),
+      world: {
+        uuid: this.worldUuid,
+        name: this.worldName,
+        seed: this._worldSeed,
+        gameMode: this._worldGameMode,
+      },
+      selection: {
+        start: this._wandStart,
+        end: this._wandEnd,
+        bounds,
+        size: {
+          width: bounds.maxWx - bounds.minWx + 1,
+          height: bounds.maxWy - bounds.minWy + 1,
+        },
+      },
+      player: {
+        feetX: em.getPlayer().state.position.x,
+        feetY: em.getPlayer().state.position.y,
+      },
+      blocks: cells,
+      tileEntities: { entities },
+    };
+    triggerJsonDownload(safeStructureExportBasename(this.worldName), payload);
+    const containers = entities.filter((e) => e.type === "container").length;
+    const furnaces = entities.filter((e) => e.type === "furnace").length;
+    this._giveFeedbackToIssuer(
+      issuerPeerId,
+      `Exported ${cells.length} cells to JSON (${containers} containers, ${furnaces} furnaces).`,
+    );
+  }
+
+  private _handleWandSelectionInput(): void {
+    const input = this.input;
+    const em = this.entityManager;
+    const ir = this._itemRegistry;
+    if (input === null || em === null || this.world === null || ir === null) {
+      return;
+    }
+    if (!this._wandEnabled || !this._isSandboxWorld() || input.isWorldInputBlocked()) {
+      return;
+    }
+    const pl = em.getPlayer();
+    const heldSlot = pl.state.hotbarSlot % HOTBAR_SIZE;
+    const heldStack = pl.inventory.getStack(heldSlot);
+    const heldDef =
+      heldStack !== null ? ir.getById(heldStack.itemId as ItemId) : undefined;
+    if (heldDef?.key !== "stratum:wooden_axe") {
+      return;
+    }
+    const wx = Math.floor(input.mouseWorldPos.x / BLOCK_SIZE);
+    const wy = Math.floor(-input.mouseWorldPos.y / BLOCK_SIZE);
+    const pcx = Math.floor(pl.state.position.x / BLOCK_SIZE);
+    const pcy = Math.floor(pl.state.position.y / BLOCK_SIZE);
+    const inReach =
+      Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= REACH_BLOCKS;
+    if (!inReach) {
+      return;
+    }
+    if (input.isJustPressed("break")) {
+      input.suppressBreakUntilMouseUp();
+      this._wandStart = { wx, wy };
+      this._wandEnd = null;
+      this.bus.emit({
+        type: "ui:chat-line",
+        kind: "system",
+        text: `Wand point A set to (${wx}, ${wy}).`,
+      } satisfies GameEvent);
+      return;
+    }
+    if (input.isJustPressed("place")) {
+      input.suppressPlaceThisFrame();
+      if (this._wandStart === null) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Set point A first with left click.",
+        } satisfies GameEvent);
+        return;
+      }
+      this._wandEnd = { wx, wy };
+      const bounds = this._activeStructureBounds();
+      if (bounds !== null) {
+        const width = bounds.maxWx - bounds.minWx + 1;
+        const height = bounds.maxWy - bounds.minWy + 1;
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: `Wand point B set to (${wx}, ${wy}). Selection: ${width}x${height} cells.`,
+        } satisfies GameEvent);
+      }
+    }
   }
 
   private _isRainingForVisual(): boolean {
@@ -3522,6 +4004,119 @@ export class Game {
     );
   }
 
+  /**
+   * Host / offline solo: `/tp` implementation.
+   * Supported:
+   * - `/tp <x> <y>` (self)
+   * - `/tp @s <x> <y>` (self)
+   * - `/tp <player> <x> <y>` (host/ops)
+   */
+  private _runTeleportCore(issuerPeerId: string | null, rest: string): void {
+    const em = this.entityManager;
+    const w = this.world;
+    if (em === null || w === null) {
+      this._giveFeedbackToIssuer(issuerPeerId, "World not ready.");
+      return;
+    }
+    const usage = "Usage: /tp <x> <y>  or  /tp <player|@s> <x> <y>";
+    const parts = rest.trim().split(/\s+/).filter((p) => p.length > 0);
+    if (parts.length < 2 || parts.length > 3) {
+      this._giveFeedbackToIssuer(issuerPeerId, usage);
+      return;
+    }
+    let targetPeerId: string | null = null;
+    let xTok: string;
+    let yTok: string;
+    if (parts.length === 2) {
+      xTok = parts[0]!;
+      yTok = parts[1]!;
+      if (issuerPeerId !== null) {
+        targetPeerId = issuerPeerId;
+      }
+    } else {
+      const selector = parts[0]!;
+      xTok = parts[1]!;
+      yTok = parts[2]!;
+      if (selector === "@s") {
+        targetPeerId = issuerPeerId;
+      } else {
+        const hit = resolveRosterPeer(this._sessionRoster, selector);
+        if (hit === null) {
+          this._giveFeedbackToIssuer(
+            issuerPeerId,
+            `Player not found: ${selector}`,
+          );
+          return;
+        }
+        targetPeerId = hit.peerId;
+      }
+    }
+    const bx = Number.parseFloat(xTok);
+    const by = Number.parseFloat(yTok);
+    if (!Number.isFinite(bx) || !Number.isFinite(by)) {
+      this._giveFeedbackToIssuer(issuerPeerId, usage);
+      return;
+    }
+    const feetX = (bx + 0.5) * BLOCK_SIZE;
+    const feetY = by * BLOCK_SIZE;
+    const localId = this.adapter.getLocalPeerId();
+    const targetIsLocal =
+      targetPeerId === null || (localId !== null && targetPeerId === localId);
+    if (targetIsLocal) {
+      em.getPlayer().spawnAt(feetX, feetY);
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        `Teleported to (${bx.toFixed(1)}, ${by.toFixed(1)}).`,
+      );
+      return;
+    }
+    const st = this.adapter.state;
+    if (st.status !== "connected" || st.role !== "host") {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Teleporting other players requires hosting a session.",
+      );
+      return;
+    }
+    const targetPeer = targetPeerId as PeerId;
+    this.adapter.send(targetPeer, {
+      type: MsgType.PLAYER_TELEPORT,
+      x: feetX,
+      y: feetY,
+    });
+    const rp = w.getRemotePlayers().get(targetPeerId!);
+    if (rp !== undefined) {
+      const s = rp.getNetworkSample();
+      w.updateRemotePlayer(
+        targetPeerId!,
+        feetX,
+        feetY,
+        0,
+        0,
+        s.facingRight,
+        s.hotbarSlot,
+        s.heldItemId,
+        false,
+        s.armorHelmetId,
+        s.armorChestId,
+        s.armorLeggingsId,
+        s.armorBootsId,
+        s.bowDrawQuantized,
+        s.aimDisplayX,
+        s.aimDisplayY,
+      );
+    }
+    const label = this._sessionRoster.get(targetPeerId!)?.displayName ?? targetPeerId!;
+    this._giveFeedbackToIssuer(
+      issuerPeerId,
+      `Teleported ${label} to (${bx.toFixed(1)}, ${by.toFixed(1)}).`,
+    );
+    this._sendSystemToPeer(
+      targetPeer,
+      `You were teleported to (${bx.toFixed(1)}, ${by.toFixed(1)}).`,
+    );
+  }
+
   private _applyGiveItemStackFromHost(itemId: number, count: number): void {
     const ir = this._itemRegistry;
     const em = this.entityManager;
@@ -3590,6 +4185,8 @@ export class Game {
             uuid: this.worldUuid,
             name: this.worldName,
             seed: this._worldSeed,
+            gameMode: this._worldGameMode,
+            enableCheats: this._cheatsEnabled,
             createdAt: now,
             lastPlayedAt: now,
             playerX: em?.getPlayer().state.position.x ?? 0,
@@ -3604,7 +4201,13 @@ export class Game {
           };
           return row;
         }
-        return { ...prev, moderation: mod, lastPlayedAt: now };
+        return {
+          ...prev,
+          gameMode: prev.gameMode ?? this._worldGameMode,
+          enableCheats: prev.enableCheats ?? this._cheatsEnabled,
+          moderation: mod,
+          lastPlayedAt: now,
+        };
       });
     } catch (err) {
       console.error(err);
@@ -3644,8 +4247,50 @@ export class Game {
       } satisfies GameEvent);
       return;
     }
+    const wandMatch = /^\/wand(\s+.*)?$/i.exec(trimmed);
+    if (
+      wandMatch !== null &&
+      (st.status !== "connected" || st.role === "host")
+    ) {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
+      const rest = (wandMatch[1] ?? "").trim();
+      this._executeWandCommand(null, rest);
+      return;
+    }
+    const structureMatch = /^\/structure(\s+.*)?$/i.exec(trimmed);
+    if (
+      structureMatch !== null &&
+      (st.status !== "connected" || st.role === "host")
+    ) {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
+      const rest = (structureMatch[1] ?? "").trim();
+      this._executeStructureCommand(null, rest);
+      return;
+    }
     const giveMatch = /^\/give(\s+.*)?$/i.exec(trimmed);
     if (giveMatch !== null && st.status !== "connected") {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
       const rest = (giveMatch[1] ?? "").trim();
       if (rest === "") {
         this.bus.emit({
@@ -3661,6 +4306,14 @@ export class Game {
     }
     const weatherMatch = /^\/weather(\s+.*)?$/i.exec(trimmed);
     if (weatherMatch !== null && st.status !== "connected") {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
       const rest = (weatherMatch[1] ?? "").trim();
       if (rest === "") {
         this.bus.emit({
@@ -3675,6 +4328,14 @@ export class Game {
     }
     const summonMatch = /^\/summon(\s+.*)?$/i.exec(trimmed);
     if (summonMatch !== null && st.status !== "connected") {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
       const restSummon = (summonMatch[1] ?? "").trim();
       if (restSummon === "") {
         this.bus.emit({
@@ -3685,6 +4346,28 @@ export class Game {
         return;
       }
       this._executeSummonCommand(null, restSummon);
+      return;
+    }
+    const tpMatch = /^\/tp(\s+.*)?$/i.exec(trimmed);
+    if (tpMatch !== null && st.status !== "connected") {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
+      const restTp = (tpMatch[1] ?? "").trim();
+      if (restTp === "") {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Usage: /tp <x> <y>  or  /tp <player|@s> <x> <y>",
+        } satisfies GameEvent);
+        return;
+      }
+      this._runTeleportCore(null, restTp);
       return;
     }
     if (st.status !== "connected") {
@@ -3806,6 +4489,9 @@ export class Game {
   }
 
   private _hostApplyPlayerDamageByPeerId(targetPeerId: string, damage: number): void {
+    if (this._isSandboxWorld()) {
+      return;
+    }
     if (damage <= 0) {
       return;
     }
@@ -4133,15 +4819,18 @@ export class Game {
       this._lastFurnaceOpenSfxKey = null;
     }
     const chestActive = open && this._activeChestAnchor !== null;
+    const sandboxActive = open && this._isSandboxWorld();
 
     this.inventoryUI?.setOpen(open);
     this.inventoryUI?.setChestMountCollapsed(!chestActive);
 
     this._chestPanel?.setOpen(open);
     this._chestPanel?.setChestVisible(chestActive);
+    this._creativePanel?.setOpen(open);
+    this._creativePanel?.setVisible(sandboxActive);
 
     /* Chest UI and recipe sidebar are mutually exclusive (no empty chest gap, no recipes on chest). */
-    this._craftingPanel?.setOpen(open && !chestActive);
+    this._craftingPanel?.setOpen(open && !chestActive && !sandboxActive);
 
     if (chestAnchorForCloseSfx !== null) {
       this._sfxFromWorldCell(
@@ -5192,10 +5881,10 @@ export class Game {
   private _chestWithinReach(anchor: { ax: number; ay: number }): boolean {
     const w = this.world;
     const em = this.entityManager;
-    if (w === null || em === null || w.getChestBlockId() === null) {
+    if (w === null || em === null) {
       return false;
     }
-    const cid = w.getChestBlockId()!;
+    const cid = w.getChestBlockId();
     const feet = em.getPlayer().state.position;
     const pcx = Math.floor(feet.x / BLOCK_SIZE);
     const pcy = Math.floor(feet.y / BLOCK_SIZE);
@@ -5206,12 +5895,66 @@ export class Game {
       return true;
     }
     if (
+      cid !== null &&
       w.getForegroundBlockId(anchor.ax + 1, anchor.ay) === cid &&
       cheb(anchor.ax + 1, anchor.ay)
     ) {
       return true;
     }
     return false;
+  }
+
+  private _rollContainerLootIfNeeded(anchor: { ax: number; ay: number }): void {
+    const w = this.world;
+    const lr = this._lootResolver;
+    if (w === null || lr === null) {
+      return;
+    }
+    const st = w.getChestTileAtAnchor(anchor.ax, anchor.ay);
+    if (st === undefined || st.lootTableId === undefined || st.lootRolled === true) {
+      return;
+    }
+    const empty = st.slots.every((s) => s === null || s.count <= 0);
+    if (!empty) {
+      w.setChestTileAtAnchor(anchor.ax, anchor.ay, { ...st, lootRolled: true });
+      return;
+    }
+    const rng = w.forkMobRng();
+    const drops = lr.resolveNamedTable(st.lootTableId, rng);
+    const slots = st.slots.map((s) => (s === null ? null : { ...s }));
+    for (const drop of drops) {
+      let remaining = drop.count;
+      const maxPerStack = this._maxStackForItem(drop.itemId);
+      for (let i = 0; i < slots.length && remaining > 0; i++) {
+        const cur = slots[i];
+        if (cur !== null && cur !== undefined && cur.itemId === drop.itemId) {
+          const space = Math.max(0, maxPerStack - cur.count);
+          const add = Math.max(0, Math.min(remaining, space));
+          cur.count += add;
+          remaining -= add;
+        }
+      }
+      while (remaining > 0) {
+        const empties: number[] = [];
+        for (let i = 0; i < slots.length; i++) {
+          if (slots[i] === null) {
+            empties.push(i);
+          }
+        }
+        if (empties.length === 0) {
+          break;
+        }
+        const pick = empties[Math.floor(rng.nextFloat() * empties.length)]!;
+        const add = Math.max(1, Math.min(remaining, maxPerStack));
+        slots[pick] = { itemId: drop.itemId, count: add };
+        remaining -= add;
+      }
+    }
+    w.setChestTileAtAnchor(anchor.ax, anchor.ay, {
+      slots,
+      lootTableId: st.lootTableId,
+      lootRolled: true,
+    });
   }
 
   private _handleChestOpenRequest(wx: number, wy: number): void {
@@ -5235,6 +5978,7 @@ export class Game {
       prevAnchor.ay !== anchor.ay;
     this._activeChestAnchor = anchor;
     w.syncChestStorageToLayout(wx, wy);
+    this._rollContainerLootIfNeeded(anchor);
     if (!this.isInventoryOpen) {
       this.isInventoryOpen = true;
       input.setWorldInputBlocked(true);
@@ -5247,6 +5991,7 @@ export class Game {
       });
     }
     this._chestPanel?.update();
+    this._creativePanel?.update();
   }
 
   private _craftingTableCellWithinReach(wx: number, wy: number): boolean {
@@ -5620,14 +6365,14 @@ export class Game {
     peerId: string,
   ): boolean {
     const w = this.world;
-    if (w === null || w.getChestBlockId() === null) {
+    if (w === null) {
       return false;
     }
     const rp = w.getRemotePlayers().get(peerId);
     if (rp === undefined) {
       return false;
     }
-    const cid = w.getChestBlockId()!;
+    const cid = w.getChestBlockId();
     const feet = rp.getAuthorityFeet();
     const pcx = Math.floor(feet.x / BLOCK_SIZE);
     const pcy = Math.floor(feet.y / BLOCK_SIZE);
@@ -5638,6 +6383,7 @@ export class Game {
       return true;
     }
     if (
+      cid !== null &&
       w.getForegroundBlockId(anchor.ax + 1, anchor.ay) === cid &&
       cheb(anchor.ax + 1, anchor.ay)
     ) {
@@ -6464,6 +7210,7 @@ export class Game {
 
       // Prefer melee hits over mining when clicking an entity (so mobs aren't "hard to hit"
       // due to a breakable block behind them).
+      this._handleWandSelectionInput();
       this._maybeMeleeMob();
       entityManager.update(dtSec);
 
@@ -6699,6 +7446,7 @@ export class Game {
             zombiePlayerTargets.push({ peerId: null, x: pl.x, y: pl.y });
           }
         }
+        const sandboxWorld = this._isSandboxWorld();
         let spawnViewRects: ReadonlyArray<MobSpawnViewRect> | undefined;
         const pipeForSpawn = this.pipeline;
         if (pipeForSpawn !== null) {
@@ -6741,25 +7489,27 @@ export class Game {
           rng,
           this._worldTime.ms,
           { x: pl.x, y: pl.y },
-          zombiePlayerTargets,
-          (peerId, dmg) => {
-            const em = this.entityManager;
-            if (em === null) {
-              return;
-            }
-            const localPeer = this.adapter.getLocalPeerId();
-            const st = this.adapter.state;
-            if (peerId === null || (localPeer !== null && peerId === localPeer)) {
-              em.getPlayer().takeDamage(dmg);
-              return;
-            }
-            if (st.status === "connected" && st.role === "host") {
-              this.adapter.send(peerId as PeerId, {
-                type: MsgType.PLAYER_DAMAGE_APPLIED,
-                damage: dmg,
-              });
-            }
-          },
+          sandboxWorld ? [] : zombiePlayerTargets,
+          sandboxWorld
+            ? undefined
+            : (peerId, dmg) => {
+                const em = this.entityManager;
+                if (em === null) {
+                  return;
+                }
+                const localPeer = this.adapter.getLocalPeerId();
+                const st = this.adapter.state;
+                if (peerId === null || (localPeer !== null && peerId === localPeer)) {
+                  em.getPlayer().takeDamage(dmg);
+                  return;
+                }
+                if (st.status === "connected" && st.role === "host") {
+                  this.adapter.send(peerId as PeerId, {
+                    type: MsgType.PLAYER_DAMAGE_APPLIED,
+                    damage: dmg,
+                  });
+                }
+              },
           spawnViewRects,
         );
         const flush = this._mobManager.flushHostReplication();
@@ -7090,7 +7840,11 @@ export class Game {
 
     if (this.world !== null) {
       const tLightFlush = import.meta.env.DEV ? chunkPerfNow() : 0;
-      this.world.flushPendingLightRecomputes();
+      // Keep frame pacing stable under load: spend less light time when the previous
+      // render delta is already slow, then recover to full budget on healthy frames.
+      const lightFlushBudgetMs =
+        dtSec > 1 / 28 ? 1 : dtSec > 1 / 42 ? 2 : undefined;
+      this.world.flushPendingLightRecomputes(lightFlushBudgetMs);
       if (import.meta.env.DEV) {
         chunkPerfLog("game:flushPendingLightRecomputes", chunkPerfNow() - tLightFlush);
       }
@@ -7261,6 +8015,7 @@ export class Game {
       );
       this._craftingPanel?.update(pl.inventory);
       this._chestPanel?.update();
+      this._creativePanel?.update();
     }
     this.cursorStackUI?.sync();
     if (

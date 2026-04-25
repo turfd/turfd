@@ -431,11 +431,16 @@ const workshopManifestObjectSchema = z
     description: z.string().max(500).default(""),
     mod_type: workshopModTypeManifestSchema.default("behavior_pack"),
     game_version_min: z.string().regex(/^\d+\.\d+\.\d+$/).optional(),
+    /** Optional legacy explicit file lists; modern packs are discovered from folder layout. */
     blocks: z.array(z.string()).default([]),
     items: z.array(z.string()).default([]),
     recipes: z.array(z.string()).default([]),
-    /** Behavior packs: loot JSON paths inside the ZIP (same shape as `blocks.loot.json`). */
+    /** Optional legacy explicit loot paths inside the ZIP. */
     loot: z.array(z.string()).default([]),
+    /** Optional legacy explicit structure paths inside the ZIP. */
+    structures: z.array(z.string()).default([]),
+    /** Optional legacy explicit feature paths inside the ZIP. */
+    features: z.array(z.string()).default([]),
     textures: z.array(z.string()).default([]),
     texture_atlas_patch: z.string().optional(),
     /** Maps item `textureName` → PNG path inside the ZIP (for the item atlas). */
