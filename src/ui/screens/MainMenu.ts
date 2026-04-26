@@ -4987,7 +4987,12 @@ export class MainMenu {
       root.appendChild(body);
       mount.appendChild(root);
 
-      renderHome();
+      if (auth.hasPasswordRecoveryPending()) {
+        setActiveTab("profile");
+        void performTabRender("profile");
+      } else {
+        renderHome();
+      }
       if (opts.playStartupIntro === true) {
         void runMainMenuStartupIntro({
           mount,

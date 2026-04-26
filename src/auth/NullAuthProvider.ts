@@ -40,6 +40,17 @@ export class NullAuthProvider implements IAuthProvider {
     });
   }
 
+  hasPasswordRecoveryPending(): boolean {
+    return false;
+  }
+
+  updatePassword(): Promise<{ ok: true } | { ok: false; error: string }> {
+    return Promise.resolve({
+      ok: false,
+      error: "Password update requires Supabase to be configured.",
+    });
+  }
+
   signOut(): Promise<void> {
     return Promise.resolve();
   }

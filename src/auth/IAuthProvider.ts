@@ -38,6 +38,14 @@ export interface IAuthProvider {
     email: string,
   ): Promise<{ ok: true } | { ok: false; error: string }>;
 
+  /** True when current URL/session indicates a password-recovery flow. */
+  hasPasswordRecoveryPending(): boolean;
+
+  /** Set a new password for the current recovery/sign-in session. */
+  updatePassword(
+    nextPassword: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }>;
+
   signOut(): Promise<void>;
 
   /** Called when session or profile-relevant state may have changed. */

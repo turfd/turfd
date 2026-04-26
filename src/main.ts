@@ -404,9 +404,6 @@ function wireWorkshopHandlers(
   });
 
   menuBus.on("workshop:dev-folder-picked", async (e) => {
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H1",location:"main.ts:on:dev-folder-picked",message:"received dev-folder-picked",data:{hasHandle:e.handle!==null,handleName:e.handle?.name??null},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     try {
       await store.openDB();
       await modRepo.setDevFolder(e.handle);
@@ -438,9 +435,6 @@ function wireWorkshopHandlers(
     }
   });
   menuBus.on("workshop:dev-folder-files-picked", async (e) => {
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H1",location:"main.ts:on:dev-folder-files-picked",message:"received dev-folder-files-picked",data:{fileCount:e.files.length,sample:e.files.slice(0,3).map((f)=>f.relativePath)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     try {
       await store.openDB();
       await modRepo.importDevFolderFiles(e.files);

@@ -6,10 +6,36 @@ import type { AuthSession, IAuthProvider } from "./IAuthProvider";
 import type { ProfileRecord } from "./profile";
 import { validateUsername } from "./profile";
 
+function hasRecoveryTypeInUrl(): boolean {
+  const readType = (params: URLSearchParams): string | null => {
+    const t = params.get("type");
+    return t === null ? null : t.toLowerCase();
+  };
+  const fromSearch = readType(new URLSearchParams(window.location.search));
+  if (fromSearch === "recovery") {
+    return true;
+  }
+  const hashRaw = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const fromHash = readType(new URLSearchParams(hashRaw));
+  return fromHash === "recovery";
+}
+
 function mapAuthError(err: unknown): string {
+  if (err !== null && typeof err === "object" && "status" in err) {
+    const status = (err as { status?: unknown }).status;
+    if (typeof status === "number" && status === 429) {
+      return "Too many attempts right now. Please wait a minute and try again.";
+    }
+  }
   if (err !== null && typeof err === "object" && "message" in err) {
     const m = (err as { message?: string }).message;
     if (typeof m === "string" && m.trim() !== "") {
+      const lower = m.toLowerCase();
+      if (lower.includes("too many") || lower.includes("rate limit") || lower.includes("security purposes")) {
+        return "Too many attempts right now. Please wait a minute and try again.";
+      }
       return m;
     }
   }
@@ -20,6 +46,7 @@ export class SupabaseAuthProvider implements IAuthProvider {
   readonly isConfigured = true;
 
   private readonly client: SupabaseClient;
+  private recoveryPending = hasRecoveryTypeInUrl();
 
   private session: AuthSession | null = null;
 
@@ -38,7 +65,10 @@ export class SupabaseAuthProvider implements IAuthProvider {
       .catch((err: unknown) => {
         console.warn("[SupabaseAuthProvider] getSession failed", err);
       });
-    this.client.auth.onAuthStateChange((_event, session) => {
+    this.client.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        this.recoveryPending = true;
+      }
       void this.applyAuthSession(session);
     });
   }
@@ -143,10 +173,37 @@ export class SupabaseAuthProvider implements IAuthProvider {
     if (trimmed === "") {
       return { ok: false, error: "Enter your email first." };
     }
-    const { error } = await this.client.auth.resetPasswordForEmail(trimmed);
+    const base = import.meta.env.BASE_URL ?? "/";
+    const basePath = base.startsWith("/") ? base : `/${base}`;
+    const redirectTo = new URL(basePath, window.location.origin).toString();
+    const { error } = await this.client.auth.resetPasswordForEmail(trimmed, {
+      redirectTo,
+    });
     if (error !== null) {
       return { ok: false, error: mapAuthError(error) };
     }
+    return { ok: true };
+  }
+
+  hasPasswordRecoveryPending(): boolean {
+    return this.recoveryPending;
+  }
+
+  async updatePassword(
+    nextPassword: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const pwd = nextPassword.trim();
+    if (pwd === "") {
+      return { ok: false, error: "Enter a new password first." };
+    }
+    const { error } = await this.client.auth.updateUser({ password: pwd });
+    if (error !== null) {
+      return { ok: false, error: mapAuthError(error) };
+    }
+    this.recoveryPending = false;
+    const cleaned = `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(null, document.title, cleaned);
+    this.notify();
     return { ok: true };
   }
 

@@ -155,6 +155,58 @@ export function mountProfileScreen(
         signed.className = "mm-note";
         signed.textContent = "Signed in as " + uname + ".";
 
+        if (auth.hasPasswordRecoveryPending()) {
+          const recoveryTitle = document.createElement("p");
+          recoveryTitle.className = "mm-note";
+          recoveryTitle.textContent = "Set a new password for your account.";
+          inner.appendChild(recoveryTitle);
+
+          const newPassInput = document.createElement("input");
+          newPassInput.id = "stratum-profile-password-new";
+          newPassInput.type = "password";
+          newPassInput.autocomplete = "new-password";
+          const newPassWrap = profileField("Set password", newPassInput);
+
+          const confirmPassInput = document.createElement("input");
+          confirmPassInput.id = "stratum-profile-password-confirm";
+          confirmPassInput.type = "password";
+          confirmPassInput.autocomplete = "new-password";
+          const confirmPassWrap = profileField("Retype password", confirmPassInput);
+
+          const recoveryActions = document.createElement("div");
+          recoveryActions.className = "stratum-profile-actions";
+          const setPasswordBtn = document.createElement("button");
+          setPasswordBtn.type = "button";
+          setPasswordBtn.className = "mm-btn";
+          setPasswordBtn.textContent = "Save new password";
+          setPasswordBtn.addEventListener("click", () => {
+            void (async () => {
+              setFeedback("", "clear");
+              const next = newPassInput.value;
+              const confirm = confirmPassInput.value;
+              if (next.length < 8) {
+                setFeedback("Use at least 8 characters for your new password.", "err");
+                return;
+              }
+              if (next !== confirm) {
+                setFeedback("Passwords do not match.", "err");
+                return;
+              }
+              const res = await auth.updatePassword(next);
+              if (!res.ok) {
+                setFeedback(res.error, "err");
+                return;
+              }
+              setFeedback("Password updated. You can now sign in normally.", "ok");
+              render();
+            })();
+          });
+          recoveryActions.appendChild(setPasswordBtn);
+          inner.appendChild(newPassWrap);
+          inner.appendChild(confirmPassWrap);
+          inner.appendChild(recoveryActions);
+        }
+
         const nameInput = document.createElement("input");
         nameInput.id = "stratum-profile-username";
         nameInput.type = "text";
