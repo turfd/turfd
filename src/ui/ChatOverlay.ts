@@ -22,14 +22,12 @@ const CMD_HINTS: Record<string, string> = {
     "/structure export | /structure place <id> [x y] — Export selection or place a structure (host / OP, cheats)",
   op: "/op <player> — Grant operator (host only)",
   deop: "/deop <player|uuid> — Revoke operator (host only)",
-  crash: "/crash — Trigger a test crash report and recovery overlay (host only)",
   wand: "/wand — Toggle wooden-axe wand selection mode (host / OP, cheats)",
 };
 
 const CMD_ORDER = [
   "ban",
   "deop",
-  "crash",
   "give",
   "kick",
   "mute",

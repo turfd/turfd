@@ -92,8 +92,6 @@ export type ChatHostControllerDeps = {
   executeStructure: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/wand` toggle helpers. */
   executeWand: (issuerPeerId: string, rest: string) => void;
-  /** Host-only: `/crash` testing hook. */
-  executeCrash: (issuerPeerId: string, rest: string) => void;
   /** World setting gate for cheat-like commands. */
   isCheatsEnabled: () => boolean;
 };
@@ -267,18 +265,6 @@ export class ChatHostController {
         return true;
       }
       this.d.executeWand(fromPeerId, rest);
-      return true;
-    }
-
-    if (cmd === "crash") {
-      if (!this.canModerate(fromPeerId)) {
-        this.d.sendSystemTo(
-          fromPeerId as PeerId,
-          "You do not have permission to use this command.",
-        );
-        return true;
-      }
-      this.d.executeCrash(fromPeerId, rest);
       return true;
     }
 

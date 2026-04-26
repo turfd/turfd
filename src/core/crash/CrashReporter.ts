@@ -7,6 +7,8 @@ type CrashSource = "error" | "unhandledrejection" | "freeze" | "manual_test";
 type CrashUiPayload = Extract<GameEvent, { type: "ui:crash-log" }>;
 
 type CrashReportPayload = {
+  crashId: string;
+  sessionId: string;
   source: CrashSource;
   message: string;
   stack: string;
@@ -24,6 +26,7 @@ type CrashReportPayload = {
     lastRenderAtMs: number | null;
     freezeThresholdMs: number;
     visibilityState: DocumentVisibilityState;
+    recentEvents: string[];
   };
 };
 
@@ -39,6 +42,13 @@ type SessionContextPatch = {
 
 const DEFAULT_FREEZE_THRESHOLD_MS = 10_000;
 const FOREGROUND_GRACE_MS = 2500;
+const MAX_BREADCRUMBS = 24;
+
+function createId(prefix: string): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  const ts = Date.now().toString(36);
+  return `${prefix}_${ts}_${rand}`;
+}
 
 function toErrorLike(value: unknown): { name: string; message: string; stack: string } {
   if (value instanceof Error) {
@@ -71,6 +81,8 @@ function truncate(s: string, max: number): string {
 
 function prettyCrashLog(report: CrashReportPayload, sendStatus: string): string {
   return [
+    `Crash ID: ${report.crashId}`,
+    `Session ID: ${report.sessionId}`,
     `Crash source: ${report.source}`,
     `Message: ${report.message}`,
     `Name: ${report.name}`,
@@ -87,6 +99,9 @@ function prettyCrashLog(report: CrashReportPayload, sendStatus: string): string 
     } ago`,
     `Report status: ${sendStatus}`,
     "",
+    "Recent events:",
+    ...(report.context.recentEvents.length > 0 ? report.context.recentEvents : ["(none recorded)"]),
+    "",
     "Stack:",
     report.stack || "(no stack available)",
   ].join("\n");
@@ -96,6 +111,7 @@ export class CrashReporter {
   private readonly sendReport: CrashReporterOptions["sendReport"];
   private readonly freezeThresholdMs: number;
   private readonly buildInfo = getStratumBuildInfo();
+  private readonly sessionId = createId("session");
   private bus: EventBus | null = null;
   private unsubscribers: Array<() => void> = [];
   private watchdogTimer: number | null = null;
@@ -111,6 +127,7 @@ export class CrashReporter {
   private lastReportName = "";
   private lastReportMessage = "";
   private lastForegroundAtMs = Date.now();
+  private readonly breadcrumbs: string[] = [];
   private onVisibilityChange: (() => void) | null = null;
   private onFocus: (() => void) | null = null;
 
@@ -128,6 +145,15 @@ export class CrashReporter {
     }
   }
 
+  private addBreadcrumb(event: string, detail?: string): void {
+    const stamp = new Date().toISOString();
+    const line = detail && detail.trim() !== "" ? `${stamp} ${event}: ${detail}` : `${stamp} ${event}`;
+    this.breadcrumbs.push(truncate(line, 220));
+    if (this.breadcrumbs.length > MAX_BREADCRUMBS) {
+      this.breadcrumbs.splice(0, this.breadcrumbs.length - MAX_BREADCRUMBS);
+    }
+  }
+
   attachBus(bus: EventBus): void {
     this.detachBus();
     this.bus = bus;
@@ -137,18 +163,19 @@ export class CrashReporter {
       }),
       bus.on("game:network-role", (e) => {
         this.networkRole = e.role;
+        this.addBreadcrumb("network-role", e.role);
       }),
       bus.on("game:worldLoaded", (e) => {
         this.worldName = e.name;
+        this.addBreadcrumb("world-loaded", e.name);
       }),
       bus.on("game:chat-submit", (e) => {
         this.lastCommand = e.text.trim().slice(0, 160);
+        this.addBreadcrumb("chat-submit", this.lastCommand);
       }),
       bus.on("net:error", (e) => {
         this.lastUiError = e.message.slice(0, 240);
-      }),
-      bus.on("debug:trigger-crash", () => {
-        void this.report("manual_test", new Error("[CrashTest] /crash invoked"));
+        this.addBreadcrumb("net-error", this.lastUiError);
       }),
     );
     this.lastRenderAtMs = Date.now();
@@ -178,6 +205,7 @@ export class CrashReporter {
       }
       const idleMs = Date.now() - this.lastRenderAtMs;
       if (idleMs >= this.freezeThresholdMs) {
+        this.addBreadcrumb("freeze-watchdog", `${idleMs}ms idle`);
         void this.report(
           "freeze",
           new Error(
@@ -210,6 +238,7 @@ export class CrashReporter {
 
   async report(source: CrashSource, reason: unknown): Promise<void> {
     const err = toErrorLike(reason);
+    const crashId = createId("crash");
     const signature = `${source}|${err.name}|${err.message}|${err.stack.slice(0, 240)}`;
     const nowMs = Date.now();
     const duplicateBurst =
@@ -227,8 +256,11 @@ export class CrashReporter {
     this.lastReportAtMs = nowMs;
     this.lastReportName = err.name;
     this.lastReportMessage = err.message;
+    this.addBreadcrumb("crash-report", `${source} ${err.name}`);
 
     const payload: CrashReportPayload = {
+      crashId,
+      sessionId: this.sessionId,
       source,
       name: truncate(err.name, 120),
       message: truncate(err.message, 1800),
@@ -246,6 +278,7 @@ export class CrashReporter {
         lastRenderAtMs: this.lastRenderAtMs,
         freezeThresholdMs: this.freezeThresholdMs,
         visibilityState: document.visibilityState,
+        recentEvents: [...this.breadcrumbs],
       },
     };
 

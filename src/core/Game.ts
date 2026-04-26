@@ -3504,9 +3504,6 @@ export class Game {
       executeWand: (issuerPeerId, rest) => {
         this._executeWandCommand(issuerPeerId, rest);
       },
-      executeCrash: (issuerPeerId, rest) => {
-        this._executeCrashCommand(issuerPeerId, rest);
-      },
       isCheatsEnabled: () => this._cheatsEnabled,
     });
   }
@@ -4003,22 +4000,6 @@ export class Game {
     );
   }
 
-  private _executeCrashCommand(issuerPeerId: string | null, rest: string): void {
-    if (rest.trim() !== "") {
-      this._giveFeedbackToIssuer(issuerPeerId, "Usage: /crash");
-      return;
-    }
-    if (!this._isLocalIssuer(issuerPeerId)) {
-      this._giveFeedbackToIssuer(issuerPeerId, "Only the local host can run /crash.");
-      return;
-    }
-    this._giveFeedbackToIssuer(issuerPeerId, "Triggering test crash report...");
-    this.bus.emit({ type: "debug:trigger-crash" } satisfies GameEvent);
-    window.setTimeout(() => {
-      throw new Error("[CrashTest] /crash invoked");
-    }, 0);
-  }
-
   /**
    * Host / offline solo: `/give` implementation. `issuerPeerId` is null when offline (solo).
    */
@@ -4341,15 +4322,6 @@ export class Game {
         kind: "system",
         text: formatStratumBuildLine(),
       } satisfies GameEvent);
-      return;
-    }
-    const crashMatch = /^\/crash(\s+.*)?$/i.exec(trimmed);
-    if (
-      crashMatch !== null &&
-      (st.status !== "connected" || st.role === "host")
-    ) {
-      const restCrash = (crashMatch[1] ?? "").trim();
-      this._executeCrashCommand(null, restCrash);
       return;
     }
     const wandMatch = /^\/wand(\s+.*)?$/i.exec(trimmed);

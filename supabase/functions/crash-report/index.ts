@@ -3,6 +3,8 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 type CrashReportPayload = {
+  crashId?: string;
+  sessionId?: string;
   source?: string;
   message?: string;
   stack?: string;
@@ -26,6 +28,7 @@ type CrashReportPayload = {
     lastRenderAtMs?: number | null;
     freezeThresholdMs?: number;
     visibilityState?: string;
+    recentEvents?: string[];
   };
 };
 
@@ -75,6 +78,8 @@ serve(async (req) => {
   }
 
   const source = trunc(asString(payload.source) || "unknown", 60);
+  const crashId = trunc(asString(payload.crashId), 80);
+  const sessionId = trunc(asString(payload.sessionId), 80);
   const message = trunc(asString(payload.message) || "Unknown crash", 1400);
   const stack = trunc(asString(payload.stack), 3500);
   const name = trunc(asString(payload.name) || "Error", 120);
@@ -86,6 +91,23 @@ serve(async (req) => {
   const worldUuid = trunc(asString(payload.context?.worldUuid ?? ""), 120);
   const lastCommand = trunc(asString(payload.context?.lastCommand ?? ""), 160);
   const lastUiError = trunc(asString(payload.context?.lastUiError ?? ""), 220);
+  const visibility = trunc(asString(payload.context?.visibilityState ?? ""), 20);
+  const freezeThreshold = Number.isFinite(payload.context?.freezeThresholdMs)
+    ? `${Math.max(0, Number(payload.context?.freezeThresholdMs))}ms`
+    : "";
+  const lastRenderAge = Number.isFinite(payload.context?.lastRenderAtMs)
+    ? `${Math.max(0, Date.now() - Number(payload.context?.lastRenderAtMs))}ms ago`
+    : "";
+  const recentEventsRaw = Array.isArray(payload.context?.recentEvents)
+    ? payload.context!.recentEvents
+        .map((v) => asString(v).trim())
+        .filter((v) => v.length > 0)
+        .slice(-8)
+    : [];
+  const recentEvents = trunc(
+    recentEventsRaw.length > 0 ? recentEventsRaw.join("\n") : "n/a",
+    1000,
+  );
   const buildId = trunc(asString(payload.build?.buildId ?? ""), 64);
   const appVersion = trunc(asString(payload.build?.appVersion ?? ""), 32);
   const mode = trunc(asString(payload.build?.mode ?? ""), 32);
@@ -98,6 +120,8 @@ serve(async (req) => {
         description: trunc(message, 1800),
         color: 0xd14b4b,
         fields: [
+          { name: "Crash ID", value: crashId || "unknown", inline: false },
+          { name: "Session ID", value: sessionId || "unknown", inline: false },
           { name: "Source", value: source || "unknown", inline: true },
           { name: "Time", value: timestampIso || "unknown", inline: true },
           { name: "Role", value: role || "unknown", inline: true },
@@ -105,6 +129,12 @@ serve(async (req) => {
           { name: "World UUID", value: worldUuid || "n/a", inline: true },
           { name: "Last command", value: lastCommand || "n/a", inline: false },
           { name: "Last UI error", value: lastUiError || "n/a", inline: false },
+          {
+            name: "Render/Visibility",
+            value: `${lastRenderAge || "n/a"} | threshold ${freezeThreshold || "n/a"} | ${visibility || "unknown"}`,
+            inline: false,
+          },
+          { name: "Recent events", value: recentEvents, inline: false },
           { name: "URL", value: url || "n/a", inline: false },
           { name: "Build", value: `${appVersion} | ${buildId} | ${mode}`, inline: false },
           { name: "UA", value: userAgent || "n/a", inline: false },
