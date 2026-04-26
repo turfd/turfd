@@ -1391,7 +1391,9 @@ export class Player {
           : world.getBlock(wx, wy);
 
       const canBreak =
-        def !== null && def.id !== this.airId && def.hardness !== 999;
+        def !== null &&
+        def.id !== this.airId &&
+        (this._gameMode === "sandbox" || def.hardness !== 999);
 
       if (canBreak && def !== null) {
         const heldSlot = state.hotbarSlot % HOTBAR_SIZE;
@@ -1613,13 +1615,17 @@ export class Player {
         const bid = world.getBackgroundId(wx, wy);
         if (bid !== 0) {
           const def = this.registry.getById(bid);
-          state.aimOutlineValidBlock = def.id !== this.airId && def.hardness !== 999;
+          state.aimOutlineValidBlock =
+            def.id !== this.airId &&
+            (this._gameMode === "sandbox" || def.hardness !== 999);
         } else {
           state.aimOutlineValidBlock = false;
         }
       } else {
         const def = world.getBlock(wx, wy);
-        state.aimOutlineValidBlock = def.id !== this.airId && def.hardness !== 999;
+        state.aimOutlineValidBlock =
+          def.id !== this.airId &&
+          (this._gameMode === "sandbox" || def.hardness !== 999);
       }
     } else {
       state.aimOutlineTarget = null;

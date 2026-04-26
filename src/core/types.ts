@@ -47,6 +47,13 @@ export type GameEvent =
     }
   /** In-game death overlay: respawn at world spawn (x=0). */
   | { type: "ui:death-respawn" }
+  | {
+      type: "ui:crash-log";
+      title: string;
+      message: string;
+      sendStatus: string;
+      log: string;
+    }
   | { type: "ui:quit" }
   | { type: "ui:toggle-multiplayer" }
   | { type: "ui:session-ended"; message: string }
@@ -176,6 +183,7 @@ export type GameEvent =
   /** True while chat input is focused for typing (widen bar, hide hotbar). */
   | { type: "ui:chat-compose"; open: boolean }
   | { type: "game:chat-submit"; text: string }
+  | { type: "debug:trigger-crash" }
   | { type: "game:chat-closed" }
   | { type: "craft:request"; recipeId: string; batches: number; shiftKey?: boolean }
   | { type: "craft:result"; ok: true; crafted: number; recipeId?: string; shiftKey?: boolean }

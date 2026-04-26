@@ -15,6 +15,7 @@ import {
   MAX_RENDER_DEVICE_PIXEL_RATIO,
 } from "../core/constants";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
+import { withPerfSpan } from "../debug/perfSpans";
 import { stratumCoreTextureAssetUrl } from "../core/textureManifest";
 
 import type { World } from "../world/World";
@@ -170,6 +171,15 @@ export class RenderPipeline implements RenderPipelineLayers {
    * Starts at 1 so the first `render()` call after enablement always primes the RT.
    */
   private _bloomMaskFrameCounter = 1;
+  private _lastBloomMaskCameraX = Number.NaN;
+  private _lastBloomMaskCameraY = Number.NaN;
+  private _lastBloomMaskBoundsX = Number.NaN;
+  private _lastBloomMaskBoundsY = Number.NaN;
+  private _lastBloomMaskBoundsW = Number.NaN;
+  private _lastBloomMaskBoundsH = Number.NaN;
+  private _compositeSyncDirty = true;
+  private readonly _bloomMaskWorldVisScratch: Array<{ n: Container; v: boolean }> = [];
+  private readonly _bloomMaskSiblingVisScratch: Array<{ n: Container; v: boolean }> = [];
   private _bgToneFilter: TonemapFilter | null = null;
 
 
@@ -832,6 +842,30 @@ export class RenderPipeline implements RenderPipelineLayers {
     return sibling instanceof Container;
   }
 
+  private shouldRefreshBloomMaskForPlayerMotion(): boolean {
+    const root = this._bloomMaskPlayerRoot;
+    if (root === null || root.parent === null || !root.visible) {
+      return false;
+    }
+    const b = root.getBounds(true);
+    const x = b.x;
+    const y = b.y;
+    const w = b.width;
+    const h = b.height;
+    const dx = Number.isFinite(this._lastBloomMaskBoundsX) ? Math.abs(x - this._lastBloomMaskBoundsX) : Infinity;
+    const dy = Number.isFinite(this._lastBloomMaskBoundsY) ? Math.abs(y - this._lastBloomMaskBoundsY) : Infinity;
+    const dw = Number.isFinite(this._lastBloomMaskBoundsW) ? Math.abs(w - this._lastBloomMaskBoundsW) : Infinity;
+    const dh = Number.isFinite(this._lastBloomMaskBoundsH) ? Math.abs(h - this._lastBloomMaskBoundsH) : Infinity;
+    const movedEnough = dx >= 1.25 || dy >= 1.25 || dw >= 0.9 || dh >= 0.9;
+    if (movedEnough) {
+      this._lastBloomMaskBoundsX = x;
+      this._lastBloomMaskBoundsY = y;
+      this._lastBloomMaskBoundsW = w;
+      this._lastBloomMaskBoundsH = h;
+    }
+    return movedEnough;
+  }
+
   /** Renders player silhouettes into {@link _bloomMaskRT} for composite bloom occlusion. */
   private renderBloomMask(): void {
     const vp = getVideoPrefs();
@@ -852,17 +886,21 @@ export class RenderPipeline implements RenderPipelineLayers {
       const p = playerRoot;
       const par = p.parent;
       if (par === le || par === lwo) {
-        const worldVis: { n: Container; v: boolean }[] = [];
+        const worldVis = this._bloomMaskWorldVisScratch;
+        worldVis.length = 0;
         for (const c of wr.children) {
           worldVis.push({ n: c, v: c.visible });
           c.visible = c === par;
         }
-        const sibVis: Array<{ n: (typeof par.children)[number]; v: boolean }> = [];
+        const sibVis = this._bloomMaskSiblingVisScratch;
+        sibVis.length = 0;
         for (const c of par.children) {
           sibVis.push({ n: c, v: c.visible });
           c.visible = this.shouldRenderBloomMaskSibling(c, p);
         }
-        this.renderWorldWithOverscanOffset(maskRt);
+        withPerfSpan("RenderPipeline.renderBloomMask.world", () => {
+          this.renderWorldWithOverscanOffset(maskRt);
+        });
         for (const { n, v } of sibVis) {
           n.visible = v;
         }
@@ -925,8 +963,8 @@ export class RenderPipeline implements RenderPipelineLayers {
       const screen = this.app.renderer.screen;
       const shouldCull =
         !Number.isFinite(this._lastCullCameraX) ||
-        Math.abs(cameraPos.x - this._lastCullCameraX) >= 4 ||
-        Math.abs(cameraPos.y - this._lastCullCameraY) >= 4 ||
+        Math.abs(cameraPos.x - this._lastCullCameraX) >= 6 ||
+        Math.abs(cameraPos.y - this._lastCullCameraY) >= 6 ||
         screen.width !== this._lastCullScreenW ||
         screen.height !== this._lastCullScreenH;
       if (shouldCull) {
@@ -944,20 +982,38 @@ export class RenderPipeline implements RenderPipelineLayers {
           chunkPerfLog("renderPipeline:cull", chunkPerfNow() - tCull);
         }
       }
-      this.renderWorldWithOverscanOffset(this._albedoRT);
+      withPerfSpan("RenderPipeline.renderWorldToAlbedo", () => {
+        this.renderWorldWithOverscanOffset(this._albedoRT!);
+      });
       const vp = getVideoPrefs();
       if (vp.bloom) {
         // Render the bloom mask every other frame — the RT persists in between, and
         // bloom occlusion tolerates a single-frame stale silhouette far better than it
         // tolerates the duplicated world render this path implies at 60 FPS.
         this._bloomMaskFrameCounter = (this._bloomMaskFrameCounter + 1) | 0;
-        if ((this._bloomMaskFrameCounter & 1) === 0) {
-          this.renderBloomMask();
+        const bloomCameraStill =
+          Number.isFinite(this._lastBloomMaskCameraX) &&
+          Math.abs(cameraPos.x - this._lastBloomMaskCameraX) < 1 &&
+          Math.abs(cameraPos.y - this._lastBloomMaskCameraY) < 1;
+        const bloomModulo = bloomCameraStill ? 3 : 2;
+        const bloomPlayerChanged = this.shouldRefreshBloomMaskForPlayerMotion();
+        if (
+          this._skyLightningAlpha > 0.001 ||
+          bloomPlayerChanged ||
+          this._bloomMaskFrameCounter % bloomModulo === 0
+        ) {
+          withPerfSpan("RenderPipeline.renderBloomMask", () => {
+            this.renderBloomMask();
+          });
+          this._lastBloomMaskCameraX = cameraPos.x;
+          this._lastBloomMaskCameraY = cameraPos.y;
         }
       }
       try {
         this.camera.worldRoot.visible = false;
-        this.app.render();
+        withPerfSpan("RenderPipeline.compositeRender", () => {
+          this.app?.render();
+        });
       } finally {
         this.camera.worldRoot.visible = true;
       }
@@ -1052,6 +1108,10 @@ export class RenderPipeline implements RenderPipelineLayers {
       this._albedoRT = null;
       this._bloomMaskRT?.destroy(true);
       this._bloomMaskRT = null;
+      this._lastBloomMaskBoundsX = Number.NaN;
+      this._lastBloomMaskBoundsY = Number.NaN;
+      this._lastBloomMaskBoundsW = Number.NaN;
+      this._lastBloomMaskBoundsH = Number.NaN;
       this._skyCssCanvas?.remove();
       this._skyCssCanvas = null;
       this._skyCssCtx = null;
@@ -1084,11 +1144,13 @@ export class RenderPipeline implements RenderPipelineLayers {
     const w = Math.max(1, Math.round(this.app.renderer.width));
     const h = Math.max(1, Math.round(this.app.renderer.height));
     const res = this.app.renderer.resolution;
+    let sizeChanged = false;
     if (
       w !== this.lastScreenW ||
       h !== this.lastScreenH ||
       res !== this._lastRendererRes
     ) {
+      sizeChanged = true;
       this.lastScreenW = w;
       this.lastScreenH = h;
       this._lastRendererRes = res;
@@ -1110,9 +1172,13 @@ export class RenderPipeline implements RenderPipelineLayers {
       } else {
         this._bloomMaskRT?.resize(rtW, rtH, res);
       }
+      this._compositeSyncDirty = true;
     }
     this._resizeCloudLayer();
-    this.syncCompositeSpriteToAlbedoRt();
+    if (sizeChanged || this._compositeSyncDirty) {
+      this.syncCompositeSpriteToAlbedoRt();
+      this._compositeSyncDirty = false;
+    }
   }
 
   /**

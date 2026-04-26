@@ -470,6 +470,7 @@ export class Game {
   private readonly _foliageBendLatchRemote = new Map<string, number>();
   private _lastMouseWorldPosUpdateTime = 0;
   private _lastInvalidCameraTargetWarnMs = 0;
+  private _lastPerfSpikeLogMs = 0;
   private started = false;
   private _windowResizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly scheduleWindowResizedEvent = (): void => {
@@ -3503,6 +3504,9 @@ export class Game {
       executeWand: (issuerPeerId, rest) => {
         this._executeWandCommand(issuerPeerId, rest);
       },
+      executeCrash: (issuerPeerId, rest) => {
+        this._executeCrashCommand(issuerPeerId, rest);
+      },
       isCheatsEnabled: () => this._cheatsEnabled,
     });
   }
@@ -3999,6 +4003,22 @@ export class Game {
     );
   }
 
+  private _executeCrashCommand(issuerPeerId: string | null, rest: string): void {
+    if (rest.trim() !== "") {
+      this._giveFeedbackToIssuer(issuerPeerId, "Usage: /crash");
+      return;
+    }
+    if (!this._isLocalIssuer(issuerPeerId)) {
+      this._giveFeedbackToIssuer(issuerPeerId, "Only the local host can run /crash.");
+      return;
+    }
+    this._giveFeedbackToIssuer(issuerPeerId, "Triggering test crash report...");
+    this.bus.emit({ type: "debug:trigger-crash" } satisfies GameEvent);
+    window.setTimeout(() => {
+      throw new Error("[CrashTest] /crash invoked");
+    }, 0);
+  }
+
   /**
    * Host / offline solo: `/give` implementation. `issuerPeerId` is null when offline (solo).
    */
@@ -4321,6 +4341,15 @@ export class Game {
         kind: "system",
         text: formatStratumBuildLine(),
       } satisfies GameEvent);
+      return;
+    }
+    const crashMatch = /^\/crash(\s+.*)?$/i.exec(trimmed);
+    if (
+      crashMatch !== null &&
+      (st.status !== "connected" || st.role === "host")
+    ) {
+      const restCrash = (crashMatch[1] ?? "").trim();
+      this._executeCrashCommand(null, restCrash);
       return;
     }
     const wandMatch = /^\/wand(\s+.*)?$/i.exec(trimmed);
@@ -5841,6 +5870,7 @@ export class Game {
       layer,
       airId,
       heldDef,
+      this._worldGameMode,
     );
     this.adapter.send(peerId as PeerId, {
       type: MsgType.TERRAIN_ACK,
@@ -7370,7 +7400,7 @@ export class Game {
         this._playerStateBroadcaster.tick();
       }
       world.updateRemotePlayers(dtSec);
-      {
+      withPerfSpan("Game.fixedUpdate.audioAmbient", () => {
         const em = this.entityManager;
         const w = this.world;
         const snd = this.audio;
@@ -7391,102 +7421,106 @@ export class Game {
           this._tickPigAmbientSfx(dtSec);
           this._tickDuckAmbientSfx(dtSec);
         }
-      }
+      });
       const dropNet = this.adapter.state;
       {
         const mm = this._mobManager;
         if (role === "offline" || role === "host") {
           const rng = world.forkMobRng();
-          world.updateArrows(
-            dtSec,
-            mm !== null
-              ? (ox, oy, nx, ny, damage, shooterFeetX) =>
-                  mm.tryArrowStrikeSegment(ox, oy, nx, ny, damage, shooterFeetX, rng)
-              : null,
-            mm !== null
-              ? (mobId) => {
-                  const m = mm.getById(mobId);
-                  if (m === undefined) {
-                    return undefined;
+          withPerfSpan("Game.fixedUpdate.worldArrows", () => {
+            world.updateArrows(
+              dtSec,
+              mm !== null
+                ? (ox, oy, nx, ny, damage, shooterFeetX) =>
+                    mm.tryArrowStrikeSegment(ox, oy, nx, ny, damage, shooterFeetX, rng)
+                : null,
+              mm !== null
+                ? (mobId) => {
+                    const m = mm.getById(mobId);
+                    if (m === undefined) {
+                      return undefined;
+                    }
+                    return {
+                      x: m.x,
+                      y: m.y,
+                      tiltRad: mobDeathTipOverTiltRad(
+                        m.kind,
+                        m.facingRight,
+                        m.deathAnimRemainSec,
+                      ),
+                      facingRight: m.facingRight,
+                    };
                   }
-                  return {
-                    x: m.x,
-                    y: m.y,
-                    tiltRad: mobDeathTipOverTiltRad(
-                      m.kind,
-                      m.facingRight,
-                      m.deathAnimRemainSec,
-                    ),
-                    facingRight: m.facingRight,
-                  };
+                : undefined,
+              (sx, sy) => {
+                const snd = this.audio;
+                const em = this.entityManager;
+                if (snd === null || em === null) {
+                  return;
                 }
-              : undefined,
-            (sx, sy) => {
-              const snd = this.audio;
-              const em = this.entityManager;
-              if (snd === null || em === null) {
-                return;
-              }
-              const lp = em.getPlayer().state.position;
-              const listenY = lp.y + PLAYER_HEIGHT * 0.5;
-              snd.playSfx("bowhit", {
-                pitchVariance: 55,
-                world: {
-                  listenerX: lp.x,
-                  listenerY: listenY,
-                  sourceX: sx,
-                  sourceY: sy,
-                },
-              });
-            },
-            (mobId) => {
-              this.entityManager?.bumpMobHealthBar(mobId);
-            },
-          );
+                const lp = em.getPlayer().state.position;
+                const listenY = lp.y + PLAYER_HEIGHT * 0.5;
+                snd.playSfx("bowhit", {
+                  pitchVariance: 55,
+                  world: {
+                    listenerX: lp.x,
+                    listenerY: listenY,
+                    sourceX: sx,
+                    sourceY: sy,
+                  },
+                });
+              },
+              (mobId) => {
+                this.entityManager?.bumpMobHealthBar(mobId);
+              },
+            );
+          });
         } else {
           world.updateArrows(dtSec, null, undefined, undefined, undefined);
         }
       }
 
-      world.updateDroppedItems(
-        dtSec,
-        {
-          x: pl.x,
-          y: pl.y + PLAYER_HEIGHT * 0.5,
-        },
-        entityManager.getPlayer().inventory,
-        () => {
-          const snd = this.audio;
-          if (snd === null) {
-            return;
-          }
-          const now = performance.now();
-          if (now - this._lastItemPickupSfxMs < ITEM_PICKUP_SFX_MIN_INTERVAL_MS) {
-            return;
-          }
-          this._lastItemPickupSfxMs = now;
-          snd.playSfx("item_pickup", { pitchVariance: 120 });
-        },
-        dropNet.status === "connected" && dropNet.role === "client"
-          ? (netId) => {
-              const hid = dropNet.lanHostPeerId;
-              if (hid !== null) {
-                this.adapter.send(hid as PeerId, {
-                  type: MsgType.DROP_PICKUP_REQUEST,
+      withPerfSpan("Game.fixedUpdate.droppedItems", () => {
+        world.updateDroppedItems(
+          dtSec,
+          {
+            x: pl.x,
+            y: pl.y + PLAYER_HEIGHT * 0.5,
+          },
+          entityManager.getPlayer().inventory,
+          () => {
+            const snd = this.audio;
+            if (snd === null) {
+              return;
+            }
+            const now = performance.now();
+            if (now - this._lastItemPickupSfxMs < ITEM_PICKUP_SFX_MIN_INTERVAL_MS) {
+              return;
+            }
+            this._lastItemPickupSfxMs = now;
+            snd.playSfx("item_pickup", { pitchVariance: 120 });
+          },
+          dropNet.status === "connected" && dropNet.role === "client"
+            ? (netId) => {
+                const hid = dropNet.lanHostPeerId;
+                if (hid !== null) {
+                  this.adapter.send(hid as PeerId, {
+                    type: MsgType.DROP_PICKUP_REQUEST,
+                    netId,
+                  });
+                }
+              }
+            : undefined,
+          dropNet.status === "connected" && dropNet.role === "host"
+            ? (netId) => {
+                this.adapter.broadcast({
+                  type: MsgType.DROP_DESPAWN,
                   netId,
                 });
               }
-            }
-          : undefined,
-        dropNet.status === "connected" && dropNet.role === "host"
-          ? (netId) => {
-              this.adapter.broadcast({
-                type: MsgType.DROP_DESPAWN,
-                netId,
-              });
-            }
-          : undefined,
-      );
+            : undefined,
+        );
+      });
 
       if (
         (role === "offline" || role === "host") &&
@@ -7937,22 +7971,42 @@ export class Game {
         ? Math.min((now - this.lastRenderWallMs) / 1000, 0.1)
         : 0;
     this.lastRenderWallMs = now;
+    const perfSpikePhaseMs: Record<string, number> = {};
+    const perfMark = (phase: string, t0: number): void => {
+      perfSpikePhaseMs[phase] = Math.max(0, performance.now() - t0);
+    };
 
     if (this.world !== null) {
       const tLightFlush = import.meta.env.DEV ? chunkPerfNow() : 0;
+      const tPhase = performance.now();
       // Keep frame pacing stable under load: spend less light time when the previous
       // render delta is already slow, then recover to full budget on healthy frames.
-      const lightFlushBudgetMs =
-        dtSec > 1 / 28 ? 1 : dtSec > 1 / 42 ? 2 : undefined;
+      const pendingLight = this.world.getPendingLightRecomputeCount();
+      let lightFlushBudgetMs: number | undefined;
+      if (dtSec > 1 / 24) {
+        lightFlushBudgetMs = 1;
+      } else if (dtSec > 1 / 35) {
+        lightFlushBudgetMs = 2;
+      } else if (pendingLight >= 96) {
+        lightFlushBudgetMs = 5;
+      } else if (pendingLight >= 48) {
+        lightFlushBudgetMs = 4;
+      } else if (pendingLight <= 8) {
+        lightFlushBudgetMs = 2;
+      } else {
+        lightFlushBudgetMs = undefined;
+      }
       withPerfSpan("World.flushPendingLightRecomputes", () => {
         this.world?.flushPendingLightRecomputes(lightFlushBudgetMs);
       });
+      perfMark("World.flushPendingLightRecomputes", tPhase);
       if (import.meta.env.DEV) {
         chunkPerfLog("game:flushPendingLightRecomputes", chunkPerfNow() - tLightFlush);
       }
     }
 
     if (this.chunkRenderer !== null && this.world !== null) {
+      const chunkRenderer = this.chunkRenderer;
       const cm = this.world.getChunkManager();
       const centre = this.world.getStreamCentre();
       const visible =
@@ -7960,9 +8014,11 @@ export class Game {
           ? cm.getLoadedChunks()
           : cm.getChunksWithinDistance(centre, VIEW_DISTANCE_CHUNKS);
       const tSync = import.meta.env.DEV ? chunkPerfNow() : 0;
+      const tSyncPhase = performance.now();
       withPerfSpan("ChunkRenderer.syncChunks", () => {
         this.chunkRenderer?.syncChunks(visible);
       });
+      perfMark("ChunkRenderer.syncChunks", tSyncPhase);
       if (import.meta.env.DEV) {
         chunkPerfLog("game:chunkRendererSync", chunkPerfNow() - tSync);
       }
@@ -8021,16 +8077,31 @@ export class Game {
           foliageWindBodies = bodies;
         }
       }
-      this.chunkRenderer.updateFoliageWind(tSec, foliageWindBodies);
-      this.chunkRenderer.updateFurnaceFire(tSec);
-      if (this.entityManager !== null) {
-        this.chunkRenderer.updateWaterRipples(
-          tSec,
-          this.entityManager.collectWaterRippleBodies(alpha, now),
-        );
+      const tFoliage = performance.now();
+      withPerfSpan("ChunkRenderer.updateFoliageWind", () => {
+        chunkRenderer.updateFoliageWind(tSec, foliageWindBodies);
+      });
+      perfMark("ChunkRenderer.updateFoliageWind", tFoliage);
+      const tFurnace = performance.now();
+      withPerfSpan("ChunkRenderer.updateFurnaceFire", () => {
+        chunkRenderer.updateFurnaceFire(tSec);
+      });
+      perfMark("ChunkRenderer.updateFurnaceFire", tFurnace);
+      const tRipple = performance.now();
+      const entityManager = this.entityManager;
+      if (entityManager !== null) {
+        withPerfSpan("ChunkRenderer.updateWaterRipples", () => {
+          chunkRenderer.updateWaterRipples(
+            tSec,
+            entityManager.collectWaterRippleBodies(alpha, now),
+          );
+        });
       } else {
-        this.chunkRenderer.updateWaterRipples(tSec, undefined);
+        withPerfSpan("ChunkRenderer.updateWaterRipples", () => {
+          chunkRenderer.updateWaterRipples(tSec, undefined);
+        });
       }
+      perfMark("ChunkRenderer.updateWaterRipples", tRipple);
     }
 
     if (this.entityManager !== null && this.pipeline !== null) {
@@ -8209,9 +8280,25 @@ export class Game {
         );
       }
     }
+    const tRenderPipeline = performance.now();
     withPerfSpan("RenderPipeline.render", () => {
       this.pipeline?.render(alpha);
     });
+    perfMark("RenderPipeline.render", tRenderPipeline);
+    if (import.meta.env.DEV) {
+      const frameMs = dtSec * 1000;
+      if (frameMs >= 30 && now - this._lastPerfSpikeLogMs >= 500) {
+        this._lastPerfSpikeLogMs = now;
+        const entries = Object.entries(perfSpikePhaseMs).sort((a, b) => b[1] - a[1]);
+        const topPhases = entries.slice(0, 5).map(([phase, ms]) => `${phase}:${ms.toFixed(2)}ms`);
+        console.warn("[Game] Render spike", {
+          frameMs: Number(frameMs.toFixed(2)),
+          dtSec: Number(dtSec.toFixed(4)),
+          pendingLight: this.world?.getPendingLightRecomputeCount() ?? 0,
+          topPhases,
+        });
+      }
+    }
     this.bus.emit({ type: "game:render", alpha } satisfies GameEvent);
   }
 

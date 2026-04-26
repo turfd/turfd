@@ -20,6 +20,7 @@ import {
   PAINTING_VARIANTS,
   decodePaintingMeta,
 } from "../painting/paintingData";
+import type { WorldGameMode } from "../../core/types";
 
 export type BreakTargetLayer = "fg" | "bg";
 
@@ -35,14 +36,16 @@ export function applyCommittedBreakOnWorld(
   layer: BreakTargetLayer,
   airId: number,
   heldItemDef: ReturnType<ItemRegistry["getById"]> | undefined,
+  gameMode: WorldGameMode,
 ): boolean {
+  const canBreakUnbreakable = gameMode === "sandbox";
   if (layer === "bg") {
     const bid = world.getBackgroundId(wx, wy);
     if (bid === 0) {
       return false;
     }
     const def = registry.getById(bid);
-    if (def.hardness === 999) {
+    if (def.hardness === 999 && !canBreakUnbreakable) {
       return false;
     }
     const dropsLoot = canHarvestDrops(def, heldItemDef);
@@ -55,7 +58,7 @@ export function applyCommittedBreakOnWorld(
 
   const cell = world.getBlock(wx, wy);
   const def = cell;
-  if (def.id === airId || def.hardness === 999) {
+  if (def.id === airId || (def.hardness === 999 && !canBreakUnbreakable)) {
     return false;
   }
 

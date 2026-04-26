@@ -38,6 +38,7 @@ import {
   updateLeafDecorationMesh,
 } from "./LeafDecorationBatch";
 import { chunkPerfLog, chunkPerfNow } from "../../debug/chunkPerf";
+import { withPerfSpan } from "../../debug/perfSpans";
 
 type ChunkMeshes = {
   bg: Mesh;
@@ -82,6 +83,16 @@ export class ChunkRenderer {
   private readonly _waterRippleSamples: WaterRippleSample[] = [];
   /** Reused in {@link syncChunks} to avoid per-frame `Set` allocation. */
   private readonly _syncSeen = new Set<string>();
+  private readonly _dirtyChunkQueue: Array<{
+    chunk: Chunk;
+    meshes: ChunkMeshes;
+    distSq: number;
+  }> = [];
+  private readonly _dirtyChunkNearest = new Array<{
+    chunk: Chunk;
+    meshes: ChunkMeshes;
+    distSq: number;
+  }>();
 
   constructor(
     pipeline: RenderPipeline,
@@ -119,6 +130,16 @@ export class ChunkRenderer {
     seen.clear();
     let seenCount = 0;
     let updatesThisFrame = 0;
+    let dirtyQueued = 0;
+    const meshOpts = this.tileMeshOpts();
+    const sampleBlockId = meshOpts.sampleBlockId;
+    const dirtyQueue = this._dirtyChunkQueue;
+    dirtyQueue.length = 0;
+    const nearestDirty = this._dirtyChunkNearest;
+    nearestDirty.length = 0;
+    const cam = this.pipeline.getCamera().getPosition();
+    const cameraChunkX = Math.floor(cam.x / (CHUNK_SIZE * BLOCK_SIZE));
+    const cameraChunkY = Math.floor((-cam.y) / (CHUNK_SIZE * BLOCK_SIZE));
 
     for (const chunk of loadedChunks) {
       seenCount += 1;
@@ -128,7 +149,6 @@ export class ChunkRenderer {
       if (triple === undefined) {
         const bg = buildBackgroundMesh(chunk, this.registry, this.atlas);
         const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler);
-        const meshOpts = this.tileMeshOpts();
         const {
           mesh: fg,
           waterMesh: fgWater,
@@ -140,7 +160,7 @@ export class ChunkRenderer {
           chunk,
           this.registry,
           this.atlas,
-          { sampleBlockId: meshOpts.sampleBlockId },
+          { sampleBlockId },
         );
         this.syncWindyFg(fg, windSways);
         this.syncFurnaceFg(fg, furnaceFires);
@@ -165,40 +185,67 @@ export class ChunkRenderer {
         chunk.renderDirty = false;
         added += 1;
       } else if (chunk.renderDirty) {
-        if (updatesThisFrame >= CHUNK_SYNC_MAX_PER_FRAME) {
-          continue;
-        }
-        updatesThisFrame += 1;
-        updateBackgroundMesh(triple.bg, chunk, this.registry, this.atlas);
-        updateFgShadowMesh(triple.fgShadow, chunk, this.fgShadowSampler);
-        const meshOpts = this.tileMeshOpts();
-        const { windSways, furnaceFires, waterSurfaces } = updateMesh(
-          triple.fg,
-          triple.fgWater,
+        const dx = chunk.coord.cx - cameraChunkX;
+        const dy = chunk.coord.cy - cameraChunkY;
+        dirtyQueue.push({
           chunk,
+          meshes: triple,
+          distSq: dx * dx + dy * dy,
+        });
+        dirtyQueued += 1;
+      }
+    }
+    // Keep only the nearest dirty chunks each frame. `CHUNK_SYNC_MAX_PER_FRAME` is small,
+    // so this bounded insertion is cheaper than sorting the full queue every render.
+    for (const item of dirtyQueue) {
+      if (nearestDirty.length === 0) {
+        nearestDirty.push(item);
+        continue;
+      }
+      let insertAt = nearestDirty.length;
+      while (insertAt > 0 && nearestDirty[insertAt - 1]!.distSq > item.distSq) {
+        insertAt -= 1;
+      }
+      if (nearestDirty.length < CHUNK_SYNC_MAX_PER_FRAME) {
+        nearestDirty.splice(insertAt, 0, item);
+      } else if (insertAt < CHUNK_SYNC_MAX_PER_FRAME) {
+        nearestDirty.splice(insertAt, 0, item);
+        nearestDirty.pop();
+      }
+    }
+
+    for (const item of nearestDirty) {
+      updatesThisFrame += 1;
+      withPerfSpan("ChunkRenderer.updateDirtyChunk", () => {
+        updateBackgroundMesh(item.meshes.bg, item.chunk, this.registry, this.atlas);
+        updateFgShadowMesh(item.meshes.fgShadow, item.chunk, this.fgShadowSampler);
+        const { windSways, furnaceFires, waterSurfaces } = updateMesh(
+          item.meshes.fg,
+          item.meshes.fgWater,
+          item.chunk,
           this.registry,
           this.atlas,
           meshOpts,
         );
         updateLeafDecorationMesh(
-          triple.leafDeco,
-          chunk,
+          item.meshes.leafDeco,
+          item.chunk,
           this.registry,
           this.atlas,
-          { sampleBlockId: meshOpts.sampleBlockId },
+          { sampleBlockId },
         );
-        this.syncWindyFg(triple.fg, windSways);
-        this.syncFurnaceFg(triple.fg, furnaceFires);
-        this.syncWateryFg(triple.fgWater, waterSurfaces);
-        this.positionChunkRoot(triple.bg, chunk.coord);
-        this.positionChunkRoot(triple.fgShadow, chunk.coord);
-        this.positionChunkRoot(triple.fg, chunk.coord);
-        this.positionChunkRoot(triple.leafDeco, chunk.coord);
-        this.positionChunkRoot(triple.fgWater, chunk.coord);
-        chunk.dirty = false;
-        chunk.renderDirty = false;
-        updated += 1;
-      }
+        this.syncWindyFg(item.meshes.fg, windSways);
+        this.syncFurnaceFg(item.meshes.fg, furnaceFires);
+        this.syncWateryFg(item.meshes.fgWater, waterSurfaces);
+        this.positionChunkRoot(item.meshes.bg, item.chunk.coord);
+        this.positionChunkRoot(item.meshes.fgShadow, item.chunk.coord);
+        this.positionChunkRoot(item.meshes.fg, item.chunk.coord);
+        this.positionChunkRoot(item.meshes.leafDeco, item.chunk.coord);
+        this.positionChunkRoot(item.meshes.fgWater, item.chunk.coord);
+      });
+      item.chunk.dirty = false;
+      item.chunk.renderDirty = false;
+      updated += 1;
     }
 
     let removed = 0;
@@ -231,6 +278,8 @@ export class ChunkRenderer {
         updated,
         removed,
         seenCount,
+        dirtyQueued,
+        deferredDirty: Math.max(0, dirtyQueued - updatesThisFrame),
       });
     }
   }

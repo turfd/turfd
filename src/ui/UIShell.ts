@@ -17,9 +17,12 @@ export class UIShell {
   private unsubSave: (() => void) | null = null;
   private unsubVolume: (() => void) | null = null;
   private unsubSessionEnded: (() => void) | null = null;
+  private unsubCrashLog: (() => void) | null = null;
   private sessionOverlay: HTMLDivElement | null = null;
   private sessionEndedShown = false;
   private deathOverlay: HTMLDivElement | null = null;
+  private crashOverlay: HTMLDivElement | null = null;
+  private crashShown = false;
 
   constructor(
     bus: EventBus,
@@ -167,6 +170,103 @@ export class UIShell {
     mount.appendChild(death);
     this.deathOverlay = death;
 
+    const crash = document.createElement("div");
+    crash.className = "stratum-crash-overlay";
+    crash.setAttribute("aria-hidden", "true");
+    crash.setAttribute("role", "dialog");
+    crash.setAttribute("aria-modal", "true");
+    crash.setAttribute("aria-labelledby", "stratum-crash-title");
+
+    const crashCard = document.createElement("div");
+    crashCard.className = "stratum-session-card stratum-crash-card";
+    crashCard.addEventListener("click", (e) => e.stopPropagation());
+
+    const crashTitle = document.createElement("h2");
+    crashTitle.id = "stratum-crash-title";
+    crashTitle.style.cssText = [
+      "margin:0 0 0.65rem",
+      "font-family:'BoldPixels',monospace",
+      "font-size:22px",
+      "font-weight:normal",
+      "text-transform:uppercase",
+      "letter-spacing:0.06em",
+      "color:#f2f2f7",
+    ].join(";");
+
+    const crashMsg = document.createElement("p");
+    crashMsg.style.cssText = [
+      "margin:0 0 1rem",
+      "font-family:'M5x7',monospace",
+      "font-size:18px",
+      "line-height:1.45",
+      "color:#c7c7cc",
+    ].join(";");
+
+    const crashStatus = document.createElement("p");
+    crashStatus.style.cssText = [
+      "margin:0 0 0.8rem",
+      "font-family:'M5x7',monospace",
+      "font-size:16px",
+      "line-height:1.4",
+      "color:#9ed0ff",
+    ].join(";");
+
+    const crashLog = document.createElement("pre");
+    crashLog.className = "stratum-crash-log";
+
+    const crashActions = document.createElement("div");
+    crashActions.style.cssText =
+      "display:flex;flex-wrap:wrap;gap:10px;justify-content:center;";
+
+    const reloadBtn = document.createElement("button");
+    reloadBtn.type = "button";
+    reloadBtn.textContent = "Reload game";
+    reloadBtn.style.cssText = [
+      "padding:11px 18px",
+      "font-family:'BoldPixels',monospace",
+      "font-size:17px",
+      "text-transform:uppercase",
+      "letter-spacing:0.06em",
+      "cursor:pointer",
+      "border-radius:10px",
+      "border:1px solid #f2f2f7",
+      "background:#f2f2f7",
+      "color:#1c1c1e",
+    ].join(";");
+    reloadBtn.addEventListener("click", () => {
+      window.location.reload();
+    });
+
+    const crashMenuBtn = document.createElement("button");
+    crashMenuBtn.type = "button";
+    crashMenuBtn.textContent = "Main menu";
+    crashMenuBtn.style.cssText = [
+      "padding:11px 18px",
+      "font-family:'BoldPixels',monospace",
+      "font-size:17px",
+      "text-transform:uppercase",
+      "letter-spacing:0.06em",
+      "cursor:pointer",
+      "border-radius:10px",
+      "border:1px solid rgba(242,242,247,0.45)",
+      "background:transparent",
+      "color:#f2f2f7",
+    ].join(";");
+    crashMenuBtn.addEventListener("click", () => {
+      bus.emit({ type: "ui:quit" } satisfies GameEvent);
+    });
+
+    crashActions.appendChild(reloadBtn);
+    crashActions.appendChild(crashMenuBtn);
+    crashCard.appendChild(crashTitle);
+    crashCard.appendChild(crashMsg);
+    crashCard.appendChild(crashStatus);
+    crashCard.appendChild(crashLog);
+    crashCard.appendChild(crashActions);
+    crash.appendChild(crashCard);
+    mount.appendChild(crash);
+    this.crashOverlay = crash;
+
     this.unsubSessionEnded = bus.on("ui:session-ended", (e) => {
       if (this.sessionEndedShown) {
         return;
@@ -175,6 +275,19 @@ export class UIShell {
       msg.textContent = e.message;
       sess.classList.add("stratum-session-overlay--open");
       sess.setAttribute("aria-hidden", "false");
+      bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
+    });
+    this.unsubCrashLog = bus.on("ui:crash-log", (e) => {
+      if (this.crashShown) {
+        return;
+      }
+      this.crashShown = true;
+      crashTitle.textContent = e.title;
+      crashMsg.textContent = e.message;
+      crashStatus.textContent = e.sendStatus;
+      crashLog.textContent = e.log;
+      crash.classList.add("stratum-crash-overlay--open");
+      crash.setAttribute("aria-hidden", "false");
       bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
     });
 
@@ -216,11 +329,16 @@ export class UIShell {
     this.unsubVolume = null;
     this.unsubSessionEnded?.();
     this.unsubSessionEnded = null;
+    this.unsubCrashLog?.();
+    this.unsubCrashLog = null;
     this.sessionOverlay?.remove();
     this.sessionOverlay = null;
     this.sessionEndedShown = false;
     this.deathOverlay?.remove();
     this.deathOverlay = null;
+    this.crashOverlay?.remove();
+    this.crashOverlay = null;
+    this.crashShown = false;
     this.pauseMenu.destroy();
     this.hud.destroy();
   }

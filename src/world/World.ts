@@ -24,6 +24,7 @@ import {
   LIGHT_RECOMPUTE_BUDGET_MS,
 } from "../core/constants";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
+import { withPerfSpan } from "../debug/perfSpans";
 import type { EventBus } from "../core/EventBus";
 import type { ItemId, ItemStack } from "../core/itemDefinition";
 import type { ILootResolver } from "../core/loot";
@@ -207,6 +208,9 @@ function unpackChunkCoordKey(key: number): ChunkCoord {
 const LIGHT_RECOMPUTE_SKY = 1 << 0;
 const LIGHT_RECOMPUTE_BLOCK = 1 << 1;
 const LIGHT_RECOMPUTE_BOTH = LIGHT_RECOMPUTE_SKY | LIGHT_RECOMPUTE_BLOCK;
+const LIGHT_RECOMPUTE_MAX_CHUNKS_PER_FLUSH = 3;
+const LIGHT_RECOMPUTE_BACKLOG_SOFT = 48;
+const LIGHT_RECOMPUTE_BACKLOG_HARD = 128;
 const CHUNK_SIZE_MASK = CHUNK_SIZE - 1;
 const CHUNK_SIZE_IS_POWER_OF_TWO = (CHUNK_SIZE & (CHUNK_SIZE - 1)) === 0;
 
@@ -340,6 +344,8 @@ export class World {
    * Drained on the render path via {@link flushPendingLightRecomputes} (time-budgeted).
    */
   private readonly _pendingLightChunks = new Map<number, number>();
+  /** Coalesced per-frame light enqueues before merge into {@link _pendingLightChunks}. */
+  private readonly _pendingLightChunksStaged = new Map<number, number>();
 
   /**
    * Block-changed events queued during the current tick.
@@ -2404,8 +2410,19 @@ export class World {
       return;
     }
     const key = packChunkCoordKey(cx, cy);
-    const prev = this._pendingLightChunks.get(key) ?? 0;
-    this._pendingLightChunks.set(key, prev | mode);
+    const prev = this._pendingLightChunksStaged.get(key) ?? 0;
+    this._pendingLightChunksStaged.set(key, prev | mode);
+  }
+
+  private _mergeStagedLightRecomputes(): void {
+    if (this._pendingLightChunksStaged.size === 0) {
+      return;
+    }
+    for (const [key, mode] of this._pendingLightChunksStaged) {
+      const prev = this._pendingLightChunks.get(key) ?? 0;
+      this._pendingLightChunks.set(key, prev | mode);
+    }
+    this._pendingLightChunksStaged.clear();
   }
 
   /** Queue light recompute for the chunk containing (wx, wy) and boundary neighbours (matches {@link setBlock}). */
@@ -2454,11 +2471,17 @@ export class World {
 
   /** Flush pending light recomputes up to budgeted wall time per call. */
   flushPendingLightRecomputes(msBudget: number = LIGHT_RECOMPUTE_BUDGET_MS): void {
+    this._mergeStagedLightRecomputes();
     const pending = this._pendingLightChunks;
     if (pending.size === 0) {
       return;
     }
-    const budgetMs = Math.max(0, msBudget);
+    let budgetMs = Math.max(0, msBudget);
+    if (pending.size >= LIGHT_RECOMPUTE_BACKLOG_HARD) {
+      budgetMs += 2;
+    } else if (pending.size >= LIGHT_RECOMPUTE_BACKLOG_SOFT) {
+      budgetMs += 1;
+    }
     const t0 =
       typeof performance !== "undefined" && performance.now !== undefined
         ? performance.now()
@@ -2466,11 +2489,17 @@ export class World {
     const tLog = import.meta.env.DEV ? chunkPerfNow() : 0;
     let processed = 0;
     const queueBefore = pending.size;
+    const reader = this._makeReader();
     for (const [key, mode] of pending) {
       const { cx, cy } = unpackChunkCoordKey(key);
-      this.recomputeChunkLight(cx, cy, mode);
+      withPerfSpan("World.recomputeChunkLight", () => {
+        this.recomputeChunkLight(cx, cy, mode, reader);
+      });
       pending.delete(key);
       processed += 1;
+      if (processed >= LIGHT_RECOMPUTE_MAX_CHUNKS_PER_FLUSH) {
+        break;
+      }
       if (
         typeof performance !== "undefined" &&
         performance.now !== undefined &&
@@ -2484,8 +2513,14 @@ export class World {
         processed,
         queueBefore,
         queueAfter: pending.size,
+        budgetMs,
       });
     }
+  }
+
+  /** Pending chunk-light recomputes waiting for {@link flushPendingLightRecomputes}. */
+  getPendingLightRecomputeCount(): number {
+    return this._pendingLightChunks.size + this._pendingLightChunksStaged.size;
   }
 
   /**
@@ -2493,12 +2528,14 @@ export class World {
    * then yielding a frame (chunk streaming settle — avoids multi‑hundred‑ms main-thread stalls).
    */
   private async _drainPendingLightRecomputesWithinFrames(msBudget: number): Promise<void> {
+    this._mergeStagedLightRecomputes();
     const pending = this._pendingLightChunks;
     while (pending.size > 0) {
       const sliceStart =
         typeof performance !== "undefined" && performance.now !== undefined
           ? performance.now()
           : 0;
+      const reader = this._makeReader();
       while (pending.size > 0) {
         if (
           typeof performance !== "undefined" &&
@@ -2518,22 +2555,27 @@ export class World {
           continue;
         }
         const { cx, cy } = unpackChunkCoordKey(key);
-        this.recomputeChunkLight(cx, cy, mode);
+        this.recomputeChunkLight(cx, cy, mode, reader);
       }
       if (pending.size > 0) {
         await yieldToNextFrame();
+        this._mergeStagedLightRecomputes();
       }
     }
   }
 
-  recomputeChunkLight(chunkX: number, chunkY: number, mode = LIGHT_RECOMPUTE_BOTH): void {
+  recomputeChunkLight(
+    chunkX: number,
+    chunkY: number,
+    mode = LIGHT_RECOMPUTE_BOTH,
+    reader = this._makeReader(),
+  ): void {
     const chunk = this.chunks.getChunk({ cx: chunkX, cy: chunkY });
     if (chunk === undefined) {
       return;
     }
 
     const t0 = import.meta.env.DEV ? chunkPerfNow() : 0;
-    const reader = this._makeReader();
     if ((mode & LIGHT_RECOMPUTE_SKY) !== 0) {
       computeSkyLight(chunkX, chunkY, chunk.skyLight, reader);
     }

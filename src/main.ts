@@ -13,6 +13,7 @@ import {
   type MultiplayerHostFromMenuSpec,
   type PlayerSavedState,
 } from "./core/Game";
+import { CrashReporter } from "./core/crash/CrashReporter";
 import type { GameEvent, WorldGameMode } from "./core/types";
 import { normalizeWorldGameMode } from "./core/types";
 import { AudioEngine } from "./audio/AudioEngine";
@@ -651,6 +652,61 @@ async function main(): Promise<void> {
   await store.openDB();
   await loadLocalSecretsFile();
   const auth = createAuthProvider();
+  const crashReporter = new CrashReporter({
+    sendReport: async (payload) => {
+      try {
+        const url = (import.meta.env.VITE_SUPABASE_URL ?? "").trim();
+        const anon = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? "").trim();
+        if (url === "" || anon === "") {
+          return { ok: false, detail: "Supabase is not configured." };
+        }
+        const res = await fetch(`${url}/functions/v1/crash-report`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${anon}`,
+            apikey: anon,
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const body = (await res.json()) as { error?: string; message?: string };
+            const msg = body.error ?? body.message;
+            if (typeof msg === "string" && msg.trim() !== "") {
+              detail = `${detail}: ${msg}`;
+            }
+          } catch {
+            try {
+              const txt = await res.text();
+              if (txt.trim() !== "") {
+                detail = `${detail}: ${txt.slice(0, 300)}`;
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+          return { ok: false, detail };
+        }
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          detail:
+            err instanceof Error
+              ? `${err.message} (Ensure \`supabase functions serve/deploy crash-report\` is running and project is linked.)`
+              : "Failed to send report",
+        };
+      }
+    },
+  });
+  window.addEventListener("error", (e) => {
+    void crashReporter.report("error", e.error ?? e.message);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    void crashReporter.report("unhandledrejection", e.reason);
+  });
   const signalRelay = createSupabaseSignalRelay(auth);
 
   const menuBus = new EventBus();
@@ -857,6 +913,11 @@ async function main(): Promise<void> {
         sharedAudio,
         preloadedBlockAtlas: loadingBackdrop?.getBlockAtlasLoader() ?? null,
       });
+      crashReporter.setSessionContext({
+        worldName,
+        worldUuid,
+      });
+      crashReporter.attachBus(game.bus);
       const loadStartedAt = Date.now();
       const minHoldMs = randomLoadingHoldMs();
       await game.init(playerSavedState, (progress) => {
@@ -889,14 +950,17 @@ async function main(): Promise<void> {
 
       ost.setMode(null);
       await game.destroy();
+      crashReporter.detachBus();
     } catch (err: unknown) {
       console.error(err);
+      void crashReporter.report("error", err);
       ost.setMode(null);
       loadingBackdrop?.destroy();
       loadingBackdrop = null;
       loadingUi.setError(loadingErrorMessage(err));
       if (game !== null) {
         await game.destroy();
+        crashReporter.detachBus();
       }
       await loadingUi.waitForBackToMenu();
       loadingUi.destroy();
@@ -906,4 +970,6 @@ async function main(): Promise<void> {
 }
 
 
-void main();
+void main().catch((err: unknown) => {
+  console.error(err);
+});
