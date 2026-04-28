@@ -7,7 +7,7 @@ import type { RecipeRegistry } from "../world/RecipeRegistry";
 import type { AtlasLoader } from "../renderer/AtlasLoader";
 import { parseBlockJson } from "./parseBlockJson";
 import { parseItemJson } from "./parseItemJson";
-import { registerParsedItemsInOrder } from "./loadInternalBehaviorPack";
+import { registerParsedItems } from "./loadInternalBehaviorPack";
 import { parseRecipeJson } from "./parseRecipeJson";
 import type { IModRepository } from "./IModRepository";
 import {
@@ -141,11 +141,16 @@ export async function loadWorkshopBlocksIntoRegistry(
     const raw = readUtf8Json(c.files, path);
     parsed.push({ path, def: parseBlockJson(raw) });
   }
-  parsed.sort((a, b) => a.def.numericId - b.def.numericId);
+  parsed.sort((a, b) => a.def.identifier.localeCompare(b.def.identifier));
   let done = 0;
   const total = parsed.length;
   for (const { path, def } of parsed) {
-    registry.registerInOrder(def);
+    if (registry.isRegistered(def.identifier)) {
+      console.warn(
+        `[workshop] overriding block '${def.identifier}' from ${path} (last definition wins)`,
+      );
+    }
+    registry.register(def);
     done++;
     progress?.(done, total, path);
   }
@@ -170,7 +175,7 @@ export function loadWorkshopItemsIntoRegistry(
       parsed.push(parseItemJson(raw));
     }
   }
-  registerParsedItemsInOrder(registry, itemRegistry, parsed);
+  registerParsedItems(registry, itemRegistry, parsed);
 }
 
 export function loadWorkshopLootIntoResolver(

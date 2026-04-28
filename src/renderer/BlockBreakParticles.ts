@@ -78,10 +78,12 @@ function mulberry32(seed: number): () => number {
 type BreakParticle = {
   sprite: Sprite;
   tex: Texture;
+  ownsTex: boolean;
   x: number;
   y: number;
   vx: number;
   vy: number;
+  gravity: number;
   life: number;
   maxLife: number;
 };
@@ -126,6 +128,7 @@ export class BlockBreakParticles {
     this.busUnsubs = [
       bus.on("game:block-changed", (e) => this.onBlockChanged(e)),
       bus.on("entity:ground-kick", (e) => this.onGroundKick(e)),
+      bus.on("fx:spawner-spawn", (e) => this.onSpawnerSpawn(e)),
     ];
   }
 
@@ -237,6 +240,54 @@ export class BlockBreakParticles {
     }
   }
 
+  private onSpawnerSpawn(e: Extract<GameEvent, { type: "fx:spawner-spawn" }>): void {
+    void e.blockId;
+    this.spawnSpawnerFlameBurst(e.wx, e.wy);
+  }
+
+  private spawnSpawnerFlameBurst(wx: number, wy: number): void {
+    const n = 8;
+    let room = MAX_ALIVE - this.particles.length;
+    if (room <= 0) {
+      return;
+    }
+    for (let i = 0; i < n && room > 0; i++) {
+      const rng = mulberry32(mixSeed(this.worldSeed, wx, wy, i, 0x5f1a));
+      const sprite = breakSpritePool.acquire();
+      sprite.texture = Texture.WHITE;
+      sprite.anchor.set(0.5, 0.5);
+      sprite.roundPixels = true;
+      sprite.visible = true;
+      sprite.alpha = 0.95;
+      sprite.rotation = 0;
+      sprite.tint = rng() > 0.52 ? 0xff9b2f : 0xffe07a;
+      sprite.blendMode = "add";
+      const sizePx = 1 + Math.floor(rng() * 2);
+      sprite.width = sizePx;
+      sprite.height = sizePx + 1;
+
+      const centerX = (wx + 0.5) * BLOCK_SIZE;
+      const centerY = (wy + 0.6) * BLOCK_SIZE;
+      const px = centerX + (rng() * 2 - 1) * 3.2;
+      const pyWorld = centerY + (rng() * 2 - 1) * 2.2;
+      sprite.position.set(px, -pyWorld);
+      this.root.addChild(sprite);
+      this.particles.push({
+        sprite,
+        tex: Texture.WHITE,
+        ownsTex: false,
+        x: px,
+        y: -pyWorld,
+        vx: (rng() * 2 - 1) * 11,
+        vy: -(26 + rng() * 24),
+        gravity: -18,
+        life: 0.18 + rng() * 0.08,
+        maxLife: 0.26,
+      });
+      room -= 1;
+    }
+  }
+
   /** Kicked debris: same atlas quads as break, biased backward and upward from the feet. */
   private spawnKickOne(
     blockWx: number,
@@ -289,6 +340,8 @@ export class BlockBreakParticles {
     sprite.visible = true;
     sprite.alpha = 1;
     sprite.rotation = 0;
+    sprite.tint = 0xffffff;
+    sprite.blendMode = "normal";
     sprite.width = 2;
     sprite.height = 2;
     if (flipX) {
@@ -318,10 +371,12 @@ export class BlockBreakParticles {
     this.particles.push({
       sprite,
       tex: sub,
+      ownsTex: true,
       x: px,
       y: pyPixi,
       vx,
       vy,
+      gravity: ITEM_GRAVITY * BLOCK_SIZE,
       life,
       maxLife: life,
     });
@@ -416,6 +471,8 @@ export class BlockBreakParticles {
     sprite.visible = true;
     sprite.alpha = 1;
     sprite.rotation = 0;
+    sprite.tint = 0xffffff;
+    sprite.blendMode = "normal";
     sprite.width = pw;
     sprite.height = ph;
     if (flipX) {
@@ -436,10 +493,12 @@ export class BlockBreakParticles {
     this.particles.push({
       sprite,
       tex: sub,
+      ownsTex: true,
       x: px,
       y: -pyWorld,
       vx,
       vy,
+      gravity: ITEM_GRAVITY * BLOCK_SIZE,
       life: BLOCK_BREAK_PARTICLE_LIFETIME_SEC,
       maxLife: BLOCK_BREAK_PARTICLE_LIFETIME_SEC,
     });
@@ -447,11 +506,10 @@ export class BlockBreakParticles {
   }
 
   update(dtSec: number): void {
-    const g = ITEM_GRAVITY * BLOCK_SIZE;
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i]!;
       p.life -= dtSec;
-      p.vy += g * dtSec;
+      p.vy += p.gravity * dtSec;
       p.x += p.vx * dtSec;
       p.y += p.vy * dtSec;
       p.vx *= 0.985;
@@ -459,7 +517,9 @@ export class BlockBreakParticles {
       p.sprite.alpha = Math.max(0, p.life / p.maxLife);
       if (p.life <= 0) {
         breakSpritePool.release(p.sprite);
-        p.tex.destroy(false);
+        if (p.ownsTex) {
+          p.tex.destroy(false);
+        }
         this.particles[i] = this.particles[this.particles.length - 1]!;
         this.particles.pop();
       }
@@ -472,7 +532,9 @@ export class BlockBreakParticles {
     }
     for (const p of this.particles) {
       breakSpritePool.release(p.sprite);
-      p.tex.destroy(false);
+      if (p.ownsTex) {
+        p.tex.destroy(false);
+      }
     }
     this.particles.length = 0;
     this.root.parent?.removeChild(this.root);

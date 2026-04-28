@@ -2,6 +2,9 @@ import type { ItemRegistry } from "../../items/ItemRegistry";
 import type { World } from "../World";
 import type { FurnaceTileState } from "../furnace/FurnaceTileState";
 import type { ChestTileState } from "../chest/ChestTileState";
+import {
+  normalizeSpawnerTileStateForGeneratedPlacement,
+} from "../spawner/SpawnerTileState";
 import type { ParsedStructure } from "./structureSchema";
 
 export type PlaceStructureResult = {
@@ -9,6 +12,7 @@ export type PlaceStructureResult = {
   placedBackground: number;
   placedContainers: number;
   placedFurnaces: number;
+  placedSpawners: number;
 };
 
 function toItemStack(
@@ -41,6 +45,7 @@ export function placeStructureAt(
   let placedBackground = 0;
   let placedContainers = 0;
   let placedFurnaces = 0;
+  let placedSpawners = 0;
   for (const cell of structure.blocks) {
     const wx = originWx + cell.x;
     const wy = originWy + cell.y;
@@ -72,6 +77,11 @@ export function placeStructureAt(
       placedFurnaces++;
       continue;
     }
+    if (e.type === "spawner") {
+      world.setSpawnerTile(wx, wy, normalizeSpawnerTileStateForGeneratedPlacement(e.state));
+      placedSpawners++;
+      continue;
+    }
     const storageAnchor = world.getChestStorageAnchorForCell(wx, wy) ?? { ax: wx, ay: wy };
     const rawItems = e.items ?? [];
     const items = rawItems.map((s) => toItemStack(itemRegistry, s));
@@ -91,5 +101,6 @@ export function placeStructureAt(
     placedBackground,
     placedContainers,
     placedFurnaces,
+    placedSpawners,
   };
 }

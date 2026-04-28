@@ -19,6 +19,7 @@ import type { WorldLightingParams } from "../../world/lighting/WorldTime";
 import type { World } from "../../world/World";
 import { getBackground, getBlock } from "../../world/chunk/Chunk";
 import { getVideoPrefs } from "../../ui/settings/videoPrefs";
+import { withPerfSpan } from "../../debug/perfSpans";
 
 export type HeldTorchLighting = NonNullable<CompositeUniforms["heldTorch"]>;
 
@@ -152,26 +153,28 @@ export class LightingComposer {
     heldTorch: HeldTorchLighting | null,
     dynamicEmitters?: readonly DynamicLightEmitter[],
   ): void {
-    for (const key of this._dirty) {
-      const tex = this._textures.get(key);
-      if (tex === undefined) {
-        continue;
+    withPerfSpan("LightingComposer.update.lightTextures", () => {
+      for (const key of this._dirty) {
+        const tex = this._textures.get(key);
+        if (tex === undefined) {
+          continue;
+        }
+        const comma = key.indexOf(",");
+        if (comma <= 0) {
+          continue;
+        }
+        const cx = Number.parseInt(key.slice(0, comma), 10);
+        const cy = Number.parseInt(key.slice(comma + 1), 10);
+        const chunk = this._world.getChunk(cx, cy);
+        if (chunk === undefined) {
+          continue;
+        }
+        if (tex.update(chunk.skyLight, chunk.blockLight)) {
+          tex.upload();
+        }
       }
-      const comma = key.indexOf(",");
-      if (comma <= 0) {
-        continue;
-      }
-      const cx = Number.parseInt(key.slice(0, comma), 10);
-      const cy = Number.parseInt(key.slice(comma + 1), 10);
-      const chunk = this._world.getChunk(cx, cy);
-      if (chunk === undefined) {
-        continue;
-      }
-      if (tex.update(chunk.skyLight, chunk.blockLight)) {
-        tex.upload();
-      }
-    }
-    this._dirty.clear();
+      this._dirty.clear();
+    });
 
     const cam = this._camera;
     const occ = this._occlusion;
@@ -187,12 +190,14 @@ export class LightingComposer {
     const chunkWorldSize = BLOCK_SIZE * CHUNK_SIZE;
     const centerChunkX = Math.floor(pos.x / chunkWorldSize);
     const centerChunkY = Math.floor(-pos.y / chunkWorldSize);
-    if (occ.rebuild(centerChunkX, centerChunkY, this._world)) {
-      occ.upload();
-    }
-    if (indirect.rebuild(centerChunkX, centerChunkY, this._world)) {
-      indirect.upload();
-    }
+    withPerfSpan("LightingComposer.update.occlusionIndirect", () => {
+      if (occ.rebuild(centerChunkX, centerChunkY, this._world)) {
+        occ.upload();
+      }
+      if (indirect.rebuild(centerChunkX, centerChunkY, this._world)) {
+        indirect.upload();
+      }
+    });
 
     const tl = cam.screenToWorld(0, 0);
     const blockPixels = BLOCK_SIZE * cam.getZoom();
@@ -211,89 +216,98 @@ export class LightingComposer {
     const camCx = centerChunkX;
     const camCy = centerChunkY;
 
-    const keepKeys = new Set<string>();
-    for (let dy = -halfRegion; dy <= halfRegion; dy++) {
-      for (let dx = -halfRegion; dx <= halfRegion; dx++) {
-        keepKeys.add(chunkKey(camCx + dx, camCy + dy));
-      }
-    }
-    for (const k of this._emitterChunkCache.keys()) {
-      if (!keepKeys.has(k)) {
-        this._emitterChunkCache.delete(k);
-      }
-    }
-
-    this._torchHeapReset();
-    if (dynamicEmitters !== undefined) {
-      for (const e of dynamicEmitters) {
-        const ddx = e.worldBlockX - viewCenterWx;
-        const ddy = e.worldBlockY - viewCenterWy;
-        this._torchHeapOffer(
-          e.worldBlockX,
-          e.worldBlockY,
-          e.strength,
-          e.bloomTipShiftScale ?? 1,
-          ddx * ddx + ddy * ddy,
-        );
-      }
-    }
-    for (let dy = -halfRegion; dy <= halfRegion; dy++) {
-      for (let dx = -halfRegion; dx <= halfRegion; dx++) {
-        const ccx = camCx + dx;
-        const ccy = camCy + dy;
-        const { wx, wy } = this._getChunkEmitterPositions(this._world, ccx, ccy);
-        for (let i = 0; i < wx.length; i++) {
-          const wxi = wx[i]! + TORCH_FLAME_TIP_OFFSET_X_BLOCKS;
-          const wyi = wy[i]! + TORCH_FLAME_TIP_OFFSET_Y_BLOCKS;
-          const ddx = wxi - viewCenterWx;
-          const ddy = wyi - viewCenterWy;
-          this._torchHeapOffer(wxi, wyi, 1, 1, ddx * ddx + ddy * ddy);
+    withPerfSpan("LightingComposer.update.uniforms", () => {
+      const keepKeys = new Set<string>();
+      for (let dy = -halfRegion; dy <= halfRegion; dy++) {
+        for (let dx = -halfRegion; dx <= halfRegion; dx++) {
+          keepKeys.add(chunkKey(camCx + dx, camCy + dy));
         }
       }
-    }
+      for (const k of this._emitterChunkCache.keys()) {
+        if (!keepKeys.has(k)) {
+          this._emitterChunkCache.delete(k);
+        }
+      }
+      for (const k of this._textures.keys()) {
+        if (!keepKeys.has(k)) {
+          this._textures.get(k)?.destroy();
+          this._textures.delete(k);
+          this._dirty.delete(k);
+        }
+      }
 
-    const u = this._compositeU;
-    u.ambient = lighting.ambient;
-    u.ambientTint[0] = lighting.ambientTint[0];
-    u.ambientTint[1] = lighting.ambientTint[1];
-    u.ambientTint[2] = lighting.ambientTint[2];
-    u.skyLightTint[0] = lighting.skyLightTint[0];
-    u.skyLightTint[1] = lighting.skyLightTint[1];
-    u.skyLightTint[2] = lighting.skyLightTint[2];
-    u.sunIntensity = lighting.sunIntensity;
-    u.sunTint[0] = lighting.sunTint[0];
-    u.sunTint[1] = lighting.sunTint[1];
-    u.sunTint[2] = lighting.sunTint[2];
-    u.cameraWorld[0] = cameraWorldX;
-    u.cameraWorld[1] = cameraWorldY;
-    u.blockPixels = blockPixels;
-    u.occlusionOrigin[0] = occ.originX;
-    u.occlusionOrigin[1] = occ.originY;
-    u.occlusionSize = OcclusionTexture.REGION_BLOCKS;
-    u.moonIntensity = lighting.moonIntensity;
-    u.heldTorch = heldTorch;
-    this._fillPlacedTorchUniforms(u);
-    const vp = getVideoPrefs();
-    const tm = vp.tonemapper;
-    u.tonemapper =
-      tm === "aces"
-        ? 1
-        : tm === "agx"
-          ? 2
-          : tm === "reinhard"
-            ? 3
-            : 0;
-    u.bloomEnabled = vp.bloom;
-    // Sub-pixel correction is now applied via RenderPipeline's `subPixelNudge` container.
-    // Keep composite UV sampling stable to avoid double-applying the same offset.
-    u.uvSubpixelOffset[0] = 0;
-    u.uvSubpixelOffset[1] = 0;
-    u.playerBloomUvBoundsActive = this._playerBloomUvBoundsActive;
-    u.playerBloomUvMin[0] = this._playerBloomUvMinScratch[0];
-    u.playerBloomUvMin[1] = this._playerBloomUvMinScratch[1];
-    u.playerBloomUvMax[0] = this._playerBloomUvMaxScratch[0];
-    u.playerBloomUvMax[1] = this._playerBloomUvMaxScratch[1];
-    comp.updateUniforms(u);
+      this._torchHeapReset();
+      if (dynamicEmitters !== undefined) {
+        for (const e of dynamicEmitters) {
+          const ddx = e.worldBlockX - viewCenterWx;
+          const ddy = e.worldBlockY - viewCenterWy;
+          this._torchHeapOffer(
+            e.worldBlockX,
+            e.worldBlockY,
+            e.strength,
+            e.bloomTipShiftScale ?? 1,
+            ddx * ddx + ddy * ddy,
+          );
+        }
+      }
+      for (let dy = -halfRegion; dy <= halfRegion; dy++) {
+        for (let dx = -halfRegion; dx <= halfRegion; dx++) {
+          const ccx = camCx + dx;
+          const ccy = camCy + dy;
+          const { wx, wy } = this._getChunkEmitterPositions(this._world, ccx, ccy);
+          for (let i = 0; i < wx.length; i++) {
+            const wxi = wx[i]! + TORCH_FLAME_TIP_OFFSET_X_BLOCKS;
+            const wyi = wy[i]! + TORCH_FLAME_TIP_OFFSET_Y_BLOCKS;
+            const ddx = wxi - viewCenterWx;
+            const ddy = wyi - viewCenterWy;
+            this._torchHeapOffer(wxi, wyi, 1, 1, ddx * ddx + ddy * ddy);
+          }
+        }
+      }
+
+      const u = this._compositeU;
+      u.ambient = lighting.ambient;
+      u.ambientTint[0] = lighting.ambientTint[0];
+      u.ambientTint[1] = lighting.ambientTint[1];
+      u.ambientTint[2] = lighting.ambientTint[2];
+      u.skyLightTint[0] = lighting.skyLightTint[0];
+      u.skyLightTint[1] = lighting.skyLightTint[1];
+      u.skyLightTint[2] = lighting.skyLightTint[2];
+      u.sunIntensity = lighting.sunIntensity;
+      u.sunTint[0] = lighting.sunTint[0];
+      u.sunTint[1] = lighting.sunTint[1];
+      u.sunTint[2] = lighting.sunTint[2];
+      u.cameraWorld[0] = cameraWorldX;
+      u.cameraWorld[1] = cameraWorldY;
+      u.blockPixels = blockPixels;
+      u.occlusionOrigin[0] = occ.originX;
+      u.occlusionOrigin[1] = occ.originY;
+      u.occlusionSize = OcclusionTexture.REGION_BLOCKS;
+      u.moonIntensity = lighting.moonIntensity;
+      u.heldTorch = heldTorch;
+      this._fillPlacedTorchUniforms(u);
+      const vp = getVideoPrefs();
+      const tm = vp.tonemapper;
+      u.tonemapper =
+        tm === "aces"
+          ? 1
+          : tm === "agx"
+            ? 2
+            : tm === "reinhard"
+              ? 3
+              : 0;
+      u.bloomEnabled = vp.bloomEnabled;
+      // Sub-pixel correction is now applied via RenderPipeline's `subPixelNudge` container.
+      // Keep composite UV sampling stable to avoid double-applying the same offset.
+      u.uvSubpixelOffset[0] = 0;
+      u.uvSubpixelOffset[1] = 0;
+      u.playerBloomUvBoundsActive = this._playerBloomUvBoundsActive;
+      u.playerBloomUvMin[0] = this._playerBloomUvMinScratch[0];
+      u.playerBloomUvMin[1] = this._playerBloomUvMinScratch[1];
+      u.playerBloomUvMax[0] = this._playerBloomUvMaxScratch[0];
+      u.playerBloomUvMax[1] = this._playerBloomUvMaxScratch[1];
+      comp.updateUniforms(u);
+    });
   }
 
   /**

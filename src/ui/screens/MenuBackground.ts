@@ -659,7 +659,7 @@ export class MenuBackground {
         const bgMesh = buildBackgroundMesh(chunk, registry, atlas);
         bgMesh.position.set(pos.x, pos.y);
         worldContainer.addChild(bgMesh);
-        const fgShadowMesh = buildFgShadowMesh(chunk, fgShadowSampler);
+        const fgShadowMesh = buildFgShadowMesh(chunk, fgShadowSampler, registry);
         fgShadowMesh.position.set(pos.x, pos.y);
         worldContainer.addChild(fgShadowMesh);
         const { mesh, waterMesh } = buildMesh(chunk, registry, atlas);
@@ -875,7 +875,7 @@ export class MenuBackground {
         occlusionOrigin: [occlusion.originX, occlusion.originY],
         occlusionSize:   OcclusionTexture.REGION_BLOCKS,
         tonemapper:      tm,
-        bloomEnabled:    true,
+        bloomEnabled:    getVideoPrefs().bloomEnabled,
         bloomMaskActive: false,
         playerBloomUvBoundsActive: false,
         playerBloomUvMin: [0, 0],

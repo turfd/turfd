@@ -1,0 +1,32 @@
+{
+  "format_version": "1.0.0",
+  "stratum:block": {
+    "description": {
+      "identifier": "stratum:spawner"
+    },
+    "components": {
+      "stratum:display_name": "Spawner",
+      "stratum:texture": {
+        "all": "spawner"
+      },
+      "stratum:solid": true,
+      "stratum:transparent": true,
+      "stratum:water": false,
+      "stratum:hardness": 5,
+      "stratum:harvest_tool": "pickaxe",
+      "stratum:light_emission": 0,
+      "stratum:light_absorption": 0,
+      "stratum:material": "stone",
+      "stratum:loot_table": "stratum:spawner",
+      "stratum:spawner_defaults": {
+        "delay": 200,
+        "max_count": 6,
+        "player_range": 16,
+        "spawn_range": 4,
+        "spawn_potentials": [
+          "sheep"
+        ]
+      }
+    }
+  }
+}

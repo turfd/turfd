@@ -42,20 +42,25 @@ import {
   RECIPE_STATION_STONECUTTER,
   TORCH_HELD_LIGHT_INTENSITY,
   TORCH_HELD_LIGHT_RADIUS_BLOCKS,
-  VIEW_DISTANCE_CHUNKS,
   WORLD_Y_MAX,
 } from "./constants";
 import { EventBus } from "./EventBus";
 import { GameLoop } from "./GameLoop";
 import {
   normalizeWorldGameMode,
+  normalizeWorldGenType,
   type DynamicLightEmitter,
   type GameEvent,
   type WorldGameMode,
+  type WorldGenType,
 } from "./types";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
-import { captureAndSavePerformanceReport } from "../debug/perfCapture";
+import {
+  captureAndSavePerformanceReport,
+  type PerfWorldSnapshot,
+} from "../debug/perfCapture";
 import { withPerfSpan } from "../debug/perfSpans";
+import { getEffectiveViewDistanceChunks } from "../ui/settings/videoPrefs";
 import {
   CraftingSystem,
   type CraftingStationContext,
@@ -87,6 +92,8 @@ import {
 import { InputManager } from "../input/InputManager";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
+import { worldToChunk } from "../world/chunk/ChunkCoord";
+import { GeneratorContext } from "../world/gen/GeneratorContext";
 import type { IModRepository } from "../mods/IModRepository";
 import {
   ResourcePackManifestSchema,
@@ -165,7 +172,13 @@ import { InventoryUI } from "../ui/InventoryUI";
 import { playShiftSlotFlyAnimation } from "../ui/shiftSlotFlyAnimation";
 import { DamageNumbersOverlay } from "../ui/DamageNumbersOverlay";
 import { NametagOverlay } from "../ui/NametagOverlay";
+import { SignHoverOverlay } from "../ui/SignHoverOverlay";
 import { UIShell } from "../ui/UIShell";
+import {
+  sanitizeSignMarkup,
+  signMarkupToHtml,
+  signMarkupToPlainText,
+} from "../ui/signFormatting";
 import { runSleepTransition } from "../ui/screens/sleepTransition";
 import { bedHeadPlusXFromMeta } from "../world/bed/bedMetadata";
 import { BlockRegistry } from "../world/blocks/BlockRegistry";
@@ -199,6 +212,10 @@ import {
   type FurnacePersistedChunk,
 } from "../world/furnace/furnacePersisted";
 import { chestTileToPersisted, type ChestPersistedChunk } from "../world/chest/chestPersisted";
+import type { SpawnerPersistedChunk } from "../world/spawner/spawnerPersisted";
+import { createDefaultSpawnerTileState } from "../world/spawner/SpawnerTileState";
+import type { SignPersistedChunk } from "../world/sign/signPersisted";
+import { createDefaultSignTileState } from "../world/sign/SignTileState";
 import { quickMoveStackIntoChest } from "../world/chest/chestQuickMove";
 import {
   applyChestSlotMouse,
@@ -282,6 +299,8 @@ export type GameOptions = {
   store: IndexedDBStore;
   worldName: string;
   gameMode?: WorldGameMode;
+  /** World generation preset; defaults to `"normal"` when omitted (e.g. legacy saves). */
+  worldGenType?: WorldGenType;
   multiplayerJoinRoomCode?: string;
   /** When joining a private room from the directory. */
   multiplayerJoinPassword?: string;
@@ -340,6 +359,7 @@ export class Game {
   private readonly store: IndexedDBStore;
   private readonly worldName: string;
   private _worldGameMode: WorldGameMode;
+  private _worldGenType: WorldGenType;
   private _cheatsEnabled = false;
   private readonly multiplayerJoinRoomCode?: string;
   private readonly multiplayerJoinPassword?: string;
@@ -364,6 +384,7 @@ export class Game {
   private _chatHost: ChatHostController | null = null;
   private _chatOverlay: ChatOverlay | null = null;
   private _nametagOverlay: NametagOverlay | null = null;
+  private _signHoverOverlay: SignHoverOverlay | null = null;
   private _damageNumbersOverlay: DamageNumbersOverlay | null = null;
   private _chatOpen = false;
   private _wandEnabled = true;
@@ -381,6 +402,8 @@ export class Game {
     background?: Uint16Array;
     furnaces?: FurnacePersistedChunk[];
     chests?: ChestPersistedChunk[];
+    spawners?: SpawnerPersistedChunk[];
+    signs?: SignPersistedChunk[];
     metadata?: Uint8Array;
   }> = [];
   /** Joining client: pose packets received before `World` exists (see `_flushPendingRemotePlayerPackets`). */
@@ -435,6 +458,9 @@ export class Game {
   private _chestPanel: ChestPanel | null = null;
   /** Storage anchor while chest UI is active. */
   private _activeChestAnchor: { ax: number; ay: number } | null = null;
+  private _spawnerModalEl: HTMLDivElement | null = null;
+  private _signModalEl: HTMLDivElement | null = null;
+  private readonly _pendingSpawnerFxByMobId = new Map<number, { wx: number; wy: number }>();
   /** Avoid repeating furnace crackle when re-triggering the same cell without closing inventory. */
   private _lastFurnaceOpenSfxKey: string | null = null;
   /** Throttle active furnace smelt crackle (~1 Hz per world furnace with a queue). */
@@ -606,6 +632,7 @@ export class Game {
     this.store = options.store;
     this.worldName = options.worldName;
     this._worldGameMode = normalizeWorldGameMode(options.gameMode);
+    this._worldGenType = normalizeWorldGenType(options.worldGenType);
     this.multiplayerJoinRoomCode = options.multiplayerJoinRoomCode;
     this.multiplayerJoinPassword = options.multiplayerJoinPassword;
     this.multiplayerHostFromMenu = options.multiplayerHostFromMenu;
@@ -689,16 +716,21 @@ export class Game {
           return;
         }
         this._perfCaptureActive = true;
+        const durationMs = e.durationMs ?? 30_000;
         this.bus.emit({
           type: "ui:perf-capture-status",
           status: "capturing",
-          message: "Capturing for 30 seconds...",
+          message: `Capturing for ${Math.round(durationMs / 1000)} seconds...`,
         } satisfies GameEvent);
         void captureAndSavePerformanceReport({
           durationMs: e.durationMs,
+          topBottomUpEntries: e.topBottomUpEntries,
+          hotStackCount: e.hotStackCount,
+          maxProfilerBufferSize: e.maxProfilerBufferSize,
           worldName: this.worldName,
           worldUuid: this.worldUuid,
           networkRole: this.adapter.state.status === "connected" ? this.adapter.state.role : "offline",
+          worldSnapshot: this._buildPerfWorldSnapshot(),
         })
           .then((result) => {
             const mode = result.bottomUpAvailable ? "Bottom-up included." : "Metrics-only fallback.";
@@ -726,6 +758,31 @@ export class Game {
 
   private _isSandboxWorld(): boolean {
     return this._worldGameMode === "sandbox";
+  }
+
+  private _buildPerfWorldSnapshot(): PerfWorldSnapshot | undefined {
+    const world = this.world;
+    if (world === null) {
+      return undefined;
+    }
+    let loadedChunkCount = 0;
+    for (const _ of world.getChunkManager().getLoadedChunks()) {
+      loadedChunkCount += 1;
+    }
+    let activeMobCount = 0;
+    const mm = this._mobManager;
+    if (mm !== null) {
+      for (const _ of mm.getAll()) {
+        activeMobCount += 1;
+      }
+    }
+    return {
+      loadedChunkCount,
+      activeMobCount,
+      worldTimeMs: this._worldTime.ms,
+      viewDistanceChunks: getEffectiveViewDistanceChunks(),
+      streamCentreChunk: world.getStreamCentre(),
+    };
   }
 
   private _areCheatsEnabled(): boolean {
@@ -758,6 +815,9 @@ export class Game {
     if (this.multiplayerJoinRoomCode === undefined) {
       this._worldGameMode = normalizeWorldGameMode(
         metaLoaded?.gameMode ?? this._worldGameMode,
+      );
+      this._worldGenType = normalizeWorldGenType(
+        metaLoaded?.worldGenType ?? this._worldGenType,
       );
       // New sandbox worlds default to cheats enabled unless metadata explicitly sets otherwise.
       this._cheatsEnabled =
@@ -1010,6 +1070,7 @@ export class Game {
       this.bus,
       metaLoaded?.blockIdPalette,
       metaLoaded?.itemIdLayoutRevision,
+      this._worldGenType,
     );
     this.world = world;
     this._itemRegistry = itemRegistry;
@@ -1034,6 +1095,16 @@ export class Game {
     if (registry.isRegistered("stratum:barrel")) {
       world.setBarrelBlockId(registry.getByIdentifier("stratum:barrel").id);
     }
+    if (registry.isRegistered("stratum:spawner")) {
+      world.setSpawnerBlockId(registry.getByIdentifier("stratum:spawner").id);
+    }
+    const signIds: number[] = [];
+    for (const signKey of ["stratum:oak_sign", "stratum:spruce_sign", "stratum:birch_sign"]) {
+      if (registry.isRegistered(signKey)) {
+        signIds.push(registry.getByIdentifier(signKey).id);
+      }
+    }
+    world.setSignBlockIds(signIds);
 
     if (
       this.adapter.state.status === "connected" &&
@@ -1341,6 +1412,9 @@ export class Game {
     const nametagOverlay = new NametagOverlay();
     nametagOverlay.init(this.mount);
     this._nametagOverlay = nametagOverlay;
+    const signHoverOverlay = new SignHoverOverlay();
+    signHoverOverlay.init(this.mount);
+    this._signHoverOverlay = signHoverOverlay;
 
     const damageNumbersOverlay = new DamageNumbersOverlay(this.bus);
     damageNumbersOverlay.init(this.mount);
@@ -1373,8 +1447,10 @@ export class Game {
           wy: ev.wy,
           layer: ev.layer === "bg" ? 1 : 0,
           expectedBlockId: ev.expectedBlockId,
+          expectedBlockKey: ev.expectedBlockKey,
           hotbarSlot: ev.hotbarSlot,
           heldItemId: ev.heldItemId,
+          heldItemKey: ev.heldItemKey,
         });
       }),
     );
@@ -1412,6 +1488,7 @@ export class Game {
           wy: ev.wy,
           hotbarSlot: ev.hotbarSlot,
           placesBlockId: ev.placesBlockId,
+          placesBlockKey: ev.placesBlockKey,
           aux: ev.aux,
         });
       }),
@@ -1551,6 +1628,7 @@ export class Game {
       },
     );
     await inventoryUI.loadTextureIcons();
+    inventoryUI.setSandboxHud(this._isSandboxWorld());
     this.inventoryUI = inventoryUI;
 
     this._craftingPanel = new CraftingPanel(
@@ -1661,6 +1739,17 @@ export class Game {
     this.networkUnsubs.push(
       this.bus.on("furnace:open-request", (e) => {
         this._handleFurnaceOpenRequest(e.wx, e.wy);
+      }),
+    );
+
+    this.networkUnsubs.push(
+      this.bus.on("spawner:open-request", (e) => {
+        this._handleSpawnerOpenRequest(e.wx, e.wy);
+      }),
+    );
+    this.networkUnsubs.push(
+      this.bus.on("sign:open-request", (e) => {
+        this._handleSignOpenRequest(e.wx, e.wy);
       }),
     );
 
@@ -1813,6 +1902,8 @@ export class Game {
           metadata: chunk.metadata.slice(),
           furnaces: world.getFurnaceEntitiesForChunk(cx, cy),
           chests: world.getChestEntitiesForChunk(cx, cy),
+          spawners: world.getSpawnerEntitiesForChunk(cx, cy),
+          signs: world.getSignEntitiesForChunk(cx, cy),
         });
       }
     });
@@ -2007,6 +2098,7 @@ export class Game {
     this.saveGame = null;
     sg?.stopAutoSave();
     if (sg !== null) {
+      this._flushLocalCursorStackForClose();
       await sg.save();
       sg.destroy();
     }
@@ -2017,6 +2109,8 @@ export class Game {
     this._craftingPanel = null;
     this._creativePanel?.destroy();
     this._creativePanel = null;
+    this._closeSpawnerModal();
+    this._closeSignModal();
     this.inventoryUI?.destroy();
     this.inventoryUI = null;
     this._craftingSystem = null;
@@ -2029,6 +2123,8 @@ export class Game {
     this._chatOverlay = null;
     this._nametagOverlay?.destroy();
     this._nametagOverlay = null;
+    this._signHoverOverlay?.destroy();
+    this._signHoverOverlay = null;
     this._damageNumbersOverlay?.destroy();
     this._damageNumbersOverlay = null;
     this._chatHost = null;
@@ -2249,6 +2345,8 @@ export class Game {
           const background = msg.background?.slice();
           const furnaces = msg.furnaces?.map((f) => ({ ...f }));
           const chests = msg.chests?.map((c) => ({ ...c }));
+          const spawners = msg.spawners?.map((s) => ({ ...s, spawnPotentials: [...s.spawnPotentials] }));
+          const signs = msg.signs?.map((s) => ({ ...s }));
           const metadata = msg.metadata?.slice();
           const w = this.world;
           if (w === null) {
@@ -2259,6 +2357,8 @@ export class Game {
               background,
               furnaces,
               chests,
+              spawners,
+              signs,
               metadata,
             });
           } else {
@@ -2269,6 +2369,8 @@ export class Game {
               background,
               furnaces,
               chests,
+              spawners,
+              signs,
               metadata,
             );
           }
@@ -2310,6 +2412,18 @@ export class Game {
               msg.y,
               msg.woolColor ?? 0,
             );
+            if (
+              msg.spawnerFxWx !== undefined &&
+              msg.spawnerFxWy !== undefined &&
+              this.world !== null
+            ) {
+              this.bus.emit({
+                type: "fx:spawner-spawn",
+                wx: msg.spawnerFxWx,
+                wy: msg.spawnerFxWy,
+                blockId: this.world.getBlock(msg.spawnerFxWx, msg.spawnerFxWy).id,
+              } satisfies GameEvent);
+            }
           }
           return;
         }
@@ -2710,6 +2824,7 @@ export class Game {
           this._worldSeed = msg.seed;
           this._worldTime.sync(msg.worldTimeMs);
           this._worldGameMode = normalizeWorldGameMode(msg.gameMode);
+          this._worldGenType = normalizeWorldGenType(msg.worldGenType);
           this._cheatsEnabled = msg.cheatsEnabled;
           this.entityManager?.getPlayer().setGameMode(this._worldGameMode);
           this._awaitingWorldData = false;
@@ -3068,6 +3183,7 @@ export class Game {
             seed: this._worldSeed,
             worldTimeMs: this._worldTime.ms,
             gameMode: this._worldGameMode,
+            worldGenType: this._worldGenType,
             cheatsEnabled: this._cheatsEnabled,
           });
           this.adapter.broadcast({
@@ -3142,6 +3258,8 @@ export class Game {
                     chunk.coord.cy,
                   ),
                   chests: world.getChestEntitiesForChunk(chunk.coord.cx, chunk.coord.cy),
+                  spawners: world.getSpawnerEntitiesForChunk(chunk.coord.cx, chunk.coord.cy),
+                  signs: world.getSignEntitiesForChunk(chunk.coord.cx, chunk.coord.cy),
                 });
               }
             }, spawnCx, spawnCy);
@@ -3665,6 +3783,12 @@ export class Game {
           state: ReturnType<World["getFurnaceTile"]>;
         }
       | {
+          type: "spawner";
+          x: number;
+          y: number;
+          state: ReturnType<World["getSpawnerTile"]>;
+        }
+      | {
           type: "container";
           x: number;
           y: number;
@@ -3697,6 +3821,17 @@ export class Game {
           if (tile !== undefined) {
             entities.push({
               type: "furnace",
+              x: wx - bounds.minWx,
+              y: wy - bounds.minWy,
+              state: structuredClone(tile),
+            });
+          }
+        }
+        if (fg.identifier === "stratum:spawner") {
+          const tile = world.getSpawnerTile(wx, wy);
+          if (tile !== undefined) {
+            entities.push({
+              type: "spawner",
               x: wx - bounds.minWx,
               y: wy - bounds.minWy,
               state: structuredClone(tile),
@@ -3771,9 +3906,10 @@ export class Game {
     triggerJsonDownload(safeStructureExportBasename(this.worldName), payload);
     const containers = entities.filter((e) => e.type === "container").length;
     const furnaces = entities.filter((e) => e.type === "furnace").length;
+    const spawners = entities.filter((e) => e.type === "spawner").length;
     this._giveFeedbackToIssuer(
       issuerPeerId,
-      `Exported ${cells.length} cells to JSON (${containers} containers, ${furnaces} furnaces).`,
+      `Exported ${cells.length} cells to JSON (${containers} containers, ${furnaces} furnaces, ${spawners} spawners).`,
     );
   }
 
@@ -3800,6 +3936,7 @@ export class Game {
     const pcx = Math.floor(pl.state.position.x / BLOCK_SIZE);
     const pcy = Math.floor(pl.state.position.y / BLOCK_SIZE);
     const inReach =
+      this._isSandboxWorld() ||
       Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= REACH_BLOCKS;
     if (!inReach) {
       return;
@@ -4263,6 +4400,7 @@ export class Game {
             name: this.worldName,
             seed: this._worldSeed,
             gameMode: this._worldGameMode,
+            worldGenType: this._worldGenType,
             enableCheats: this._cheatsEnabled,
             createdAt: now,
             lastPlayedAt: now,
@@ -4281,6 +4419,7 @@ export class Game {
         return {
           ...prev,
           gameMode: prev.gameMode ?? this._worldGameMode,
+          worldGenType: prev.worldGenType ?? this._worldGenType,
           enableCheats: prev.enableCheats ?? this._cheatsEnabled,
           moderation: mod,
           lastPlayedAt: now,
@@ -4513,7 +4652,9 @@ export class Game {
       this.paused ||
         this.isInventoryOpen ||
         this._chatOpen ||
-        this._isLocalDeathBlocking(),
+        this._isLocalDeathBlocking() ||
+        this._spawnerModalEl !== null ||
+        this._signModalEl !== null,
     );
   }
 
@@ -4914,6 +5055,7 @@ export class Game {
         ? this._activeChestAnchor
         : null;
     if (!open) {
+      this._flushLocalCursorStackForClose();
       this._activeChestAnchor = null;
       this._lastFurnaceOpenSfxKey = null;
     }
@@ -4942,6 +5084,75 @@ export class Game {
         },
       );
     }
+  }
+
+  /**
+   * Ensure cursor-held stack does not vanish when inventory/chest UI closes.
+   * First tries merging back to inventory; if overflow remains, throws it into the world.
+   */
+  private _flushLocalCursorStackForClose(): void {
+    const em = this.entityManager;
+    const w = this.world;
+    if (em === null || w === null) {
+      return;
+    }
+    const inv = em.getPlayer().inventory;
+    inv.returnCursorToSlots();
+    const stack = inv.getCursorStack();
+    if (stack === null || stack.count <= 0) {
+      return;
+    }
+    inv.replaceCursorStack(null);
+
+    const st = em.getPlayer().state;
+    const input = this.input;
+    const { dirX, dirY } =
+      input === null
+        ? { dirX: st.facingRight ? 1 : -1, dirY: 0 }
+        : getItemThrowUnitVectorFromFeet(
+            st.position.x,
+            st.position.y,
+            input.mouseWorldPos.x,
+            input.mouseWorldPos.y,
+            st.facingRight,
+          );
+    const spd = ITEM_THROW_SPEED_PX;
+    let vx = dirX * spd + st.velocity.x * ITEM_THROW_INHERIT_PLAYER_VEL_X;
+    let vy = dirY * spd;
+    ({ vx, vy } = clampItemThrowVelocity(vx, vy));
+    const chestY = st.position.y + PLAYER_HEIGHT * 0.5;
+    const off = ITEM_THROW_SPAWN_OFFSET_PX;
+    const sx = st.position.x + dirX * off;
+    const sy = chestY - dirY * off;
+
+    const net = this.adapter.state;
+    if (net.status === "connected" && net.role === "client") {
+      const hid = net.lanHostPeerId;
+      if (hid !== null) {
+        this.adapter.send(hid as PeerId, {
+          type: MsgType.THROW_CURSOR_STACK,
+          itemId: stack.itemId,
+          count: stack.count,
+          damage: stack.damage ?? 0,
+          x: sx,
+          y: sy,
+          vx,
+          vy,
+        });
+      }
+      return;
+    }
+
+    w.spawnItem(
+      stack.itemId,
+      stack.count,
+      sx,
+      sy,
+      vx,
+      vy,
+      stack.damage ?? 0,
+      ITEM_PLAYER_THROW_PICKUP_DELAY_SEC,
+    );
   }
 
   private _broadcastFurnaceSnapshotNow(wx: number, wy: number): void {
@@ -5706,6 +5917,9 @@ export class Game {
     wy: number,
     peerId: string,
   ): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     if (w === null) {
       return false;
@@ -5793,6 +6007,8 @@ export class Game {
       metadata: chunk.metadata.slice(),
       furnaces: w.getFurnaceEntitiesForChunk(cx, cy),
       chests: w.getChestEntitiesForChunk(cx, cy),
+      spawners: w.getSpawnerEntitiesForChunk(cx, cy),
+      signs: w.getSignEntitiesForChunk(cx, cy),
     });
   }
 
@@ -5802,9 +6018,11 @@ export class Game {
       wx: number;
       wy: number;
       layer: 0 | 1;
-      expectedBlockId: number;
+      expectedBlockId?: number;
+      expectedBlockKey?: string;
       hotbarSlot: number;
-      heldItemId: number;
+      heldItemId?: number;
+      heldItemKey?: string;
     },
   ): void {
     const w = this.world;
@@ -5816,18 +6034,24 @@ export class Game {
       return;
     }
     const airId = w.getAirBlockId();
+    const expectedBlockId =
+      msg.expectedBlockKey !== undefined
+        ? w.getRegistry().getByIdentifier(msg.expectedBlockKey).id
+        : (msg.expectedBlockId ?? 0);
     if (msg.layer === 1) {
-      if (w.getBackgroundId(msg.wx, msg.wy) !== msg.expectedBlockId) {
+      if (w.getBackgroundId(msg.wx, msg.wy) !== expectedBlockId) {
         return;
       }
-    } else if (w.getBlock(msg.wx, msg.wy).id !== msg.expectedBlockId) {
+    } else if (w.getBlock(msg.wx, msg.wy).id !== expectedBlockId) {
       return;
     }
     let heldDef;
     try {
       heldDef =
-        msg.heldItemId !== 0
-          ? ir.getById(msg.heldItemId as ItemId)
+        msg.heldItemKey !== undefined
+          ? ir.getByKey(msg.heldItemKey)
+          : (msg.heldItemId ?? 0) !== 0
+            ? ir.getById((msg.heldItemId ?? 0) as ItemId)
           : undefined;
     } catch {
       heldDef = undefined;
@@ -5874,7 +6098,8 @@ export class Game {
       wx: number;
       wy: number;
       hotbarSlot: number;
-      placesBlockId: number;
+      placesBlockId?: number;
+      placesBlockKey?: string;
       aux: number;
     },
   ): void {
@@ -5898,6 +6123,10 @@ export class Game {
       feet = rp.getAuthorityFeet();
     }
     const waterId = w.getWaterBlockId();
+    const placesBlockId =
+      msg.placesBlockKey !== undefined
+        ? w.getRegistry().getByIdentifier(msg.placesBlockKey).id
+        : (msg.placesBlockId ?? 0);
     const { ok, effects } = tryHostTerrainPlace(
       w,
       w.getRegistry(),
@@ -5910,7 +6139,7 @@ export class Game {
       msg.wx,
       msg.wy,
       msg.hotbarSlot,
-      msg.placesBlockId,
+      placesBlockId,
       msg.aux,
     );
     this.adapter.send(peerId as PeerId, {
@@ -5979,6 +6208,9 @@ export class Game {
   }
 
   private _chestWithinReach(anchor: { ax: number; ay: number }): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     const em = this.entityManager;
     if (w === null || em === null) {
@@ -6095,6 +6327,9 @@ export class Game {
   }
 
   private _craftingTableCellWithinReach(wx: number, wy: number): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     const em = this.entityManager;
     if (w === null || em === null) {
@@ -6108,6 +6343,9 @@ export class Game {
   }
 
   private _stonecutterCellWithinReach(wx: number, wy: number): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     const em = this.entityManager;
     if (w === null || em === null) {
@@ -6179,6 +6417,9 @@ export class Game {
   }
 
   private _furnaceCellWithinReach(wx: number, wy: number): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     const em = this.entityManager;
     if (w === null || em === null) {
@@ -6228,7 +6469,488 @@ export class Game {
     }
   }
 
+  private _canEditSpawner(): boolean {
+    const st = this.adapter.state;
+    if (st.status !== "connected") {
+      return true;
+    }
+    if (st.role === "host") {
+      return true;
+    }
+    const local = this.adapter.getLocalPeerId();
+    if (local === null) {
+      return false;
+    }
+    // World starter/host is always trusted, even if OP roster sync is stale.
+    if (st.lanHostPeerId !== null && local === st.lanHostPeerId) {
+      return true;
+    }
+    return this._opPeerIds.has(local);
+  }
+
+  private _allRegisteredSpawnerMobOptions(): string[] {
+    return ["sheep", "pig", "duck", "zombie", "slime"];
+  }
+
+  private _handleSpawnerOpenRequest(wx: number, wy: number): void {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    const spawnerId = w.getSpawnerBlockId();
+    const cell = w.getBlock(wx, wy);
+    const isSpawnerCell =
+      cell.identifier === "stratum:spawner" ||
+      (spawnerId !== null && cell.id === spawnerId);
+    if (!isSpawnerCell) {
+      return;
+    }
+    // Self-heal old sessions where spawner block id was not registered yet.
+    if (spawnerId === null && cell.identifier === "stratum:spawner") {
+      w.setSpawnerBlockId(cell.id);
+    }
+    if (!this._canEditSpawner()) {
+      this.bus.emit({
+        type: "ui:chat-line",
+        kind: "system",
+        text: "Spawner editing requires host/op permissions.",
+      } satisfies GameEvent);
+      return;
+    }
+    const existing = w.getSpawnerTile(wx, wy);
+    if (existing === undefined) {
+      w.setSpawnerTile(wx, wy, createDefaultSpawnerTileState());
+    }
+    this._openSpawnerModal(wx, wy);
+  }
+
+  private _handleSignOpenRequest(wx: number, wy: number): void {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    const cell = w.getBlock(wx, wy);
+    const isSignCell =
+      cell.identifier === "stratum:oak_sign" ||
+      cell.identifier === "stratum:spruce_sign" ||
+      cell.identifier === "stratum:birch_sign" ||
+      w.isSignBlockId(cell.id);
+    if (!isSignCell) {
+      return;
+    }
+    const existing = w.getSignTile(wx, wy);
+    if (existing === undefined) {
+      w.setSignTile(wx, wy, createDefaultSignTileState());
+    }
+    this._openSignModal(wx, wy);
+  }
+
+  private _closeSpawnerModal(): void {
+    if (this._spawnerModalEl !== null) {
+      this._spawnerModalEl.remove();
+      this._spawnerModalEl = null;
+      this._syncWorldInputBlocked();
+    }
+  }
+
+  private _closeSignModal(): void {
+    if (this._signModalEl !== null) {
+      this._signModalEl.remove();
+      this._signModalEl = null;
+      this._syncWorldInputBlocked();
+    }
+  }
+
+  private _openSignModal(wx: number, wy: number): void {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    const state = w.getSignTile(wx, wy) ?? createDefaultSignTileState();
+    this._closeSignModal();
+    const overlay = document.createElement("div");
+    overlay.className = "spawner-modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "spawner-modal sign-modal";
+    const header = document.createElement("div");
+    header.className = "spawner-modal-header";
+    const title = document.createElement("h3");
+    title.textContent = "Edit Sign";
+    const subtitle = document.createElement("p");
+    subtitle.className = "spawner-modal-subtitle";
+    subtitle.textContent = `Cell ${wx}, ${wy}  [b][i][u] [color=red] [center]`;
+    header.appendChild(title);
+    header.appendChild(subtitle);
+    modal.appendChild(header);
+    const form = document.createElement("form");
+    form.className = "spawner-modal-form";
+    const wrap = document.createElement("label");
+    wrap.className = "spawner-modal-field";
+    wrap.textContent = "Sign Text";
+    const input = document.createElement("textarea");
+    input.className = "sign-modal-textarea";
+    input.value = state.text;
+    input.maxLength = 640;
+    input.placeholder = "Welcome, traveler.\n[b]Bold[/b], [i]italic[/i], [u]underline[/u]";
+    wrap.appendChild(input);
+    form.appendChild(wrap);
+    const preview = document.createElement("div");
+    preview.className = "sign-modal-preview";
+    const previewLabel = document.createElement("div");
+    previewLabel.className = "sign-modal-preview-label";
+    previewLabel.textContent = "Preview";
+    const previewBody = document.createElement("div");
+    previewBody.className = "sign-modal-preview-body";
+    preview.appendChild(previewLabel);
+    preview.appendChild(previewBody);
+    const syncPreview = () => {
+      previewBody.innerHTML = signMarkupToHtml(input.value);
+    };
+    input.addEventListener("input", syncPreview);
+    syncPreview();
+    form.appendChild(preview);
+    const buttons = document.createElement("div");
+    buttons.className = "spawner-modal-buttons";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this._closeSignModal());
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.textContent = "Clear";
+    clear.addEventListener("click", () => {
+      input.value = "";
+      syncPreview();
+      input.focus();
+    });
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.textContent = "Save";
+    buttons.appendChild(cancel);
+    buttons.appendChild(clear);
+    buttons.appendChild(save);
+    form.appendChild(buttons);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const sanitized = sanitizeSignMarkup(input.value);
+      w.setSignTile(wx, wy, { text: sanitized });
+      const systemLine = signMarkupToPlainText(sanitized).trim();
+      if (systemLine.length > 0) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: `Sign updated: "${systemLine.slice(0, 120)}${systemLine.length > 120 ? "..." : ""}"`,
+        } satisfies GameEvent);
+      }
+      this._closeSignModal();
+    });
+    modal.appendChild(form);
+    overlay.appendChild(modal);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        e.stopPropagation();
+      }
+    });
+    this.mount.appendChild(overlay);
+    this._signModalEl = overlay;
+    this._syncWorldInputBlocked();
+  }
+
+  private _openSpawnerModal(wx: number, wy: number): void {
+    const w = this.world;
+    if (w === null) {
+      return;
+    }
+    const state = w.getSpawnerTile(wx, wy) ?? createDefaultSpawnerTileState();
+    this._closeSpawnerModal();
+    const overlay = document.createElement("div");
+    overlay.className = "spawner-modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "spawner-modal";
+    const header = document.createElement("div");
+    header.className = "spawner-modal-header";
+    const title = document.createElement("h3");
+    title.textContent = "Edit Spawner";
+    const subtitle = document.createElement("p");
+    subtitle.className = "spawner-modal-subtitle";
+    subtitle.textContent = `Cell ${wx}, ${wy}`;
+    header.appendChild(title);
+    header.appendChild(subtitle);
+    modal.appendChild(header);
+    const form = document.createElement("form");
+    form.className = "spawner-modal-form";
+    const mkNumber = (labelText: string, value: number): HTMLInputElement => {
+      const wrap = document.createElement("label");
+      wrap.className = "spawner-modal-field";
+      wrap.textContent = labelText;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "0";
+      input.step = "1";
+      input.value = String(Math.max(0, Math.floor(value)));
+      wrap.appendChild(input);
+      form.appendChild(wrap);
+      return input;
+    };
+    const delayIn = mkNumber("Delay", state.delay);
+    const maxCountIn = mkNumber("Max Count (0 = infinite)", state.maxCount);
+    const playerRangeIn = mkNumber("Player Range", state.playerRange);
+    const spawnRangeIn = mkNumber("Spawn Range", state.spawnRange);
+    const selectWrap = document.createElement("div");
+    selectWrap.className = "spawner-modal-field";
+    const selectLabel = document.createElement("span");
+    selectLabel.textContent = "Spawn Potentials";
+    selectWrap.appendChild(selectLabel);
+    const dropdown = document.createElement("div");
+    dropdown.className = "spawner-mob-dropdown";
+    const dropdownBtn = document.createElement("button");
+    dropdownBtn.type = "button";
+    dropdownBtn.className = "spawner-mob-dropdown-btn";
+    const dropdownBtnLabel = document.createElement("span");
+    dropdownBtnLabel.className = "spawner-mob-dropdown-btn-label";
+    const dropdownCaret = document.createElement("span");
+    dropdownCaret.className = "spawner-mob-dropdown-caret";
+    dropdownBtn.appendChild(dropdownBtnLabel);
+    dropdownBtn.appendChild(dropdownCaret);
+    const optionsList = document.createElement("ul");
+    optionsList.className = "spawner-mob-dropdown-options";
+    const selectedMobKeys = new Set(
+      state.spawnPotentials.length > 0 ? state.spawnPotentials : ["sheep"],
+    );
+    const allMobOptions = this._allRegisteredSpawnerMobOptions();
+    const updateDropdownLabel = () => {
+      const count = selectedMobKeys.size;
+      if (count <= 0) {
+        dropdownBtnLabel.textContent = "Select mobs";
+        return;
+      }
+      if (count === 1) {
+        dropdownBtnLabel.textContent = [...selectedMobKeys][0] ?? "Select mobs";
+        return;
+      }
+      dropdownBtnLabel.textContent = `${count} mobs selected`;
+    };
+    for (const mob of allMobOptions) {
+      const li = document.createElement("li");
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.className = "spawner-mob-dropdown-option";
+      const check = document.createElement("span");
+      check.className = "spawner-mob-dropdown-option-check";
+      const text = document.createElement("span");
+      text.className = "spawner-mob-dropdown-option-text";
+      text.textContent = mob;
+      const sync = () => {
+        const active = selectedMobKeys.has(mob);
+        opt.classList.toggle("spawner-mob-dropdown-option-selected", active);
+        opt.setAttribute("aria-pressed", active ? "true" : "false");
+      };
+      sync();
+      opt.appendChild(check);
+      opt.appendChild(text);
+      opt.addEventListener("click", () => {
+        if (selectedMobKeys.has(mob)) {
+          if (selectedMobKeys.size === 1) return;
+          selectedMobKeys.delete(mob);
+        } else {
+          selectedMobKeys.add(mob);
+        }
+        sync();
+        updateDropdownLabel();
+      });
+      li.appendChild(opt);
+      optionsList.appendChild(li);
+    }
+    updateDropdownLabel();
+    dropdownBtn.addEventListener("click", () => {
+      const open = dropdown.classList.toggle("spawner-mob-dropdown-open");
+      dropdownBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    modal.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!(target instanceof Node)) return;
+      if (dropdown.contains(target)) return;
+      dropdown.classList.remove("spawner-mob-dropdown-open");
+      dropdownBtn.setAttribute("aria-expanded", "false");
+    });
+    dropdown.appendChild(dropdownBtn);
+    dropdown.appendChild(optionsList);
+    selectWrap.appendChild(dropdown);
+    form.appendChild(selectWrap);
+    const buttons = document.createElement("div");
+    buttons.className = "spawner-modal-buttons";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this._closeSpawnerModal());
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.textContent = "Save";
+    buttons.appendChild(cancel);
+    buttons.appendChild(save);
+    form.appendChild(buttons);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const chosen = [...selectedMobKeys];
+      if (chosen.length === 0) {
+        chosen.push("sheep");
+      }
+      const current = w.getSpawnerTile(wx, wy) ?? createDefaultSpawnerTileState();
+      w.setSpawnerTile(wx, wy, {
+        delay: Math.max(0, Math.floor(Number(delayIn.value) || 0)),
+        maxCount: Math.max(0, Math.floor(Number(maxCountIn.value) || 0)),
+        playerRange: Math.max(0, Math.floor(Number(playerRangeIn.value) || 0)),
+        spawnRange: Math.max(0, Math.floor(Number(spawnRangeIn.value) || 0)),
+        spawnPotentials: chosen,
+        nextSpawnAtWorldTimeMs: current.nextSpawnAtWorldTimeMs,
+      });
+      this._closeSpawnerModal();
+    });
+    modal.appendChild(form);
+    overlay.appendChild(modal);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        e.stopPropagation();
+      }
+    });
+    this.mount.appendChild(overlay);
+    this._spawnerModalEl = overlay;
+    this._syncWorldInputBlocked();
+  }
+
+  private _spawnMobFromSpawner(
+    mobKey: string,
+    x: number,
+    y: number,
+    rng: GeneratorContext,
+  ): number | null {
+    const mm = this._mobManager;
+    if (mm === null) {
+      return null;
+    }
+    const id =
+      mobKey === "pig"
+        ? mm.spawnSummonedPigAt(x, y, rng)
+        : mobKey === "duck"
+          ? mm.spawnSummonedDuckAt(x, y, rng)
+          : mobKey === "zombie"
+            ? mm.spawnSummonedZombieAt(x, y, rng)
+            : mobKey === "slime"
+              ? mm.spawnSummonedSlimeAt(x, y, rng)
+              : mm.spawnSummonedSheepAt(x, y, rng);
+    return id;
+  }
+
+  private _isSpawnerSpawnCellValid(world: World, feetWx: number, feetWy: number): boolean {
+    const support = world.getBlock(feetWx, feetWy - 1);
+    const feetCell = world.getBlock(feetWx, feetWy);
+    const headCell = world.getBlock(feetWx, feetWy + 1);
+    if (!support.solid || support.replaceable || support.water) {
+      return false;
+    }
+    if (feetCell.collides || headCell.collides) {
+      return false;
+    }
+    return true;
+  }
+
+  private _pickSpawnerSpawnFeet(
+    world: World,
+    spawnerWx: number,
+    spawnerWy: number,
+    spawnRangeBlocks: number,
+    rng: GeneratorContext,
+  ): { x: number; y: number } | null {
+    const range = Math.max(0, Math.floor(spawnRangeBlocks));
+    const tries = 28;
+    for (let i = 0; i < tries; i++) {
+      const ox = Math.floor(rng.nextFloat() * (range * 2 + 1)) - range;
+      const candidateWx = spawnerWx + ox;
+      const candidateYOffsets = [0, -1, 1];
+      for (const oy of candidateYOffsets) {
+        const candidateWy = spawnerWy + oy;
+        if ((candidateWx - spawnerWx) ** 2 + (candidateWy - spawnerWy) ** 2 > range * range) {
+          continue;
+        }
+        if (!this._isSpawnerSpawnCellValid(world, candidateWx, candidateWy)) {
+          continue;
+        }
+        return {
+          x: (candidateWx + 0.5) * BLOCK_SIZE,
+          y: candidateWy * BLOCK_SIZE,
+        };
+      }
+    }
+    return null;
+  }
+
+  private _tickSpawnersHost(
+    world: World,
+    rng: GeneratorContext,
+    simulationChunkKeys: ReadonlySet<string>,
+  ): void {
+    const mm = this._mobManager;
+    if (mm === null) {
+      return;
+    }
+    const nowMs = this._worldTime.ms;
+    const playerFeet: Array<{ x: number; y: number }> = [];
+    if (this.entityManager !== null) {
+      playerFeet.push({ ...this.entityManager.getPlayer().state.position });
+    }
+    for (const rp of world.getRemotePlayers().values()) {
+      const f = rp.getAuthorityFeet();
+      playerFeet.push({ x: f.x, y: f.y });
+    }
+    const mobs = mm.getPublicViews();
+    world.forEachSpawnerTile((wx, wy, tile) => {
+      const { cx, cy } = worldToChunk(wx, wy);
+      if (!simulationChunkKeys.has(`${cx},${cy}`)) {
+        return;
+      }
+      const playerRangePx = tile.playerRange * BLOCK_SIZE;
+      const hasPlayerInRange =
+        playerRangePx <= 0 ||
+        playerFeet.some((p) => (p.x - (wx + 0.5) * BLOCK_SIZE) ** 2 + (p.y - (wy + 0.5) * BLOCK_SIZE) ** 2 <= playerRangePx * playerRangePx);
+      if (!hasPlayerInRange) {
+        return;
+      }
+      if (nowMs < tile.nextSpawnAtWorldTimeMs) {
+        return;
+      }
+      const spawnRangePx = Math.max(0, tile.spawnRange) * BLOCK_SIZE;
+      const centerX = (wx + 0.5) * BLOCK_SIZE;
+      const centerY = (wy + 1) * BLOCK_SIZE;
+      const nearby = mobs.filter((m) => (m.x - centerX) ** 2 + (m.y - centerY) ** 2 <= spawnRangePx * spawnRangePx).length;
+      if (tile.maxCount > 0 && nearby >= tile.maxCount) {
+        return;
+      }
+      const potentials =
+        tile.spawnPotentials.length > 0
+          ? tile.spawnPotentials
+          : this._allRegisteredSpawnerMobOptions();
+      const chosen = potentials[Math.floor(rng.nextFloat() * potentials.length)] ?? "sheep";
+      const spawnFeet = this._pickSpawnerSpawnFeet(world, wx, wy, tile.spawnRange, rng);
+      if (spawnFeet === null) {
+        return;
+      }
+      const spawnedId = this._spawnMobFromSpawner(chosen, spawnFeet.x, spawnFeet.y, rng);
+      if (spawnedId !== null) {
+        this._pendingSpawnerFxByMobId.set(spawnedId, { wx, wy });
+        this.bus.emit({ type: "fx:spawner-spawn", wx, wy, blockId: world.getBlock(wx, wy).id } satisfies GameEvent);
+      }
+      const delayMs = Math.max(1, tile.delay) * FIXED_TIMESTEP_SEC * 1000;
+      world.setSpawnerTile(wx, wy, {
+        ...tile,
+        nextSpawnAtWorldTimeMs: nowMs + delayMs,
+      });
+    });
+  }
+
   private _bedWithinReachForPeer(wx: number, wy: number, peerId: string): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     if (w === null) {
       return false;
@@ -6464,6 +7186,9 @@ export class Game {
     anchor: { ax: number; ay: number },
     peerId: string,
   ): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     if (w === null) {
       return false;
@@ -6493,6 +7218,9 @@ export class Game {
   }
 
   private _furnaceWithinReachForPeer(wx: number, wy: number, peerId: string): boolean {
+    if (this._isSandboxWorld()) {
+      return true;
+    }
     const w = this.world;
     if (w === null) {
       return false;
@@ -7625,6 +8353,10 @@ export class Game {
             this.adapter.broadcast({ type: MsgType.ENTITY_DESPAWN, entityId: id });
           }
           for (const sp of flush.spawns) {
+            const spFx = this._pendingSpawnerFxByMobId.get(sp.id);
+            if (spFx !== undefined) {
+              this._pendingSpawnerFxByMobId.delete(sp.id);
+            }
             this.adapter.broadcast({
               type: MsgType.ENTITY_SPAWN,
               entityId: sp.id,
@@ -7632,6 +8364,9 @@ export class Game {
               x: sp.x,
               y: sp.y,
               woolColor: sp.woolColor,
+              ...(spFx !== undefined
+                ? { spawnerFxWx: spFx.wx, spawnerFxWy: spFx.wy }
+                : {}),
             });
           }
           for (const v of flush.states) {
@@ -7725,6 +8460,7 @@ export class Game {
           this._smeltingRegistry,
           simChunks,
         );
+        this._tickSpawnersHost(world, world.forkMobRng(), simChunks);
         const nowMs = performance.now();
         for (const key of changed) {
           const comma = key.indexOf(",");
@@ -7949,6 +8685,15 @@ export class Game {
     };
 
     if (this.world !== null) {
+      const pipe = this.pipeline;
+      if (pipe !== null) {
+        const cam = pipe.getCamera().getPosition();
+        const pcx = Math.floor(cam.x / (CHUNK_SIZE * BLOCK_SIZE));
+        const pcy = Math.floor((-cam.y) / (CHUNK_SIZE * BLOCK_SIZE));
+        this.world.setLightRecomputeViewChunk(pcx, pcy);
+      } else {
+        this.world.setLightRecomputeViewChunk(null, null);
+      }
       const tLightFlush = import.meta.env.DEV ? chunkPerfNow() : 0;
       const tPhase = performance.now();
       // Keep frame pacing stable under load: spend less light time when the previous
@@ -7984,7 +8729,7 @@ export class Game {
       const visible =
         centre === null
           ? cm.getLoadedChunks()
-          : cm.getChunksWithinDistance(centre, VIEW_DISTANCE_CHUNKS);
+          : cm.getChunksWithinDistance(centre, getEffectiveViewDistanceChunks());
       const tSync = import.meta.env.DEV ? chunkPerfNow() : 0;
       const tSyncPhase = performance.now();
       withPerfSpan("ChunkRenderer.syncChunks", () => {
@@ -8141,6 +8886,24 @@ export class Game {
         chunkPerfLog("game:nametagOverlayUpdate", chunkPerfNow() - tTags);
       }
     }
+    if (
+      this._signHoverOverlay !== null &&
+      this.pipeline !== null &&
+      this.entityManager !== null &&
+      this.world !== null &&
+      this.input !== null
+    ) {
+      const playerState = this.entityManager.getPlayer().state;
+      this._signHoverOverlay.update(
+        this.world,
+        this.pipeline.getCamera(),
+        this.pipeline.getCanvas(),
+        this.input.mouseWorldPos.x,
+        this.input.mouseWorldPos.y,
+        playerState.position.x,
+        playerState.position.y,
+      );
+    }
 
     if (this._damageNumbersOverlay !== null && this.pipeline !== null) {
       this._damageNumbersOverlay.update(
@@ -8152,6 +8915,7 @@ export class Game {
 
     if (this.entityManager !== null && this.inventoryUI !== null) {
       const pl = this.entityManager.getPlayer();
+      this.inventoryUI.setSandboxHud(this._isSandboxWorld());
       this.inventoryUI.update(
         pl.inventory,
         pl.state.hotbarSlot,
@@ -8183,6 +8947,7 @@ export class Game {
     }
     this.pipeline?.prepareFrame();
     if (this.pipeline !== null) {
+      const pipeline = this.pipeline;
       const baseLighting = this._worldTime.getLightingParams();
       const rainingGlobal = this._isRainingForVisual();
       let rainVisual = rainingGlobal && winterAmount < 0.2;
@@ -8205,13 +8970,13 @@ export class Game {
         rainVisual && this._lightningAnimEndMs > now
           ? ((this._lightningAnimEndMs - now) / 300) * 0.95
           : 0;
-      this.pipeline.updateSky(lightingParams, this._worldTime.ms, {
+      pipeline.updateSky(lightingParams, this._worldTime.ms, {
         lightningAlpha,
       });
-      this.pipeline.updateWeatherOverlay(rainVisual, dtSec);
-      this.pipeline.updateSnowfallEffect(winterAmount, dtSec);
+      pipeline.updateWeatherOverlay(rainVisual, dtSec);
+      pipeline.updateSnowfallEffect(winterAmount, dtSec);
       if (this.world !== null && this.entityManager !== null) {
-        const cam = this.pipeline.getCamera();
+        const cam = pipeline.getCamera();
         const pos = cam.getPosition();
         const player = this.entityManager.getPlayer();
         const torchId = this.world
@@ -8243,13 +9008,15 @@ export class Game {
           playerCenterWy,
           dynamicLightEmitters,
         );
-        this.pipeline.lightingComposer.update(
-          lightingParams,
-          pos.x,
-          pos.y,
-          heldTorch,
-          dynamicLightEmitters,
-        );
+        withPerfSpan("LightingComposer.update", () => {
+          pipeline.lightingComposer.update(
+            lightingParams,
+            pos.x,
+            pos.y,
+            heldTorch,
+            dynamicLightEmitters,
+          );
+        });
       }
     }
     const tRenderPipeline = performance.now();

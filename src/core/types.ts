@@ -19,6 +19,21 @@ export function normalizeWorldGameMode(raw: unknown): WorldGameMode {
 }
 
 /**
+ * World generation preset.
+ *  - `"normal"` (default): full noise-based terrain with biomes, trees, caves, ores.
+ *  - `"flat"`: uniform superflat — bedrock floor, stone, dirt, grass; no caves/ores/trees/water.
+ */
+export type WorldGenType = "normal" | "flat";
+
+/** Back-compat parser for persisted/networked world-gen type values. */
+export function normalizeWorldGenType(raw: unknown): WorldGenType {
+  if (raw === "flat") {
+    return "flat";
+  }
+  return "normal";
+}
+
+/**
  * Application-wide events for EventBus (extend as systems are added).
  * Discriminated by `type` for exhaustive handling.
  */
@@ -38,7 +53,13 @@ export type GameEvent =
   | { type: "game:saved" }
   | { type: "ui:save" }
   | { type: "ui:close-pause" }
-  | { type: "ui:perf-capture-start"; durationMs?: number }
+  | {
+      type: "ui:perf-capture-start";
+      durationMs?: number;
+      topBottomUpEntries?: number;
+      hotStackCount?: number;
+      maxProfilerBufferSize?: number;
+    }
   | {
       type: "ui:perf-capture-status";
       status: "idle" | "capturing" | "saved" | "failed";
@@ -139,9 +160,11 @@ export type GameEvent =
       wx: number;
       wy: number;
       layer: "fg" | "bg";
-      expectedBlockId: number;
+      expectedBlockId?: number;
+      expectedBlockKey?: string;
       hotbarSlot: number;
-      heldItemId: number;
+      heldItemId?: number;
+      heldItemKey?: string;
     }
   | { type: "terrain:net-door-toggle"; wx: number; wy: number }
   | {
@@ -150,7 +173,8 @@ export type GameEvent =
       wx: number;
       wy: number;
       hotbarSlot: number;
-      placesBlockId: number;
+      placesBlockId?: number;
+      placesBlockKey?: string;
       aux: number;
     }
   | {
@@ -195,6 +219,8 @@ export type GameEvent =
   | { type: "crafting-table:open-request"; wx: number; wy: number }
   | { type: "stonecutter:open-request"; wx: number; wy: number }
   | { type: "furnace:open-request"; wx: number; wy: number }
+  | { type: "spawner:open-request"; wx: number; wy: number }
+  | { type: "sign:open-request"; wx: number; wy: number }
   | { type: "bed:sleep-request"; wx: number; wy: number }
   /** Door opened/closed by proximity (not redstone latch); latch stays closed both frames. */
   | {
@@ -286,7 +312,8 @@ export type GameEvent =
       worldAnchorX: number;
       worldAnchorY: number;
       damage: number;
-    };
+    }
+  | { type: "fx:spawner-spawn"; wx: number; wy: number; blockId: number };
 
 /** Dynamic world-space emissive source used by the composite placed-light path. */
 export type DynamicLightEmitter = {

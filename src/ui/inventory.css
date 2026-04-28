@@ -1,3 +1,368 @@
+.spawner-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  z-index: 18000;
+  pointer-events: auto;
+}
+
+.spawner-modal {
+  width: min(42rem, 100%);
+  background: rgba(44, 44, 46, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  corner-shape: squircle;
+  padding: 1.45rem 1.6rem;
+  color: #f2f2f7;
+  font-family: "M5x7", monospace;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
+.spawner-modal-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+}
+
+.spawner-modal h3 {
+  margin: 0;
+  font-family: "BoldPixels", monospace;
+  font-size: clamp(22px, 2.5vw, 26px);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #f2f2f7;
+  line-height: 1.15;
+}
+
+.spawner-modal-subtitle {
+  margin: 8px 0 0;
+  color: #8e8e93;
+  font-size: 22px;
+  line-height: 1.35;
+}
+
+.spawner-modal-form {
+  display: grid;
+  gap: 14px;
+}
+
+.spawner-modal-field {
+  display: grid;
+  gap: 8px;
+  font-family: "BoldPixels", monospace;
+  font-size: 17px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #aeaeb2;
+}
+
+.spawner-modal-form input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 48px;
+  background: rgba(36, 36, 38, 0.9);
+  color: #f2f2f7;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  corner-shape: squircle;
+  padding: 10px 12px;
+  font-family: "M5x7", monospace;
+  font-size: 24px;
+  line-height: 1.2;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.spawner-modal-form input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(52, 52, 54, 0.92);
+}
+
+.sign-modal {
+  width: min(50rem, 100%);
+}
+
+.spawner-modal-form .sign-modal-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 180px;
+  resize: vertical;
+  background: rgba(36, 36, 38, 0.9);
+  color: #f2f2f7;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: "M5x7", monospace;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.spawner-modal-form .sign-modal-textarea:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(52, 52, 54, 0.92);
+}
+
+.sign-modal-preview {
+  display: grid;
+  gap: 6px;
+}
+
+.sign-modal-preview-label {
+  color: #aeaeb2;
+  font-family: "BoldPixels", monospace;
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sign-modal-preview-body {
+  min-height: 72px;
+  max-height: 180px;
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(28, 28, 30, 0.9);
+  padding: 10px 12px;
+  font-family: "M5x7", monospace;
+  font-size: 22px;
+  line-height: 1.2;
+  color: #f2f2f7;
+}
+
+.spawner-mob-dropdown {
+  position: relative;
+  width: 100%;
+}
+
+.spawner-mob-dropdown-btn {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  corner-shape: squircle;
+  text-align: left;
+  background: rgba(36, 36, 38, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  color: #f2f2f7;
+  font-family: "BoldPixels", monospace;
+  font-size: 17px;
+  line-height: 1.08;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+}
+
+.spawner-mob-dropdown-btn:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(52, 52, 54, 0.92);
+}
+
+.spawner-mob-dropdown-btn-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spawner-mob-dropdown-caret {
+  position: relative;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.spawner-mob-dropdown-caret::before,
+.spawner-mob-dropdown-caret::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 2px;
+  border-radius: 1px;
+  background: #aeaeb2;
+  transform-origin: center;
+  transition: transform 0.16s ease, background-color 0.16s ease;
+}
+
+.spawner-mob-dropdown-caret::before {
+  transform: translate(-72%, -50%) rotate(35deg);
+}
+
+.spawner-mob-dropdown-caret::after {
+  transform: translate(-28%, -50%) rotate(-35deg);
+}
+
+.spawner-mob-dropdown.spawner-mob-dropdown-open .spawner-mob-dropdown-caret::before {
+  transform: translate(-72%, -50%) rotate(-35deg);
+  background: #f2f2f7;
+}
+
+.spawner-mob-dropdown.spawner-mob-dropdown-open .spawner-mob-dropdown-caret::after {
+  transform: translate(-28%, -50%) rotate(35deg);
+  background: #f2f2f7;
+}
+
+.spawner-mob-dropdown-options {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 5;
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  corner-shape: squircle;
+  background: rgba(29, 29, 31, 0.98);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.28);
+  overflow: hidden auto;
+  max-height: 11.5rem;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.24) rgba(0, 0, 0, 0.25);
+}
+
+.spawner-mob-dropdown.spawner-mob-dropdown-open .spawner-mob-dropdown-options {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.spawner-mob-dropdown-options::-webkit-scrollbar {
+  width: 6px;
+}
+
+.spawner-mob-dropdown-options::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.spawner-mob-dropdown-options::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.spawner-mob-dropdown-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: transparent;
+  color: #aeaeb2;
+  font-family: "BoldPixels", monospace;
+  font-size: 17px;
+  line-height: 1.08;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.spawner-mob-dropdown-options li:first-child .spawner-mob-dropdown-option {
+  border-top: 0;
+}
+
+.spawner-mob-dropdown-option:hover {
+  background: rgba(52, 52, 54, 0.88);
+  color: #f2f2f7;
+}
+
+.spawner-mob-dropdown-option-check {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.22);
+  box-sizing: border-box;
+}
+
+.spawner-mob-dropdown-option-selected .spawner-mob-dropdown-option-check {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.85);
+}
+
+.spawner-mob-dropdown-option-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.spawner-modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.spawner-modal-buttons button {
+  min-height: 48px;
+  padding: 12px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(36, 36, 38, 0.9);
+  color: #aeaeb2;
+  border-radius: 10px;
+  corner-shape: squircle;
+  font-family: "BoldPixels", monospace;
+  font-size: 17px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.spawner-modal-buttons button[type="submit"] {
+  background: #f2f2f7;
+  border-color: #f2f2f7;
+  color: #1c1c1e;
+}
+
+.spawner-modal-buttons button:hover {
+  opacity: 0.92;
+}
+
+.spawner-modal-buttons button[type="button"]:hover {
+  opacity: 1;
+  background: rgba(52, 52, 54, 0.92);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #f2f2f7;
+}
+
+.spawner-modal-buttons button:active {
+  opacity: 0.85;
+}
+
+.spawner-modal-buttons button:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.16);
+}
 /* Hotbar + inventory — aligned with main menu / loading (neutral surfaces, pixel fonts). */
 
 #inventory-ui-root {
@@ -267,6 +632,10 @@
   gap: 7px;
   min-height: 22px;
   pointer-events: none;
+}
+
+#inventory-ui-root .inv-hearts-row.inv-hearts-row--hidden {
+  display: none;
 }
 
 #inventory-ui-root .inv-armor-hud-row {

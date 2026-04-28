@@ -13,7 +13,11 @@ import type {
   IndexedDBStore,
   WorldMetadata,
 } from "../../persistence/IndexedDBStore";
-import { normalizeWorldGameMode, type WorldGameMode } from "../../core/types";
+import {
+  normalizeWorldGameMode,
+  type WorldGameMode,
+  type WorldGenType,
+} from "../../core/types";
 import { mountSettingsPanel } from "../settings/mountSettingsPanel";
 import { HOST_PEER_SUFFIX_ALPHABET } from "../../network/hostPeerId";
 import {
@@ -33,7 +37,13 @@ import { WorkshopScreen } from "./WorkshopScreen";
 import { parseJsoncText } from "../../core/jsonc";
 
 export type MainMenuResult =
-  | { action: "new"; name: string; seed: number; gameMode: WorldGameMode }
+  | {
+      action: "new";
+      name: string;
+      seed: number;
+      gameMode: WorldGameMode;
+      worldGenType: WorldGenType;
+    }
   | { action: "load"; uuid: string }
   | { action: "multiplayer-join"; roomCode: string; password?: string }
   | {
@@ -132,6 +142,16 @@ function injectStyles(base: string): void {
       --mm-radius-sm: 10px;
       --mm-radius-md: 14px;
       --mm-radius-lg: 18px;
+      --mm-control-h: 50px;
+      --mm-control-pad-x: 16px;
+      --mm-type-label: 16px;
+      --mm-type-ui: 16px;
+      --mm-type-ui-strong: 17px;
+      --mm-type-title: clamp(24px, 2.7vw, 30px);
+      --mm-selection-surface: rgba(33, 33, 35, 0.96);
+      --mm-selection-surface-hover: rgba(48, 48, 51, 0.98);
+      --mm-selection-surface-open: rgba(55, 55, 58, 0.98);
+      --mm-selection-outline: rgba(255, 255, 255, 0.12);
     }
 
     /* -- Root overlay (no tint so in-game sky colors are exact) ---------- */
@@ -257,15 +277,18 @@ function injectStyles(base: string): void {
     .mm-nav-btn {
       display: block;
       width: 100%;
-      padding: 14px 16px;
+      min-height: var(--mm-control-h);
+      padding: 12px 16px;
       background: var(--mm-surface-deep);
       border: 1px solid transparent;
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 20px;
+      font-size: 19px;
+      line-height: 1.08;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.04em;
       text-align: left;
+      white-space: nowrap;
       cursor: pointer;
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
@@ -376,12 +399,13 @@ function injectStyles(base: string): void {
     }
     .mm-panel-title {
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(22px, 2.6vw, 28px);
+      font-size: var(--mm-type-title);
       text-transform: uppercase;
-      letter-spacing: 1px;
+      letter-spacing: 0.04em;
       color: var(--mm-ink);
       margin: 0 0 1.1rem;
-      line-height: 1.15;
+      line-height: 1.18;
+      text-wrap: balance;
     }
 
     /* ── What's New: home = compact card, bottom-right of main column ----- */
@@ -420,19 +444,20 @@ function injectStyles(base: string): void {
     .mm-home-changelog-kicker {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: 15px;
       text-transform: uppercase;
-      letter-spacing: 0.07em;
+      letter-spacing: 0.05em;
       color: var(--mm-ink-soft);
     }
     .mm-home-changelog-title {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 20px;
-      line-height: 1.2;
-      letter-spacing: 0.04em;
+      font-size: 22px;
+      line-height: 1.18;
+      letter-spacing: 0.03em;
       text-transform: uppercase;
       color: var(--mm-ink);
+      text-wrap: balance;
     }
     .mm-home-changelog-cta {
       align-self: flex-start;
@@ -451,10 +476,11 @@ function injectStyles(base: string): void {
     .mm-whats-new-body {
       font-family: 'M5x7', monospace;
       font-size: calc(19px + var(--mm-m5-nudge));
-      line-height: 1.45;
+      line-height: 1.5;
       color: var(--mm-ink-mid);
       margin: 0;
       overflow-wrap: break-word;
+      text-wrap: pretty;
       display: -webkit-box;
       -webkit-line-clamp: 5;
       -webkit-box-orient: vertical;
@@ -647,16 +673,22 @@ function injectStyles(base: string): void {
 
     /* ── Action buttons ───────────────────────────── */
     .mm-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       box-sizing: border-box;
-      padding: 14px 22px;
-      min-height: 44px;
+      min-height: 48px;
+      padding: 12px 18px;
       background: var(--mm-ink);
       border: 1px solid var(--mm-ink);
       color: #1c1c1e;
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
+      font-size: var(--mm-type-ui);
+      line-height: 1.05;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.04em;
+      text-align: center;
+      white-space: nowrap;
       cursor: pointer;
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
@@ -687,11 +719,6 @@ function injectStyles(base: string): void {
       background: rgba(255, 69, 58, 0.28);
       opacity: 1;
     }
-    .mm-btn.mm-btn-danger {
-      padding: 14px 22px;
-      min-height: 48px;
-      font-size: 17px;
-    }
     .mm-btn.mm-bedrock-pack-remove,
     .mm-btn.mm-bedrock-pack-add {
       padding: 10px 18px;
@@ -704,11 +731,11 @@ function injectStyles(base: string): void {
     .mm-field label {
       display: block;
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: var(--mm-type-label);
       text-transform: uppercase;
-      letter-spacing: 0.07em;
+      letter-spacing: 0.05em;
       color: var(--mm-ink-soft);
-      margin-bottom: 6px;
+      margin-bottom: 8px;
     }
     .mm-field input[type="text"],
     .mm-field input[type="search"],
@@ -733,7 +760,6 @@ function injectStyles(base: string): void {
     .mm-field input[type="email"]:focus,
     .mm-field input[type="password"]:focus {
       outline: none;
-      border-color: var(--mm-border-strong);
     }
     .mm-field input::placeholder { color: var(--mm-ink-soft); opacity: 0.7; }
     .mm-field input[type="range"] {
@@ -741,40 +767,200 @@ function injectStyles(base: string): void {
       accent-color: #aeaeb2;
       cursor: pointer;
     }
+    .mm-create-mode-dropdown {
+      position: relative;
+      width: 100%;
+    }
     .mm-create-mode-select {
-      appearance: none;
-      -webkit-appearance: none;
-      -moz-appearance: none;
+      position: relative;
+      isolation: isolate;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
       box-sizing: border-box;
-      min-height: 44px;
-      min-width: 120px;
-      padding: 10px 36px 10px 14px;
+      width: 100%;
+      min-height: var(--mm-control-h);
+      padding: 12px var(--mm-control-pad-x);
       border: 1px solid var(--mm-border);
-      border-radius: var(--mm-radius-sm);
+      border-radius: 12px;
       corner-shape: squircle;
-      background:
-        linear-gradient(45deg, transparent 50%, var(--mm-ink-mid) 50%) calc(100% - 18px) calc(50% - 3px) / 7px 7px no-repeat,
-        linear-gradient(135deg, var(--mm-ink-mid) 50%, transparent 50%) calc(100% - 12px) calc(50% - 3px) / 7px 7px no-repeat,
-        var(--mm-surface-deep);
+      text-align: left;
+      background: var(--mm-surface-deep);
+      overflow: hidden;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 0 0 1px rgba(0, 0, 0, 0.18);
       color: var(--mm-ink);
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
-      letter-spacing: 0.06em;
+      font-size: var(--mm-type-ui-strong);
+      line-height: 1.08;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
       cursor: pointer;
-      transition: border-color 0.14s ease;
+      transition:
+        border-color 0.14s ease,
+        background 0.14s ease,
+        box-shadow 0.14s ease,
+        transform 0.14s ease;
+    }
+    .mm-create-mode-select::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      opacity: 1;
+      background: color-mix(in srgb, var(--mm-surface-deep) 84%, rgba(255, 255, 255, 0.06) 16%);
+      pointer-events: none;
+      transition: opacity 0.14s ease, background 0.14s ease;
+    }
+    .mm-create-mode-select::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 10px;
+      bottom: 10px;
+      width: 4px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.16);
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+      pointer-events: none;
+      transition: background 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+    }
+    .mm-create-mode-select-label {
+      position: relative;
+      z-index: 1;
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mm-create-mode-caret {
+      position: relative;
+      z-index: 1;
+      flex: 0 0 auto;
+      width: 24px;
+      height: 24px;
+      margin-left: 4px;
+      border-left: 1px solid var(--mm-border);
+    }
+    .mm-create-mode-caret::before,
+    .mm-create-mode-caret::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 9px;
+      height: 2px;
+      border-radius: 1px;
+      background: var(--mm-ink-mid);
+      opacity: 0.95;
+      transform-origin: center;
+      transition: transform 0.16s ease, background-color 0.16s ease, opacity 0.16s ease;
+    }
+    .mm-create-mode-caret::before {
+      transform: translate(-72%, -50%) rotate(35deg);
+    }
+    .mm-create-mode-caret::after {
+      transform: translate(-28%, -50%) rotate(-35deg);
+    }
+    .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-select {
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+      border-color: var(--mm-border-strong);
+      background: var(--mm-surface-raised);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }
+    .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-select::before {
+      opacity: 1;
+    }
+    .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-select::after {
+      transform: scaleY(1.08);
+    }
+    .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-caret::before {
+      transform: translate(-72%, -50%) rotate(-35deg);
+      background: var(--mm-ink);
+    }
+    .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-caret::after {
+      transform: translate(-28%, -50%) rotate(35deg);
+      background: var(--mm-ink);
+    }
+    .mm-create-mode-select:hover {
+      border-color: var(--mm-border-strong);
+      background: var(--mm-surface-raised);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 0 0 1px rgba(0, 0, 0, 0.18);
     }
     .mm-create-mode-select:focus {
       outline: none;
-      border-color: var(--mm-border-strong);
+    }
+    .mm-create-mode-options {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 100%;
+      z-index: 3000;
+      margin: 0;
+      padding: 8px 0;
+      list-style: none;
+      border: 1px solid var(--mm-border-strong);
+      border-top: 0;
+      border-bottom-left-radius: 12px;
+      border-bottom-right-radius: 12px;
+      corner-shape: squircle;
+      background: rgba(29, 29, 31, 0.98);
+      box-shadow: 0 16px 30px rgba(0, 0, 0, 0.28);
+      overflow: hidden;
+    }
+    .mm-create-mode-option {
+      width: 100%;
+      display: block;
+      text-align: left;
+      border: 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      background: transparent;
+      color: var(--mm-ink-mid);
+      font-family: 'BoldPixels', monospace;
+      font-size: var(--mm-type-ui-strong);
+      line-height: 1.08;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 12px var(--mm-control-pad-x);
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.12s ease, color 0.12s ease;
+    }
+    .mm-create-mode-options li:first-child .mm-create-mode-option {
+      border-top: 0;
+    }
+    .mm-create-mode-option:hover {
+      background: var(--mm-surface-raised);
+      color: var(--mm-ink);
+    }
+    .mm-create-mode-option:focus-visible {
+      outline: none;
+      background: var(--mm-surface-raised);
+      color: var(--mm-ink);
+    }
+    .mm-create-mode-option.mm-create-mode-option-selected {
+      background: rgba(255, 255, 255, 0.09);
+      color: var(--mm-ink);
+      box-shadow:
+        inset 3px 0 0 var(--mm-ink-mid),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
     .mm-field + .mm-btn { margin-top: 10px; }
     .mm-note {
       margin: 0 0 1rem;
       font-family: 'M5x7', monospace;
       font-size: calc(20px + var(--mm-m5-nudge));
-      line-height: 1.5;
+      line-height: 1.55;
       color: var(--mm-ink-mid);
+      text-wrap: pretty;
     }
     .mm-field textarea {
       width: 100%;
@@ -794,7 +980,6 @@ function injectStyles(base: string): void {
     }
     .mm-field textarea:focus {
       outline: none;
-      border-color: var(--mm-border-strong);
     }
     .mm-field textarea::placeholder {
       color: var(--mm-ink-soft);
@@ -2254,6 +2439,36 @@ function injectStyles(base: string): void {
       flex: 1;
       accent-color: #aeaeb2;
     }
+    .mm-settings-row input[type="checkbox"],
+    .mm-bedrock-mp-toggle input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      border: 1px solid var(--mm-border);
+      border-radius: 6px;
+      background: var(--mm-surface-deep);
+      box-sizing: border-box;
+      cursor: pointer;
+      transition: border-color 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+    }
+    .mm-settings-row input[type="checkbox"]:hover,
+    .mm-bedrock-mp-toggle input[type="checkbox"]:hover {
+      border-color: var(--mm-border-strong);
+      background: var(--mm-surface-raised);
+    }
+    .mm-settings-row input[type="checkbox"]:checked,
+    .mm-bedrock-mp-toggle input[type="checkbox"]:checked {
+      border-color: var(--mm-border-strong);
+      background: var(--mm-surface-raised);
+      box-shadow: inset 0 0 0 4px var(--mm-ink-mid);
+    }
+    .mm-settings-row input[type="checkbox"]:focus,
+    .mm-bedrock-mp-toggle input[type="checkbox"]:focus {
+      outline: none;
+    }
     .mm-settings-val {
       font-family: 'M5x7', monospace;
       font-size: calc(18px + var(--mm-m5-nudge));
@@ -2364,7 +2579,7 @@ function injectStyles(base: string): void {
       align-items: flex-end;
       margin-bottom: 12px;
     }
-    .mm-rooms-toolbar .mm-field { margin-bottom: 0; flex: 1; min-width: 140px; }
+    .mm-rooms-toolbar .mm-field { margin-bottom: 0; flex: 1; min-width: 180px; }
     .mm-rooms-actions { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
     .mm-rooms-list {
       flex: 1;
@@ -2402,10 +2617,12 @@ function injectStyles(base: string): void {
     .mm-rooms-row:hover { background: rgba(255, 255, 255, 0.04); }
     .mm-rooms-row-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
+      font-size: 18px;
+      line-height: 1.15;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.04em;
       color: var(--mm-ink);
+      text-wrap: balance;
     }
     .mm-rooms-row-meta {
       font-family: 'M5x7', monospace;
@@ -2415,6 +2632,8 @@ function injectStyles(base: string): void {
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
+      line-height: 1.45;
+      text-wrap: pretty;
     }
     .mm-rooms-empty {
       padding: 2rem 1rem;
@@ -2861,9 +3080,6 @@ function injectStyles(base: string): void {
     .mm-bedrock-mp-toggle input {
       margin-top: 3px;
       flex-shrink: 0;
-      accent-color: #aeaeb2;
-      width: 20px;
-      height: 20px;
     }
     .mm-pack-built-in-sub {
       font-size: calc(16px + var(--mm-m5-nudge));
@@ -2935,14 +3151,23 @@ function injectStyles(base: string): void {
     select.mm-select {
       width: 100%;
       box-sizing: border-box;
-      padding: 12px 14px;
-      background: var(--mm-surface-deep);
-      border: 1px solid var(--mm-border);
+      min-height: var(--mm-control-h);
+      padding: 12px var(--mm-control-pad-x);
+      background: var(--mm-selection-surface);
+      border: 1px solid var(--mm-selection-outline);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 0 0 1px rgba(0, 0, 0, 0.18);
       color: var(--mm-ink);
-      font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
-      border-radius: var(--mm-radius-sm);
+      font-family: 'BoldPixels', monospace;
+      font-size: var(--mm-type-ui-strong);
+      line-height: 1.08;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-radius: 12px;
+      corner-shape: squircle;
       cursor: pointer;
+      white-space: nowrap;
     }
     textarea.mm-textarea {
       width: 100%;
@@ -3414,17 +3639,24 @@ export class MainMenu {
         seedField.appendChild(seedInput);
 
         const modeField = makeField("Game mode");
-        const modeSelect = document.createElement("select");
-        modeSelect.className = "mm-create-mode-select";
-        const survivalOpt = document.createElement("option");
-        survivalOpt.value = "survival";
-        survivalOpt.textContent = "Survival Mode";
-        const sandboxOpt = document.createElement("option");
-        sandboxOpt.value = "sandbox";
-        sandboxOpt.textContent = "Sandbox Mode";
-        modeSelect.appendChild(survivalOpt);
-        modeSelect.appendChild(sandboxOpt);
-        modeField.appendChild(modeSelect);
+        const modeSelect = createMenuDropdown(
+          [
+            { value: "survival", label: "Survival Mode" },
+            { value: "sandbox", label: "Sandbox Mode" },
+          ],
+          "survival",
+        );
+        modeField.appendChild(modeSelect.root);
+
+        const worldTypeField = makeField("World type");
+        const worldTypeSelect = createMenuDropdown(
+          [
+            { value: "normal", label: "Normal" },
+            { value: "flat", label: "Flat" },
+          ],
+          "normal",
+        );
+        worldTypeField.appendChild(worldTypeSelect.root);
 
         const actions = document.createElement("div");
         actions.className = "mm-modal-actions";
@@ -3434,8 +3666,10 @@ export class MainMenu {
         createBtn.addEventListener("click", () => {
           const name = nameInput.value.trim() || "My World";
           const seed = parseSeedInput(seedInput.value);
-          const gameMode = modeSelect.value === "sandbox" ? "sandbox" : "survival";
-          exitToGame({ action: "new", name, seed, gameMode });
+          const gameMode = modeSelect.getValue() === "sandbox" ? "sandbox" : "survival";
+          const worldGenType: WorldGenType =
+            worldTypeSelect.getValue() === "flat" ? "flat" : "normal";
+          exitToGame({ action: "new", name, seed, gameMode, worldGenType });
         });
         actions.appendChild(cancelBtn);
         actions.appendChild(createBtn);
@@ -3444,6 +3678,7 @@ export class MainMenu {
         card.appendChild(nameField);
         card.appendChild(seedField);
         card.appendChild(modeField);
+        card.appendChild(worldTypeField);
         card.appendChild(actions);
         modal.appendChild(card);
         modal.addEventListener("click", (ev) => {
@@ -3906,18 +4141,14 @@ export class MainMenu {
           descriptionField.appendChild(descriptionInput);
 
           const modeField = makeField("World game mode");
-          const modeSelect = document.createElement("select");
-          modeSelect.className = "mm-create-mode-select";
-          const survivalModeOpt = document.createElement("option");
-          survivalModeOpt.value = "survival";
-          survivalModeOpt.textContent = "Survival Mode";
-          const sandboxModeOpt = document.createElement("option");
-          sandboxModeOpt.value = "sandbox";
-          sandboxModeOpt.textContent = "Sandbox Mode";
-          modeSelect.appendChild(survivalModeOpt);
-          modeSelect.appendChild(sandboxModeOpt);
-          modeSelect.value = normalizeWorldGameMode(fresh.gameMode);
-          modeField.appendChild(modeSelect);
+          const modeSelect = createMenuDropdown(
+            [
+              { value: "survival", label: "Survival Mode" },
+              { value: "sandbox", label: "Sandbox Mode" },
+            ],
+            normalizeWorldGameMode(fresh.gameMode),
+          );
+          modeField.appendChild(modeSelect.root);
 
           const cheatsRow = document.createElement("div");
           cheatsRow.className = "mm-settings-row";
@@ -4071,7 +4302,7 @@ export class MainMenu {
                 ...prev,
                 name: nextName,
                 description: nextDescription,
-                gameMode: modeSelect.value === "sandbox" ? "sandbox" : "survival",
+                gameMode: modeSelect.getValue() === "sandbox" ? "sandbox" : "survival",
                 enableCheats: cheatsToggle.checked,
                 workshopBehaviorMods: patch.workshopBehaviorMods,
                 workshopResourceMods: patch.workshopResourceMods,
@@ -4496,8 +4727,8 @@ export class MainMenu {
 
         let roomsListEl: HTMLDivElement | null = null;
         let searchInputRef: HTMLInputElement | null = null;
-        let filterSelRef: HTMLSelectElement | null = null;
-        let sortSelRef: HTMLSelectElement | null = null;
+        let filterSelRef: ReturnType<typeof createMenuDropdown> | null = null;
+        let sortSelRef: ReturnType<typeof createMenuDropdown> | null = null;
 
         const loadRooms = async (): Promise<void> => {
           const listEl = roomsListEl;
@@ -4524,8 +4755,8 @@ export class MainMenu {
           }
           const rows = await listStratumRooms(client, {
             search: searchInput.value.trim(),
-            filter: filterSel.value as "all" | "public" | "private",
-            sort: sortSel.value as "active" | "new" | "rating",
+            filter: filterSel.getValue() as "all" | "public" | "private",
+            sort: sortSel.getValue() as "active" | "new" | "rating",
             limit: 50,
             offset: 0,
           });
@@ -4858,34 +5089,26 @@ export class MainMenu {
           searchField.appendChild(searchInput);
 
           const filterField = makeField("Show");
-          const filterSel = document.createElement("select");
-          filterSel.className = "mm-select";
-          for (const [v, lab] of [
-            ["all", "All rooms"],
-            ["public", "Public only"],
-            ["private", "Private only"],
-          ] as const) {
-            const o = document.createElement("option");
-            o.value = v;
-            o.textContent = lab;
-            filterSel.appendChild(o);
-          }
-          filterField.appendChild(filterSel);
+          const filterSel = createMenuDropdown(
+            [
+              { value: "all", label: "All rooms" },
+              { value: "public", label: "Public only" },
+              { value: "private", label: "Private only" },
+            ],
+            "all",
+          );
+          filterField.appendChild(filterSel.root);
 
           const sortField = makeField("Sort");
-          const sortSel = document.createElement("select");
-          sortSel.className = "mm-select";
-          for (const [v, lab] of [
-            ["active", "Most active"],
-            ["new", "Newest"],
-            ["rating", "Top rated"],
-          ] as const) {
-            const o = document.createElement("option");
-            o.value = v;
-            o.textContent = lab;
-            sortSel.appendChild(o);
-          }
-          sortField.appendChild(sortSel);
+          const sortSel = createMenuDropdown(
+            [
+              { value: "active", label: "Most active" },
+              { value: "new", label: "Newest" },
+              { value: "rating", label: "Top rated" },
+            ],
+            "active",
+          );
+          sortField.appendChild(sortSel.root);
 
           const refreshBtn = makeBtn("Refresh", "mm-btn mm-btn-subtle");
           const filterWrap = document.createElement("div");
@@ -4917,10 +5140,10 @@ export class MainMenu {
               void loadRooms();
             }, 320);
           });
-          filterSel.addEventListener("change", () => {
+          filterSel.onChange(() => {
             void loadRooms();
           });
-          sortSel.addEventListener("change", () => {
+          sortSel.onChange(() => {
             void loadRooms();
           });
 
@@ -5087,6 +5310,164 @@ function makeBtn(text: string, className: string): HTMLButtonElement {
   btn.className = className;
   btn.textContent = text;
   return btn;
+}
+
+function createMenuDropdown(
+  options: Array<{ value: string; label: string }>,
+  initialValue: string,
+): {
+  root: HTMLDivElement;
+  getValue: () => string;
+  setValue: (next: string) => void;
+  onChange: (listener: (value: string) => void) => void;
+} {
+  const fallback = options[0]?.value ?? "";
+  let currentValue = options.some((o) => o.value === initialValue) ? initialValue : fallback;
+  const changeListeners: Array<(value: string) => void> = [];
+  const root = document.createElement("div");
+  root.className = "mm-create-mode-dropdown";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "mm-create-mode-select";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  const buttonLabel = document.createElement("span");
+  buttonLabel.className = "mm-create-mode-select-label";
+  const buttonCaret = document.createElement("span");
+  buttonCaret.className = "mm-create-mode-caret";
+  buttonCaret.setAttribute("aria-hidden", "true");
+  const list = document.createElement("ul");
+  list.className = "mm-create-mode-options";
+  list.setAttribute("role", "listbox");
+  list.hidden = true;
+  let optionButtons: HTMLButtonElement[] = [];
+
+  const closeMenu = (): void => {
+    root.classList.remove("mm-create-mode-dropdown-open");
+    list.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  };
+  const openMenu = (): void => {
+    root.classList.add("mm-create-mode-dropdown-open");
+    list.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+  };
+  const emitChange = (): void => {
+    for (const listener of changeListeners) {
+      listener(currentValue);
+    }
+  };
+
+  const render = (): void => {
+    const activeIndex = options.findIndex((o) => o.value === currentValue);
+    const active = (activeIndex >= 0 ? options[activeIndex] : undefined) ?? options[0];
+    const tone = String(((activeIndex >= 0 ? activeIndex : 0) % 4 + 4) % 4);
+    buttonLabel.textContent = active?.label ?? "";
+    button.dataset.value = active?.value ?? "";
+    button.dataset.tone = tone;
+    root.dataset.value = active?.value ?? "";
+    root.dataset.tone = tone;
+    for (const b of optionButtons) {
+      const isSelected = b.dataset.value === currentValue;
+      b.classList.toggle("mm-create-mode-option-selected", isSelected);
+      b.setAttribute("aria-selected", isSelected ? "true" : "false");
+    }
+  };
+
+  list.replaceChildren();
+  optionButtons = options.map((opt) => {
+    const item = document.createElement("li");
+    const optBtn = document.createElement("button");
+    optBtn.type = "button";
+    optBtn.className = "mm-create-mode-option";
+    optBtn.dataset.value = opt.value;
+    optBtn.setAttribute("role", "option");
+    optBtn.textContent = opt.label;
+    optBtn.addEventListener("click", () => {
+      if (currentValue === opt.value) {
+        closeMenu();
+        button.focus();
+        return;
+      }
+      currentValue = opt.value;
+      render();
+      emitChange();
+      closeMenu();
+      button.focus();
+    });
+    item.appendChild(optBtn);
+    list.appendChild(item);
+    return optBtn;
+  });
+
+  button.addEventListener("click", () => {
+    if (list.hidden) {
+      openMenu();
+      return;
+    }
+    closeMenu();
+  });
+  button.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      const idx = options.findIndex((o) => o.value === currentValue);
+      const dir = ev.key === "ArrowDown" ? 1 : -1;
+      const next = options[(idx + dir + options.length) % options.length];
+      if (next !== undefined && next.value !== currentValue) {
+        currentValue = next.value;
+        render();
+        emitChange();
+      }
+      return;
+    }
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      if (list.hidden) {
+        openMenu();
+      } else {
+        closeMenu();
+      }
+      return;
+    }
+    if (ev.key === "Escape") {
+      closeMenu();
+    }
+  });
+
+  document.addEventListener("pointerdown", (ev) => {
+    const target = ev.target;
+    if (!(target instanceof Node)) {
+      return;
+    }
+    if (!root.contains(target)) {
+      closeMenu();
+    }
+  });
+
+  button.appendChild(buttonLabel);
+  button.appendChild(buttonCaret);
+  root.appendChild(button);
+  root.appendChild(list);
+  render();
+
+  return {
+    root,
+    getValue: () => currentValue,
+    setValue: (next: string) => {
+      if (!options.some((o) => o.value === next)) {
+        return;
+      }
+      if (currentValue === next) {
+        return;
+      }
+      currentValue = next;
+      render();
+      emitChange();
+    },
+    onChange: (listener: (value: string) => void) => {
+      changeListeners.push(listener);
+    },
+  };
 }
 
 function safeWorldExportBasename(worldName: string): string {

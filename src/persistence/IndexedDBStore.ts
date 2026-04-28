@@ -7,10 +7,12 @@ import type { Chunk } from "../world/chunk/Chunk";
 import { chunkKey, type ChunkCoord } from "../world/chunk/ChunkCoord";
 import type { FurnacePersistedChunk } from "../world/furnace/furnacePersisted";
 import type { ChestPersistedChunk } from "../world/chest/chestPersisted";
+import type { SpawnerPersistedChunk } from "../world/spawner/spawnerPersisted";
+import type { SignPersistedChunk } from "../world/sign/signPersisted";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 import type { CachedMod } from "../mods/workshopTypes";
 import type { KeybindableAction } from "../input/bindings";
-import type { WorldGameMode } from "../core/types";
+import type { WorldGameMode, WorldGenType } from "../core/types";
 import {
   buildStratumWorldExportV1,
   parseStratumWorldImportV1,
@@ -55,6 +57,8 @@ export type WorldMetadata = {
   seed: number;
   /** Optional world rules preset; absent in older saves defaults to `"survival"` at load sites. Legacy `"creative"` maps to `"sandbox"` at load. */
   gameMode?: WorldGameMode;
+  /** World generation preset (terrain shape). Absent in older saves defaults to `"normal"` at load. */
+  worldGenType?: WorldGenType;
   createdAt: number;
   lastPlayedAt: number;
   playerX: number;
@@ -97,6 +101,8 @@ export type WorldMetadata = {
    * Absent or less than 1: load may remap legacy standalone ids 50–81 by +6 (stair block id insert).
    */
   itemIdLayoutRevision?: number;
+  /** Index = runtime item id at last save, value = item identifier key. */
+  itemIdPalette?: readonly string[];
   /** Host-only: last feet position when each multiplayer guest left (`id:…` / `name:…` keys). */
   multiplayerLastPositions?: Record<string, { x: number; y: number }>;
 
@@ -146,6 +152,10 @@ export type ChunkRecord = {
   furnaces?: FurnacePersistedChunk[];
   /** Chest tile entities (anchor cells only); absent ⇒ none. */
   chests?: ChestPersistedChunk[];
+  /** Spawner tiles in this chunk; absent ⇒ none. */
+  spawners?: SpawnerPersistedChunk[];
+  /** Sign tiles in this chunk; absent ⇒ none. */
+  signs?: SignPersistedChunk[];
 };
 
 export type PersistedFeetPosition = { x: number; y: number };
@@ -389,6 +399,8 @@ export class IndexedDBStore {
     chunks: Chunk[],
     getFurnacesForChunk?: (cx: number, cy: number) => FurnacePersistedChunk[],
     getChestsForChunk?: (cx: number, cy: number) => ChestPersistedChunk[],
+    getSpawnersForChunk?: (cx: number, cy: number) => SpawnerPersistedChunk[],
+    getSignsForChunk?: (cx: number, cy: number) => SignPersistedChunk[],
   ): Promise<void> {
     if (chunks.length === 0) {
       return;
@@ -399,7 +411,9 @@ export class IndexedDBStore {
       const { cx, cy } = chunk.coord;
       const furnaces = getFurnacesForChunk?.(cx, cy);
       const chests = getChestsForChunk?.(cx, cy);
-      const record = this.toChunkRecord(worldUuid, chunk, furnaces, chests);
+      const spawners = getSpawnersForChunk?.(cx, cy);
+      const signs = getSignsForChunk?.(cx, cy);
+      const record = this.toChunkRecord(worldUuid, chunk, furnaces, chests, spawners, signs);
       return tx.store.put(record);
     });
     await Promise.all([...puts, tx.done]);
@@ -410,6 +424,8 @@ export class IndexedDBStore {
     chunk: Chunk,
     furnaces?: FurnacePersistedChunk[],
     chests?: ChestPersistedChunk[],
+    spawners?: SpawnerPersistedChunk[],
+    signs?: SignPersistedChunk[],
   ): ChunkRecord {
     const { cx, cy } = chunk.coord;
     const record: ChunkRecord = {
@@ -426,6 +442,12 @@ export class IndexedDBStore {
     }
     if (chests !== undefined && chests.length > 0) {
       record.chests = chests.map((c) => ({ ...c }));
+    }
+    if (spawners !== undefined && spawners.length > 0) {
+      record.spawners = spawners.map((s) => ({ ...s, spawnPotentials: [...s.spawnPotentials] }));
+    }
+    if (signs !== undefined && signs.length > 0) {
+      record.signs = signs.map((s) => ({ ...s }));
     }
     return record;
   }

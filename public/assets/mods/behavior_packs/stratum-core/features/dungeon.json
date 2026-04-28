@@ -1,0 +1,31 @@
+{
+  "format_version": "1.0.0",
+  "stratum:feature": {
+    "description": {
+      "identifier": "stratum:dungeon_feature",
+      "structures": [
+        "stratum:dungeon"
+      ]
+    },
+    "placement": {
+      "pass": "underground",
+      "biomes": [
+        "any"
+      ],
+      "min_depth": 75,
+      "max_depth": 140,
+      "frequency": 0.1,
+      "anchor": "top_left",
+      "terrain": {
+        "mode": "none",
+        "pad_x": 0,
+        "pad_y": 0,
+        "max_slope": 999
+      },
+      "clearance": {
+        "height": 6
+      },
+      "suppress_vegetation": false
+    }
+  }
+}

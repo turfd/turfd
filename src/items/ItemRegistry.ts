@@ -6,22 +6,33 @@ import { MAX_STACK_DEFAULT } from '../core/itemDefinition';
 
 export class ItemRegistry {
   private readonly _byId = new Map<ItemId, ItemDefinition>();
+  private readonly _idByKey = new Map<string, ItemId>();
   private readonly _byKey = new Map<string, ItemDefinition>();
   private readonly _byTag = new Map<string, ItemDefinition[]>();
   private _nextId: ItemId = 1 as ItemId;
 
-  /**
-   * Register an item. Throws if key or id is already registered.
-   * If def.id is 0 (unset) or omitted, auto-assigns the next available id.
-   */
+  /** Register/override by key. Runtime id is session-local and auto-assigned unless provided. */
   register(def: Omit<ItemDefinition, 'id'> & { id?: ItemId }): ItemDefinition {
-    const id: ItemId = def.id ?? this._nextId;
+    const existing = this._byKey.get(def.key);
+    const id: ItemId = def.id ?? existing?.id ?? this._nextId;
 
-    if (this._byId.has(id)) {
+    if (existing !== undefined) {
+      this._byId.delete(existing.id);
+      this._idByKey.delete(existing.key);
+      if (existing.tags) {
+        for (const tag of existing.tags) {
+          const list = this._byTag.get(tag);
+          if (!list) continue;
+          const next = list.filter((x) => x.key !== existing.key);
+          if (next.length === 0) {
+            this._byTag.delete(tag);
+          } else {
+            this._byTag.set(tag, next);
+          }
+        }
+      }
+    } else if (this._byId.has(id)) {
       throw new Error(`ItemRegistry: id ${id} already registered`);
-    }
-    if (this._byKey.has(def.key)) {
-      throw new Error(`ItemRegistry: key '${def.key}' already registered`);
     }
 
     const full: ItemDefinition = {
@@ -45,6 +56,7 @@ export class ItemRegistry {
     };
 
     this._byId.set(id, full);
+    this._idByKey.set(full.key, id);
     this._byKey.set(full.key, full);
 
     if (full.tags) {
@@ -73,6 +85,10 @@ export class ItemRegistry {
     return this._byKey.get(key);
   }
 
+  getIdByKey(key: string): ItemId | undefined {
+    return this._idByKey.get(key);
+  }
+
   /** All items with a given tag (empty array if none). */
   getByTag(tag: string): readonly ItemDefinition[] {
     return this._byTag.get(tag) ?? [];
@@ -90,6 +106,16 @@ export class ItemRegistry {
       m = Math.max(m, d.id as number);
     }
     return m;
+  }
+
+  /** For saves/session sync: index = runtime item id, value = identifier key. */
+  buildIdentifierPalette(): string[] {
+    const max = this.maxRegisteredNumericId();
+    const out = new Array<string>(max + 1).fill("");
+    for (const def of this._byId.values()) {
+      out[def.id as number] = def.key;
+    }
+    return out;
   }
 }
 

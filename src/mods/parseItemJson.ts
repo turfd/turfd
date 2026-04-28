@@ -9,8 +9,6 @@ export type ItemModDefinition = {
   readonly displayName: string;
   readonly textureKey: string;
   readonly maxStack: number;
-  /** Stable id for saves, furnace/chest tails, and wire; must extend contiguously after block-items. */
-  readonly numericId: number;
   readonly placesBlockIdentifier?: string;
   readonly toolType?: "axe" | "pickaxe" | "shovel" | "hoe";
   readonly toolTier?: number;
@@ -47,7 +45,8 @@ const stratumItemComponentsSchema = z
     "stratum:max_durability": z.number().int().min(1).optional(),
     "stratum:fuel": z.object({ burn_seconds: z.number().positive() }).strict().optional(),
     "stratum:tags": z.array(z.string()).optional(),
-    "stratum:numeric_id": z.number().int().min(1).max(65535),
+    /** Legacy field; ignored (runtime ids are assigned by registry). */
+    "stratum:numeric_id": z.number().int().min(1).max(65535).optional(),
     "stratum:eat_restore_health": z.number().int().min(1).optional(),
     "stratum:eat_temporary_duration_sec": z.number().positive().optional(),
     "stratum:inventory_tooltip": z.string().min(1).optional(),
@@ -78,7 +77,6 @@ export function parseItemJson(raw: unknown): ItemModDefinition {
     displayName: c["stratum:display_name"],
     textureKey,
     maxStack: c["stratum:max_stack"] ?? MAX_STACK_DEFAULT,
-    numericId: c["stratum:numeric_id"],
     placesBlockIdentifier: c["stratum:places_block"],
     toolType: c["stratum:tool_type"],
     toolTier: c["stratum:tool_tier"],

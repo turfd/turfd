@@ -163,7 +163,7 @@ float softSolidSkyExposure(vec2 worldPosBlocks) {
 }
 
 // Ray-march from 'from' toward 'to' sampling the occlusion mask.
-// Returns a soft visibility factor in [0, 1] using a 3-ray cone for penumbra.
+// Returns a visibility factor in [0, 1] using a tight 3-ray cone.
 float placedTorchShadow(vec2 from, vec2 to) {
   vec2 delta = to - from;
   float dist = length(delta);
@@ -172,7 +172,8 @@ float placedTorchShadow(vec2 from, vec2 to) {
   vec2 perp = vec2(-dir.y, dir.x);
   float totalVis = 0.0;
   for (int r = 0; r < 3; r++) {
-    vec2 rayOffset = perp * (float(r - 1) * 0.35);
+    // Keep a narrow cone so torch-cast shadows stay crisp.
+    vec2 rayOffset = perp * (float(r - 1) * 0.18);
     float vis = 1.0;
     for (int s = 0; s < 8; s++) {
       float t = dist * (float(s) + 0.5) / 8.0;
@@ -180,12 +181,13 @@ float placedTorchShadow(vec2 from, vec2 to) {
       vec2 uv = smoothOcclusionUV(sp);
       if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
         float occ = texture(uOcclusion, uv).r;
-        vis *= 1.0 - occ * 0.88;
+        vis *= 1.0 - occ * 0.96;
       }
     }
     totalVis += vis;
   }
-  return totalVis / 3.0;
+  // Slightly bias toward full light/full shadow to reduce fuzzy transition.
+  return pow(totalVis / 3.0, 1.18);
 }
 
 // Bloom: elliptical falloff in 16px-tile space; center shifted slightly below flame tip on screen.

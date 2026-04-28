@@ -63,6 +63,12 @@
     "string": "assets/mods/resource_packs/stratum-core/textures/items/string.png",
     "feather": "assets/mods/resource_packs/stratum-core/textures/items/feather.png",
     "rotten_flesh": "assets/mods/resource_packs/stratum-core/textures/items/rotten_flesh.png",
-    "painting": "assets/mods/resource_packs/stratum-core/textures/items/painting.png"
+    "painting": "assets/mods/resource_packs/stratum-core/textures/items/painting.png",
+    "fishing_rod": "assets/mods/resource_packs/stratum-core/textures/items/fishing_rod.png",
+    "oak_sign": "assets/mods/resource_packs/stratum-core/textures/tiles/oak_sign.png",
+    "spruce_sign": "assets/mods/resource_packs/stratum-core/textures/tiles/spruce_sign.png",
+    "birch_sign": "assets/mods/resource_packs/stratum-core/textures/tiles/birch_sign.png",
+    "casted_rod": "assets/mods/resource_packs/stratum-core/textures/items/casted_rod.png",
+    "fishing_hook": "assets/mods/resource_packs/stratum-core/textures/entities/fishing_hook.png"
   }
 }

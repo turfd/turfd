@@ -14,8 +14,8 @@ import {
   type PlayerSavedState,
 } from "./core/Game";
 import { CrashReporter } from "./core/crash/CrashReporter";
-import type { GameEvent, WorldGameMode } from "./core/types";
-import { normalizeWorldGameMode } from "./core/types";
+import type { GameEvent, WorldGameMode, WorldGenType } from "./core/types";
+import { normalizeWorldGameMode, normalizeWorldGenType } from "./core/types";
 import { AudioEngine } from "./audio/AudioEngine";
 import { OstPlaylistController } from "./audio/ostPlaylist";
 import { readVolumeStored, VOL_KEYS } from "./audio/volumeSettings";
@@ -794,6 +794,7 @@ async function main(): Promise<void> {
     let multiplayerHostFromMenu: MultiplayerHostFromMenuSpec | undefined;
     let initialWorldTimeMs: number | undefined;
     let gameMode: WorldGameMode = "survival";
+    let worldGenType: WorldGenType = "normal";
     let game: Game | null = null;
     let loadingBackdrop: MenuBackground | null = null;
     try {
@@ -802,6 +803,7 @@ async function main(): Promise<void> {
         seed = result.seed;
         worldName = result.name.trim() || "My World";
         gameMode = result.gameMode;
+        worldGenType = result.worldGenType;
         localStorage.setItem("stratum_worldUuid", worldUuid);
       } else if (result.action === "load") {
         worldUuid = result.uuid;
@@ -812,6 +814,7 @@ async function main(): Promise<void> {
         seed = meta.seed;
         worldName = meta.name;
         gameMode = normalizeWorldGameMode(meta.gameMode);
+        worldGenType = normalizeWorldGenType(meta.worldGenType);
         playerSavedState = {
           x: meta.playerX,
           y: meta.playerY,
@@ -831,6 +834,7 @@ async function main(): Promise<void> {
         seed = meta.seed;
         worldName = meta.name;
         gameMode = normalizeWorldGameMode(meta.gameMode);
+        worldGenType = normalizeWorldGenType(meta.worldGenType);
         playerSavedState = {
           x: meta.playerX,
           y: meta.playerY,
@@ -858,11 +862,13 @@ async function main(): Promise<void> {
           seed = 0;
           worldName = joinReuse.name;
           gameMode = normalizeWorldGameMode(joinReuse.gameMode);
+          worldGenType = normalizeWorldGenType(joinReuse.worldGenType);
         } else {
           worldUuid = crypto.randomUUID();
           seed = 0;
           worldName = "Multiplayer World";
           gameMode = "survival";
+          worldGenType = "normal";
         }
         multiplayerJoinRoomCode = result.roomCode;
         multiplayerJoinPassword = result.password;
@@ -893,6 +899,7 @@ async function main(): Promise<void> {
         store,
         worldName,
         gameMode,
+        worldGenType,
         multiplayerJoinRoomCode,
         multiplayerJoinPassword,
         multiplayerHostFromMenu,

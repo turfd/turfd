@@ -47,6 +47,7 @@ export function armorSlotFromItemTags(
 
 export class PlayerInventory {
   private readonly _slots: (ItemStack | null)[];
+  private readonly _slotDataSummary: (string | null)[];
   private readonly _armorSlots: (ItemStack | null)[];
   private readonly _registry: ItemRegistry;
   private _cursorStack: ItemStack | null = null;
@@ -54,7 +55,12 @@ export class PlayerInventory {
   constructor(registry: ItemRegistry) {
     this._registry = registry;
     this._slots = new Array<ItemStack | null>(INVENTORY_SIZE).fill(null);
+    this._slotDataSummary = new Array<string | null>(INVENTORY_SIZE).fill(null);
     this._armorSlots = new Array<ItemStack | null>(ARMOR_SLOT_COUNT).fill(null);
+  }
+
+  buildItemIdentifierPalette(): string[] {
+    return this._registry.buildIdentifierPalette();
   }
 
   /** Number of slots in this inventory. */
@@ -273,14 +279,31 @@ export class PlayerInventory {
     if (slot < 0 || slot >= INVENTORY_SIZE) return;
     if (stack === null || stack.count <= 0) {
       this._slots[slot] = null;
+      this._slotDataSummary[slot] = null;
       return;
     }
     const def = this._registry.getById(stack.itemId);
     if (def !== undefined && isStackBroken(def, stack.damage)) {
       this._slots[slot] = null;
+      this._slotDataSummary[slot] = null;
       return;
     }
     this._slots[slot] = this.slotWithNormalizedDamage(stack);
+  }
+
+  setSlotDataSummary(slot: number, summary: string | null): void {
+    if (slot < 0 || slot >= INVENTORY_SIZE) {
+      return;
+    }
+    const normalized = summary?.trim() ?? "";
+    this._slotDataSummary[slot] = normalized.length > 0 ? normalized : null;
+  }
+
+  getSlotDataSummary(slot: number): string | null {
+    if (slot < 0 || slot >= INVENTORY_SIZE) {
+      return null;
+    }
+    return this._slotDataSummary[slot] ?? null;
   }
 
   /** Returns a copy of the armor stack at the given slot (0=helmet, 1=chestplate, 2=leggings, 3=boots), or null. */
@@ -313,8 +336,11 @@ export class PlayerInventory {
       slotB < 0 || slotB >= INVENTORY_SIZE
     ) return;
     const tmp: ItemStack | null = this._slots[slotA] ?? null;
+    const tmpData = this._slotDataSummary[slotA] ?? null;
     this._slots[slotA] = this._slots[slotB] ?? null;
+    this._slotDataSummary[slotA] = this._slotDataSummary[slotB] ?? null;
     this._slots[slotB] = tmp;
+    this._slotDataSummary[slotB] = tmpData;
   }
 
   /** Pick up the entire stack from a slot into an empty cursor. */

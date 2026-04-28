@@ -71,6 +71,7 @@ function instantBreakUnsupportedLeavesNearWildTreeColumn(
   yMin: number,
   yMax: number,
   airId: number,
+  suppressDrops: boolean,
 ): void {
   const pad = TREE_LEAF_INSTANT_SCAN_PAD;
   const x0 = columnWx - pad;
@@ -89,7 +90,9 @@ function instantBreakUnsupportedLeavesNearWildTreeColumn(
       if (leafHasNearbyTreeLog(world, registry, ix, iy)) {
         continue;
       }
-      world.spawnLootForBrokenBlock(cell.id, ix, iy);
+      if (!suppressDrops) {
+        world.spawnLootForBrokenBlock(cell.id, ix, iy);
+      }
       world.setBlock(ix, iy, airId);
     }
   }
@@ -107,6 +110,7 @@ export function breakTreeLogsAboveColumn(
   brokenWy: number,
   airId: number,
   heldItemDef: Parameters<typeof canHarvestDrops>[1],
+  suppressDrops = false,
 ): void {
   let topBrokenY = brokenWy;
   let y = brokenWy + 1;
@@ -118,7 +122,7 @@ export function breakTreeLogsAboveColumn(
     if ((world.getMetadata(wx, y) & WORLDGEN_NO_COLLIDE) === 0) {
       break;
     }
-    const dropsLoot = canHarvestDrops(cell, heldItemDef);
+    const dropsLoot = !suppressDrops && canHarvestDrops(cell, heldItemDef);
     if (dropsLoot) {
       world.spawnLootForBrokenBlock(cell.id, wx, y);
     }
@@ -133,5 +137,6 @@ export function breakTreeLogsAboveColumn(
     brokenWy,
     topBrokenY,
     airId,
+    suppressDrops,
   );
 }

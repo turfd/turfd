@@ -4,8 +4,8 @@
 import { z } from "zod";
 import type { BlockDefinitionBase, BlockMaterial } from "../core/blockDefinition";
 
-/** Block JSON after parse; {@link numericId} becomes {@link BlockDefinition.id} at registration. */
-export type ParsedBlockDefinition = BlockDefinitionBase & { readonly numericId: number };
+/** Block JSON after parse; runtime numeric ids are assigned by {@link BlockRegistry}. */
+export type ParsedBlockDefinition = BlockDefinitionBase;
 
 const blockMaterialSchema = z.enum([
   "stone",
@@ -56,18 +56,31 @@ const stratumBlockComponentsSchema = z
     "stratum:stair": z.boolean().optional(),
     /**
      * When true, skips auto-creating a block-item for this block.
-     * A standalone item JSON with an explicit `stratum:numeric_id` must be provided instead.
+     * A standalone item JSON can provide the corresponding item definition.
      */
     "stratum:no_block_item": z.boolean().optional(),
     /** Multi-cell painting block placed on background walls. */
     "stratum:is_painting": z.boolean().optional(),
+    /** Spawner defaults for newly placed tile entities. */
+    "stratum:spawner_defaults": z
+      .object({
+        delay: z.number().int().min(0),
+        max_count: z.number().int().min(0),
+        player_range: z.number().int().min(0),
+        spawn_range: z.number().int().min(0),
+        spawn_potentials: z.array(z.string().min(1)).min(1),
+      })
+      .strict()
+      .optional(),
     /**
      * When false, skips contact-shadow bands on background tiles next to this foreground cell.
      * Omitted: solid + non-`transparent` blocks cast; solid transparent (e.g. glass) do not.
      */
     "stratum:casts_fg_contact_shadow": z.boolean().optional(),
-    /** Stable save/wire id; must be dense 0..N-1 with air = 0 (`BlockRegistry.registerInOrder`). */
-    "stratum:numeric_id": z.number().int().min(0).max(65535),
+    /** When true, back-wall tile at same cell still renders behind this block (partial-tile / mod art). */
+    "stratum:reveals_background_wall": z.boolean().optional(),
+    /** Legacy field; ignored (runtime ids are host/session-local). */
+    "stratum:numeric_id": z.number().int().min(0).max(65535).optional(),
   })
   .strict();
 
@@ -123,9 +136,22 @@ export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
     ...(c["stratum:stair"] === true ? { isStair: true as const } : {}),
     ...(c["stratum:no_block_item"] === true ? { noBlockItem: true as const } : {}),
     ...(c["stratum:is_painting"] === true ? { isPainting: true as const } : {}),
+    ...(c["stratum:spawner_defaults"] !== undefined
+      ? {
+          spawnerDefaults: {
+            delay: c["stratum:spawner_defaults"].delay,
+            maxCount: c["stratum:spawner_defaults"].max_count,
+            playerRange: c["stratum:spawner_defaults"].player_range,
+            spawnRange: c["stratum:spawner_defaults"].spawn_range,
+            spawnPotentials: c["stratum:spawner_defaults"].spawn_potentials,
+          },
+        }
+      : {}),
     ...(c["stratum:casts_fg_contact_shadow"] !== undefined
       ? { castsFgContactShadow: c["stratum:casts_fg_contact_shadow"] }
       : {}),
-    numericId: c["stratum:numeric_id"],
+    ...(c["stratum:reveals_background_wall"] === true
+      ? { revealsBackgroundWall: true as const }
+      : {}),
   };
 }

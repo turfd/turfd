@@ -1,0 +1,41 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:barrel_t1",
+  "table": {
+    "roll": "one_of",
+    "picksMin": 2,
+    "picksMax": 4,
+    "entries": [
+      {
+        "itemKey": "stratum:bread",
+        "countMin": 1,
+        "countMax": 2,
+        "chance": 0.62
+      },
+      {
+        "itemKey": "stratum:wheat_seeds",
+        "countMin": 2,
+        "countMax": 8,
+        "chance": 0.66
+      },
+      {
+        "itemKey": "stratum:coal",
+        "countMin": 1,
+        "countMax": 5,
+        "chance": 0.5
+      },
+      {
+        "itemKey": "stratum:cobblestone",
+        "countMin": 5,
+        "countMax": 14,
+        "chance": 0.55
+      },
+      {
+        "itemKey": "stratum:wooden_pickaxe",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 0.16
+      }
+    ]
+  }
+}

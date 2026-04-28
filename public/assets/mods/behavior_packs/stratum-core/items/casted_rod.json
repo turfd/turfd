@@ -1,0 +1,13 @@
+{
+  "format_version": "1.0.0",
+  "stratum:item": {
+    "description": {
+      "identifier": "stratum:casted_rod"
+    },
+    "components": {
+      "stratum:display_name": "Casted Rod",
+      "stratum:texture_key": "casted_rod",
+      "stratum:max_stack": 1
+    }
+  }
+}

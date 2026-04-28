@@ -28,6 +28,9 @@ import {
   ITEM_THROW_INHERIT_PLAYER_VEL_X,
   ITEM_THROW_SPAWN_OFFSET_PX,
   ITEM_THROW_SPEED_PX,
+  ITEM_GRAVITY,
+  ITEM_HALF_EXTENT_PX,
+  ITEM_MAX_FALL_SPEED,
   PLAYER_HEIGHT,
   PLAYER_MAX_HEALTH,
   PLAYER_MOVE_ANIM_VEL_THRESHOLD,
@@ -71,6 +74,8 @@ import {
   withStairShape,
 } from "../world/blocks/stairMetadata";
 import type { World } from "../world/World";
+import type { SpawnerTileState } from "../world/spawner/SpawnerTileState";
+import type { SignTileState } from "../world/sign/SignTileState";
 import {
   breakTreeLogsAboveColumn,
   isTreeLogBlock,
@@ -233,6 +238,14 @@ export type PlayerState = {
    * Reset when not drawing; used for held-item pose and shot power.
    */
   bowDrawSec: number;
+  /** True while the currently cast line should be rendered. */
+  fishingCastActive: boolean;
+  /** World-space bobber top at current tick (Y up). */
+  fishingHookPosition: { x: number; y: number };
+  /** World-space bobber top at previous tick (Y up), for render interpolation. */
+  fishingHookPrevPosition: { x: number; y: number };
+  /** Hook world velocity (px/s): x right-positive, y down-positive. */
+  fishingHookVelocity: { x: number; y: number };
 };
 
 /** Feet world coords (Y up) → same root space as foreground chunk meshes (Pixi Y down). */
@@ -413,6 +426,18 @@ function isFlowerOrShortGrass(identifier: string): boolean {
   );
 }
 
+function findPlaceableItemForBlockId(
+  itemRegistry: ItemRegistry,
+  blockId: number,
+): ItemDefinition | undefined {
+  for (const item of itemRegistry.all()) {
+    if (item.placesBlockId === blockId) {
+      return item;
+    }
+  }
+  return undefined;
+}
+
 function itemPlacesBlock(item: ItemDefinition | undefined): number {
   if (item === undefined) {
     return 0;
@@ -457,6 +482,10 @@ export class Player {
     sleeping: false,
     sleepRemainSec: 0,
     bowDrawSec: 0,
+    fishingCastActive: false,
+    fishingHookPosition: { x: 0, y: 0 },
+    fishingHookPrevPosition: { x: 0, y: 0 },
+    fishingHookVelocity: { x: 0, y: 0 },
   };
 
   public readonly inventory: PlayerInventory;
@@ -487,7 +516,101 @@ export class Player {
   private _mobOverlapCheck: ((aabb: AABB) => boolean) | null = null;
   private _gameMode: WorldGameMode = "survival";
   private _sandboxFlightEnabled = false;
-  private _sandboxFlightTapWindowSec = 0;
+  private _sandboxLastJumpTapAtMs = Number.NEGATIVE_INFINITY;
+  /** Drag-place dedupe key so holding place paints new cells once each. */
+  private _lastDragPlaceKey: string | null = null;
+  private _copiedPlaceData:
+    | {
+        blockId: number;
+        cellMetadata: number;
+        spawnerTile?: SpawnerTileState;
+        signTile?: SignTileState;
+      }
+    | null = null;
+
+  private _captureCopiedBlockData(world: World, wx: number, wy: number, blockId: number): void {
+    const cellMetadata = world.getMetadata(wx, wy);
+    const cell = world.getBlock(wx, wy);
+    const spawnerTile =
+      cell.identifier === "stratum:spawner"
+        ? world.getSpawnerTile(wx, wy)
+        : undefined;
+    const signTile = world.isSignBlockId(cell.id) ? world.getSignTile(wx, wy) : undefined;
+    this._copiedPlaceData = {
+      blockId,
+      cellMetadata,
+      ...(spawnerTile !== undefined ? { spawnerTile: structuredClone(spawnerTile) } : {}),
+      ...(signTile !== undefined ? { signTile: structuredClone(signTile) } : {}),
+    };
+  }
+
+  private _copiedDataSummary(): string {
+    const copied = this._copiedPlaceData;
+    if (copied === null) {
+      return "";
+    }
+    const base = `meta=${copied.cellMetadata}`;
+    if (copied.spawnerTile === undefined) {
+      return base;
+    }
+    const sp = copied.spawnerTile;
+    return `${base}; delay=${sp.delay}, max=${sp.maxCount}, pr=${sp.playerRange}, sr=${sp.spawnRange}, mobs=${sp.spawnPotentials.join("|")}`;
+  }
+
+  private _applyCopiedBlockDataOnPlace(
+    world: World,
+    wx: number,
+    wy: number,
+    placedBlockId: number,
+  ): void {
+    const copied = this._copiedPlaceData;
+    if (copied === null || copied.blockId !== placedBlockId) {
+      return;
+    }
+    world.setMetadata(wx, wy, copied.cellMetadata);
+    if (copied.spawnerTile !== undefined) {
+      world.setSpawnerTile(wx, wy, copied.spawnerTile);
+    }
+    if (copied.signTile !== undefined) {
+      world.setSignTile(wx, wy, copied.signTile);
+    }
+  }
+
+  private isFishingRodKey(key: string | undefined): boolean {
+    return key === "stratum:fishing_rod" || key === "stratum:casted_rod";
+  }
+
+  private swapSelectedRodVariant(hotbarSlot: number, nextKey: string): void {
+    const stack = this.inventory.getStack(hotbarSlot);
+    if (stack === null) {
+      return;
+    }
+    const nextItem = this.itemRegistry.getByKey(nextKey);
+    if (nextItem === undefined) {
+      return;
+    }
+    this.inventory.setStack(hotbarSlot, {
+      itemId: nextItem.id,
+      count: stack.count,
+      ...(stack.damage !== undefined ? { damage: stack.damage } : {}),
+    });
+  }
+
+  private fishingHookWaterCellY(world: World): number | null {
+    if (!world.getRegistry().isRegistered("stratum:water")) {
+      return null;
+    }
+    const wx = Math.floor(this.state.fishingHookPosition.x / BLOCK_SIZE);
+    // Sample slightly below the bobber top so a surface-floating bobber still counts as in-water.
+    const sampleY = this.state.fishingHookPosition.y - 2;
+    const wy = Math.floor(sampleY / BLOCK_SIZE);
+    if (world.getChunkAt(wx, wy) === undefined) {
+      return null;
+    }
+    return world.getForegroundBlockId(wx, wy) === world.getWaterBlockId()
+      ? wy
+      : null;
+  }
 
   constructor(registry: BlockRegistry, bus: EventBus, audio: AudioEngine, itemRegistry: ItemRegistry) {
     this.bus = bus;
@@ -502,9 +625,11 @@ export class Player {
     this._gameMode = mode;
     if (mode !== "sandbox") {
       this._sandboxFlightEnabled = false;
-      this._sandboxFlightTapWindowSec = 0;
+      this._sandboxLastJumpTapAtMs = Number.NEGATIVE_INFINITY;
       return;
     }
+    this._sandboxFlightEnabled = true;
+    this._sandboxLastJumpTapAtMs = Number.NEGATIVE_INFINITY;
     if (this.state.dead) {
       this.state.dead = false;
       this.state.deathAnimT = null;
@@ -564,6 +689,8 @@ export class Player {
     placesBlockId: number,
     aux: number,
   ): void {
+    const placesBlockKey =
+      placesBlockId !== 0 ? this.registry.getById(placesBlockId).identifier : undefined;
     this.bus.emit({
       type: "terrain:net-place",
       subtype,
@@ -571,6 +698,7 @@ export class Player {
       wy,
       hotbarSlot,
       placesBlockId,
+      ...(placesBlockKey !== undefined ? { placesBlockKey } : {}),
       aux,
     } satisfies GameEvent);
   }
@@ -607,12 +735,20 @@ export class Player {
     this.state.deathAnimT = null;
     this.state.damageTintRemainSec = 0;
     this.state.bowDrawSec = 0;
+    this.state.fishingCastActive = false;
+    this.state.fishingHookPosition.x = feetWorldX;
+    this.state.fishingHookPosition.y = feetWorldY + PLAYER_HEIGHT * 0.5;
+    this.state.fishingHookPrevPosition.x = this.state.fishingHookPosition.x;
+    this.state.fishingHookPrevPosition.y = this.state.fishingHookPosition.y;
+    this.state.fishingHookVelocity.x = 0;
+    this.state.fishingHookVelocity.y = 0;
     this.prevBowRmbDown = false;
     this.fallDistanceBlocks = 0;
     this.wasInWater = false;
     this.waterSwimSfxAccum = 0;
     this.lastMovedBlockX = Number.NaN;
     this.lastMovedBlockY = Number.NaN;
+    this._lastDragPlaceKey = null;
   }
 
   /** Reduce health; amount is floored. HP does not go below 0. Armor mitigation scales with pooled durability unless `skipArmor`. */
@@ -779,6 +915,9 @@ export class Player {
       this.miningDigSoundAccum = 0;
       this.state.handSwingRemainSec = 0;
       this.state.bowDrawSec = 0;
+      this.state.fishingCastActive = false;
+      this.state.fishingHookVelocity.x = 0;
+      this.state.fishingHookVelocity.y = 0;
       this.prevBowRmbDown = false;
     }
   }
@@ -816,6 +955,13 @@ export class Player {
     this.state.deathAnimT = null;
     this.state.damageTintRemainSec = 0;
     this.state.bowDrawSec = 0;
+    this.state.fishingCastActive = false;
+    this.state.fishingHookPosition.x = feetWorldX;
+    this.state.fishingHookPosition.y = feetWorldY + PLAYER_HEIGHT * 0.5;
+    this.state.fishingHookPrevPosition.x = this.state.fishingHookPosition.x;
+    this.state.fishingHookPrevPosition.y = this.state.fishingHookPosition.y;
+    this.state.fishingHookVelocity.x = 0;
+    this.state.fishingHookVelocity.y = 0;
     this.prevBowRmbDown = false;
     this.bus.emit({
       type: "player:hotbarChanged",
@@ -857,6 +1003,8 @@ export class Player {
 
   update(dt: number, input: InputManager, world: World): void {
     const { state } = this;
+    state.fishingHookPrevPosition.x = state.fishingHookPosition.x;
+    state.fishingHookPrevPosition.y = state.fishingHookPosition.y;
 
     if (state.damageTintRemainSec > 0) {
       state.damageTintRemainSec = Math.max(0, state.damageTintRemainSec - dt);
@@ -918,21 +1066,21 @@ export class Player {
     state.coyoteTimeRemaining = Math.max(0, state.coyoteTimeRemaining - dt);
     state.jumpBufferRemaining = Math.max(0, state.jumpBufferRemaining - dt);
     if (this._gameMode === "sandbox") {
-      this._sandboxFlightTapWindowSec = Math.max(
-        0,
-        this._sandboxFlightTapWindowSec - dt,
-      );
       if (input.isJustPressed("jump")) {
-        if (this._sandboxFlightTapWindowSec > 0) {
+        const nowMs = performance.now();
+        if (
+          nowMs - this._sandboxLastJumpTapAtMs <=
+          CREATIVE_FLY_TOGGLE_TAP_WINDOW_SEC * 1000
+        ) {
           this._sandboxFlightEnabled = !this._sandboxFlightEnabled;
-          this._sandboxFlightTapWindowSec = 0;
+          this._sandboxLastJumpTapAtMs = Number.NEGATIVE_INFINITY;
           state.jumpBufferRemaining = 0;
           state.coyoteTimeRemaining = 0;
           if (!this._sandboxFlightEnabled) {
             state.velocity.y = 0;
           }
         } else {
-          this._sandboxFlightTapWindowSec = CREATIVE_FLY_TOGGLE_TAP_WINDOW_SEC;
+          this._sandboxLastJumpTapAtMs = nowMs;
         }
       }
     }
@@ -1255,10 +1403,48 @@ export class Player {
       !state.backgroundEditMode &&
       !state.dead &&
       !state.sleeping;
+    const rmbJustPressed = rawBowRmb && !this.prevBowRmbDown;
     const bowHeldSlot = state.hotbarSlot % HOTBAR_SIZE;
     const bowStack = this.inventory.getStack(bowHeldSlot);
     const bowHeldDef =
       bowStack !== null ? this.itemRegistry.getById(bowStack.itemId) : undefined;
+    const heldKey = bowHeldDef?.key;
+    if (
+      bowAllow &&
+      rmbJustPressed &&
+      this.isFishingRodKey(heldKey)
+    ) {
+      if (heldKey === "stratum:fishing_rod") {
+        this.swapSelectedRodVariant(bowHeldSlot, "stratum:casted_rod");
+        const { dirX, dirY } = getAimUnitVectorFromFeet(
+          state.position.x,
+          state.position.y,
+          input.mouseWorldPos.x,
+          input.mouseWorldPos.y,
+          state.facingRight,
+        );
+        const chestY = state.position.y + PLAYER_HEIGHT * 0.5;
+        const off = ITEM_THROW_SPAWN_OFFSET_PX;
+        state.fishingHookPosition.x = state.position.x + dirX * off;
+        state.fishingHookPosition.y = chestY - dirY * off;
+        state.fishingHookPrevPosition.x = state.fishingHookPosition.x;
+        state.fishingHookPrevPosition.y = state.fishingHookPosition.y;
+        let vx =
+          dirX * ITEM_THROW_SPEED_PX + state.velocity.x * ITEM_THROW_INHERIT_PLAYER_VEL_X;
+        let vy = dirY * ITEM_THROW_SPEED_PX;
+        ({ vx, vy } = clampItemThrowVelocity(vx, vy));
+        state.fishingHookVelocity.x = vx;
+        state.fishingHookVelocity.y = vy;
+        state.fishingCastActive = true;
+        this.startHandSwingVisual();
+      } else {
+        this.swapSelectedRodVariant(bowHeldSlot, "stratum:fishing_rod");
+        state.fishingCastActive = false;
+        state.fishingHookVelocity.x = 0;
+        state.fishingHookVelocity.y = 0;
+        this.startHandSwingVisual();
+      }
+    }
     const bowInHand = bowHeldDef?.key === "stratum:bow";
     const bowArrows = this.inventory.countItemsByKey("stratum:arrow");
     const bowCharging = bowAllow && bowInHand && bowArrows > 0 && rawBowRmb;
@@ -1378,7 +1564,40 @@ export class Player {
     const pcx = Math.floor(state.position.x / BLOCK_SIZE);
     const pcy = Math.floor(state.position.y / BLOCK_SIZE);
     const inReach =
+      this._gameMode === "sandbox" ||
       chebyshev(pcx, pcy, wx, wy) <= REACH_BLOCKS;
+
+    if (
+      this._gameMode === "sandbox" &&
+      !input.isWorldInputBlocked() &&
+      !state.dead &&
+      !state.sleeping &&
+      inReach &&
+      input.mouseButtonJustPressed(1)
+    ) {
+      const pickedBlockId = state.backgroundEditMode
+        ? world.getBackgroundId(wx, wy)
+        : world.getBlock(wx, wy).id;
+      if (pickedBlockId !== this.airId) {
+        const ctrlHeld =
+          input.isKeyCodeDown("ControlLeft") || input.isKeyCodeDown("ControlRight");
+        if (ctrlHeld && !state.backgroundEditMode) {
+          this._captureCopiedBlockData(world, wx, wy, pickedBlockId);
+        }
+        const pickedItem = findPlaceableItemForBlockId(this.itemRegistry, pickedBlockId);
+        if (pickedItem !== undefined) {
+          const heldSlot = state.hotbarSlot % HOTBAR_SIZE;
+          this.inventory.setStack(heldSlot, {
+            itemId: pickedItem.id,
+            count: 1,
+          });
+          this.inventory.setSlotDataSummary(
+            heldSlot,
+            ctrlHeld && !state.backgroundEditMode ? this._copiedDataSummary() : null,
+          );
+        }
+      }
+    }
 
     if (input.isDown("break") && inReach) {
       const layer: BreakTargetLayer = state.backgroundEditMode ? "bg" : "fg";
@@ -1433,17 +1652,23 @@ export class Player {
                 layer === "bg"
                   ? world.getBackgroundId(wx, wy)
                   : world.getBlock(wx, wy).id;
+              const expectedBlockKey =
+                layer === "bg"
+                  ? this.registry.getById(expectedBlockId).identifier
+                  : world.getBlock(wx, wy).identifier;
               this.bus.emit({
                 type: "terrain:net-break-commit",
                 wx,
                 wy,
                 layer,
                 expectedBlockId,
+                expectedBlockKey,
                 hotbarSlot: heldSlot,
                 heldItemId:
                   heldStack !== null && heldStack.count > 0
                     ? heldStack.itemId
                     : 0,
+                heldItemKey: heldItemDef?.key,
               } satisfies GameEvent);
               state.breakTarget = null;
               state.breakAccum = 0;
@@ -1451,7 +1676,8 @@ export class Player {
               this.miningDigSoundAccum = 0;
               this.startHandSwingVisual();
             } else {
-            const dropsLoot = canHarvestDrops(def, heldItemDef);
+            const sandboxNoDrops = this._gameMode === "sandbox";
+            const dropsLoot = !sandboxNoDrops && canHarvestDrops(def, heldItemDef);
             if (layer === "bg") {
               if (dropsLoot) world.spawnLootForBrokenBlock(def.id, wx, wy);
               world.setBackgroundBlock(wx, wy, 0);
@@ -1536,7 +1762,7 @@ export class Player {
               const wildTreeLogColumn =
                 isTreeLogBlock(this.registry, def.id) &&
                 (world.getMetadata(wx, wy) & WORLDGEN_NO_COLLIDE) !== 0;
-              if (def.identifier === "stratum:furnace") {
+              if (def.identifier === "stratum:furnace" && !sandboxNoDrops) {
                 world.spawnFurnaceItemDropsAt(wx, wy);
               }
             if (
@@ -1556,6 +1782,7 @@ export class Player {
                   wy,
                   this.airId,
                   heldItemDef,
+                  sandboxNoDrops,
                 );
               }
             }
@@ -1636,13 +1863,42 @@ export class Player {
       input.isWorldInputBlocked() &&
       !state.backgroundEditMode &&
       input.isJustPressedPlaceIgnoreWorldBlock();
+    const useTargetCell =
+      inReach && !state.backgroundEditMode ? world.getBlock(wx, wy) : null;
+    const allowUseWithHeldOverride =
+      useTargetCell !== null &&
+      (useTargetCell.identifier === "stratum:chest" ||
+        useTargetCell.identifier === "stratum:barrel" ||
+        useTargetCell.identifier === "stratum:crafting_table" ||
+        useTargetCell.identifier === "stratum:stonecutter" ||
+        useTargetCell.identifier === "stratum:furnace" ||
+        useTargetCell.identifier === "stratum:spawner" ||
+        world.isSignBlockId(useTargetCell.id) ||
+        useTargetCell.bedHalf === "foot" ||
+        useTargetCell.bedHalf === "head");
+    const placePressed =
+      input.isJustPressed("place") &&
+      (allowUseWithHeldOverride ||
+        (!this.isDrawingBow(input) && !this.isFishingRodKey(heldKey)));
+    const dragPlaceHeld =
+      input.isDown("place") &&
+      !input.isWorldInputBlocked() &&
+      !this.isDrawingBow(input) &&
+      !this.isFishingRodKey(heldKey);
+    const dragPlaceKey = `${wx},${wy},${state.backgroundEditMode ? 1 : 0}`;
+    const dragPlaceNewCell = dragPlaceHeld && this._lastDragPlaceKey !== dragPlaceKey;
+    const placeTrigger = placePressed || placeEdgeWithInventoryOpen || dragPlaceNewCell;
 
+    const useCell = world.getBlock(wx, wy);
+    const inUseReach = inReach || useCell.identifier === "stratum:spawner";
     if (
-      ((input.isJustPressed("place") && !this.isDrawingBow(input)) ||
-        placeEdgeWithInventoryOpen) &&
-      inReach
+      placeTrigger &&
+      inUseReach
     ) {
-      const cell = world.getBlock(wx, wy);
+      if (dragPlaceNewCell) {
+        this._lastDragPlaceKey = dragPlaceKey;
+      }
+      const cell = useCell;
       // Water: replace in-cell like air/replaceable, but only if hasForegroundPlacementSupport
       // (solid neighbor or back-wall) — same gate as normal blocks below.
       const canPlaceInCell =
@@ -1673,6 +1929,18 @@ export class Player {
         } else if (cell.identifier === "stratum:furnace") {
           this.bus.emit({
             type: "furnace:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+        } else if (cell.identifier === "stratum:spawner") {
+          this.bus.emit({
+            type: "spawner:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+        } else if (world.isSignBlockId(cell.id)) {
+          this.bus.emit({
+            type: "sign:open-request",
             wx,
             wy,
           } satisfies GameEvent);
@@ -1717,7 +1985,52 @@ export class Player {
         }
       } else if (!input.isWorldInputBlocked()) {
       let placeHandled = false;
-      if (input.isJustPressed("place") && !state.backgroundEditMode) {
+      if (placePressed && !state.backgroundEditMode) {
+        if (cell.identifier === "stratum:chest" || cell.identifier === "stratum:barrel") {
+          this.bus.emit({
+            type: "chest:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+          placeHandled = true;
+        } else if (cell.identifier === "stratum:crafting_table") {
+          this.bus.emit({
+            type: "crafting-table:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+          placeHandled = true;
+        } else if (cell.identifier === "stratum:stonecutter") {
+          this.bus.emit({
+            type: "stonecutter:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+          placeHandled = true;
+        } else if (cell.identifier === "stratum:furnace") {
+          this.bus.emit({
+            type: "furnace:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+          placeHandled = true;
+        } else if (cell.identifier === "stratum:spawner") {
+          this.bus.emit({
+            type: "spawner:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+          placeHandled = true;
+        } else if (world.isSignBlockId(cell.id)) {
+          this.bus.emit({
+            type: "sign:open-request",
+            wx,
+            wy,
+          } satisfies GameEvent);
+          placeHandled = true;
+        }
+      }
+      if (!placeHandled && input.isJustPressed("place") && !state.backgroundEditMode) {
         const hotbarSlot = state.hotbarSlot % HOTBAR_SIZE;
         const stack = this.inventory.getStack(hotbarSlot);
         const held =
@@ -1918,6 +2231,10 @@ export class Player {
               plantTallBottom || isFlowerOrShortGrass(placedDef.identifier);
 
             const isSugarCane = placedDef.identifier === "stratum:sugar_cane";
+            const isSign =
+              placedDef.identifier === "stratum:oak_sign" ||
+              placedDef.identifier === "stratum:spruce_sign" ||
+              placedDef.identifier === "stratum:birch_sign";
             let sugarCaneValid = true;
             if (isSugarCane) {
               sugarCaneValid = false;
@@ -1959,7 +2276,12 @@ export class Player {
               }
             }
 
-            if (isSugarCane && !sugarCaneValid) {
+            if (
+              isSign &&
+              (!below.solid || below.replaceable || below.water)
+            ) {
+              // invalid: signs must sit on solid non-water ground
+            } else if (isSugarCane && !sugarCaneValid) {
               // invalid: sugar cane needs sand/grass/dirt (or stacked cane) and adjacent water at the base
             } else if (plantFlowerLike && !isGrassOrDirtSurface(below)) {
               // invalid: flowers and tall grass need grass or dirt below
@@ -2355,6 +2677,13 @@ export class Player {
                     this.sfxAtBlock(wx, wy, getPlaceSound(placedDefForSfx.material), {
                       pitchVariance: 30,
                     });
+                    if (
+                      placedDefForSfx.identifier === "stratum:oak_sign" ||
+                      placedDefForSfx.identifier === "stratum:spruce_sign" ||
+                      placedDefForSfx.identifier === "stratum:birch_sign"
+                    ) {
+                      this.bus.emit({ type: "sign:open-request", wx, wy } satisfies GameEvent);
+                    }
                   } else {
                   const stairMeta =
                     placedDefForSfx.isStair === true
@@ -2379,6 +2708,7 @@ export class Player {
                   } else if (!this.consumeOneFromHotbarForUse(hotbarSlot)) {
                     world.setBlock(wx, wy, this.airId);
                   } else {
+                    this._applyCopiedBlockDataOnPlace(world, wx, wy, placesBlockId);
                     if (itemDef?.key === "stratum:water_bucket") {
                       const bdef = this.itemRegistry.getByKey("stratum:bucket");
                       if (bdef !== undefined) {
@@ -2392,6 +2722,13 @@ export class Player {
                     this.sfxAtBlock(wx, wy, getPlaceSound(placedDefForSfx.material), {
                       pitchVariance: 30,
                     });
+                    if (
+                      placedDefForSfx.identifier === "stratum:oak_sign" ||
+                      placedDefForSfx.identifier === "stratum:spruce_sign" ||
+                      placedDefForSfx.identifier === "stratum:birch_sign"
+                    ) {
+                      this.bus.emit({ type: "sign:open-request", wx, wy } satisfies GameEvent);
+                    }
                   }
                   }
                 }
@@ -2399,8 +2736,8 @@ export class Player {
             }
           }
         }
-      } else if (cell.doorHalf === "bottom" || cell.doorHalf === "top") {
-        if (input.isJustPressed("place")) {
+      } else if (!dragPlaceNewCell && (cell.doorHalf === "bottom" || cell.doorHalf === "top")) {
+        if (placePressed) {
           const bottomWy = cell.doorHalf === "bottom" ? wy : wy - 1;
           const b = world.getBlock(wx, bottomWy);
           if (b.doorHalf === "bottom" && bottomWy + 1 <= WORLD_Y_MAX) {
@@ -2432,33 +2769,46 @@ export class Player {
           }
         }
       } else if (
-        cell.identifier === "stratum:chest" ||
-        cell.identifier === "stratum:barrel"
+        !dragPlaceNewCell &&
+        (cell.identifier === "stratum:chest" ||
+          cell.identifier === "stratum:barrel")
       ) {
         this.bus.emit({
           type: "chest:open-request",
           wx,
           wy,
         } satisfies GameEvent);
-      } else if (cell.identifier === "stratum:crafting_table") {
+      } else if (!dragPlaceNewCell && cell.identifier === "stratum:crafting_table") {
         this.bus.emit({
           type: "crafting-table:open-request",
           wx,
           wy,
         } satisfies GameEvent);
-      } else if (cell.identifier === "stratum:stonecutter") {
+      } else if (!dragPlaceNewCell && cell.identifier === "stratum:stonecutter") {
         this.bus.emit({
           type: "stonecutter:open-request",
           wx,
           wy,
         } satisfies GameEvent);
-      } else if (cell.identifier === "stratum:furnace") {
+      } else if (!dragPlaceNewCell && cell.identifier === "stratum:furnace") {
         this.bus.emit({
           type: "furnace:open-request",
           wx,
           wy,
         } satisfies GameEvent);
-      } else if (cell.bedHalf === "foot" || cell.bedHalf === "head") {
+      } else if (!dragPlaceNewCell && cell.identifier === "stratum:spawner") {
+        this.bus.emit({
+          type: "spawner:open-request",
+          wx,
+          wy,
+        } satisfies GameEvent);
+      } else if (!dragPlaceNewCell && world.isSignBlockId(cell.id)) {
+        this.bus.emit({
+          type: "sign:open-request",
+          wx,
+          wy,
+        } satisfies GameEvent);
+      } else if (!dragPlaceNewCell && (cell.bedHalf === "foot" || cell.bedHalf === "head")) {
         this.bus.emit({
           type: "bed:sleep-request",
           wx,
@@ -2470,7 +2820,7 @@ export class Player {
 
       if (
         !placeHandled &&
-        input.isJustPressed("place") &&
+        placePressed &&
         !state.backgroundEditMode
       ) {
         const hotbarSlot = state.hotbarSlot % HOTBAR_SIZE;
@@ -2486,7 +2836,7 @@ export class Player {
     }
 
     if (
-      input.isJustPressed("place") &&
+      placePressed &&
       !input.isWorldInputBlocked() &&
       !state.backgroundEditMode &&
       !inReach
@@ -2498,6 +2848,9 @@ export class Player {
       if (heldFar !== undefined && this.canConsumeEdible(heldFar)) {
         this.tryConsumeEdibleInWorld(hotbarSlot);
       }
+    }
+    if (!dragPlaceHeld) {
+      this._lastDragPlaceKey = null;
     }
 
     if (state.hotbarSlot !== this.prevHotbarSlot) {
@@ -2543,6 +2896,71 @@ export class Player {
     }
 
     state.handSwingRemainSec = Math.max(0, state.handSwingRemainSec - dt);
+
+    if (state.fishingCastActive) {
+      const h = ITEM_HALF_EXTENT_PX;
+      const hookWaterWy = this.fishingHookWaterCellY(world);
+      const hookInWater = hookWaterWy !== null;
+      state.fishingHookVelocity.y +=
+        ITEM_GRAVITY * BLOCK_SIZE * (hookInWater ? 0.16 : 1) * dt;
+      if (hookInWater) {
+        // In-water drag so casts decelerate quickly before surface lock.
+        const waterDrag = Math.exp(-3.2 * dt);
+        state.fishingHookVelocity.x *= waterDrag;
+        state.fishingHookVelocity.y *= waterDrag;
+        if (Math.abs(state.fishingHookVelocity.x) < 3.5) {
+          state.fishingHookVelocity.x = 0;
+        }
+        if (Math.abs(state.fishingHookVelocity.y) < 3.5) {
+          state.fishingHookVelocity.y = 0;
+        }
+      }
+      const vMax = ITEM_MAX_FALL_SPEED * BLOCK_SIZE;
+      if (state.fishingHookVelocity.y > vMax) {
+        state.fishingHookVelocity.y = vMax;
+      }
+      const mover = createAABB(
+        state.fishingHookPosition.x - h,
+        -(state.fishingHookPosition.y + h),
+        h * 2,
+        h * 2,
+      );
+      const dx = state.fishingHookVelocity.x * dt;
+      const dy = state.fishingHookVelocity.y * dt;
+      const pad = 2;
+      const query = createAABB(
+        Math.min(mover.x, mover.x + dx) - pad,
+        Math.min(mover.y, mover.y + dy) - pad,
+        Math.abs(dx) + mover.width + pad * 2,
+        Math.abs(dy) + mover.height + pad * 2,
+      );
+      getSolidAABBs(world, query, this.solidScratch);
+      const { hitX, hitY } = sweepAABB(mover, dx, dy, this.solidScratch);
+      state.fishingHookPosition.x = mover.x + h;
+      state.fishingHookPosition.y = -mover.y - h;
+      if (hitX) {
+        state.fishingHookVelocity.x = 0;
+      }
+      if (hitY) {
+        state.fishingHookVelocity.y = 0;
+      }
+      const waterWyAfterMove = this.fishingHookWaterCellY(world);
+      if (waterWyAfterMove !== null) {
+        // Always float on the surface of the containing water cell.
+        const targetSurfaceY = (waterWyAfterMove + 1) * BLOCK_SIZE - 1;
+        const follow = Math.min(1, dt * 10);
+        state.fishingHookPosition.y +=
+          (targetSurfaceY - state.fishingHookPosition.y) * follow;
+        if (Math.abs(state.fishingHookPosition.y - targetSurfaceY) < 0.2) {
+          state.fishingHookPosition.y = targetSurfaceY;
+        }
+        state.fishingHookVelocity.y = 0;
+        state.fishingHookVelocity.x *= Math.exp(-4 * dt);
+        if (Math.abs(state.fishingHookVelocity.x) < 1.5) {
+          state.fishingHookVelocity.x = 0;
+        }
+      }
+    }
 
     const blockX = Math.floor(state.position.x / BLOCK_SIZE);
     const blockY = Math.floor(state.position.y / BLOCK_SIZE);

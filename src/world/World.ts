@@ -11,7 +11,6 @@ import {
   PLAYER_REMOTE_AIR_VY_THRESHOLD,
   SIMULATION_DISTANCE_CHUNKS,
   SKY_LIGHT_MAX,
-  VIEW_DISTANCE_CHUNKS,
   SPAWN_CHUNK_RADIUS,
   LOADED_CHUNK_HARD_CAP,
   MAX_SPAWN_STRIP_COLUMNS,
@@ -23,6 +22,7 @@ import {
   WORLD_Y_MIN,
   LIGHT_RECOMPUTE_BUDGET_MS,
 } from "../core/constants";
+import { getEffectiveViewDistanceChunks } from "../ui/settings/videoPrefs";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
 import { withPerfSpan } from "../debug/perfSpans";
 import type { EventBus } from "../core/EventBus";
@@ -121,9 +121,32 @@ import {
   persistedToChestTile,
   type ChestPersistedChunk,
 } from "./chest/chestPersisted";
+import {
+  createDefaultSpawnerTileState,
+  normalizeSpawnerTileStateForGeneratedPlacement,
+  spawnerCellKey,
+  type SpawnerTileState,
+} from "./spawner/SpawnerTileState";
+import {
+  normalizeSpawnerPersistedChunk,
+  persistedToSpawnerTile,
+  spawnerTileToPersisted,
+  type SpawnerPersistedChunk,
+} from "./spawner/spawnerPersisted";
+import {
+  createDefaultSignTileState,
+  signCellKey,
+  type SignTileState,
+} from "./sign/SignTileState";
+import {
+  normalizeSignPersistedChunk,
+  persistedToSignTile,
+  signTileToPersisted,
+  type SignPersistedChunk,
+} from "./sign/signPersisted";
 import type { SmeltingRegistry } from "./SmeltingRegistry";
 import type { ScreenAABB } from "../core/worldCollision";
-import type { GameEvent } from "../core/types";
+import type { GameEvent, WorldGenType } from "../core/types";
 
 function isGrassOrDirtSupport(def: BlockDefinition): boolean {
   return (
@@ -224,6 +247,7 @@ export class World {
   private readonly cactusBlockId: number;
   private readonly sugarCaneBlockId: number;
   private readonly seed: number;
+  private readonly genType: WorldGenType;
   private readonly store: IndexedDBStore;
   private readonly worldUuid: string;
   private readonly remotePlayers = new Map<string, RemotePlayer>();
@@ -297,6 +321,10 @@ export class World {
   private _chestBlockId: number | null = null;
   private _barrelBlockId: number | null = null;
   private readonly _chestTiles = new Map<string, ChestTileState>();
+  private _spawnerBlockId: number | null = null;
+  private readonly _spawnerTiles = new Map<string, SpawnerTileState>();
+  private readonly _signBlockIds = new Set<number>();
+  private readonly _signTiles = new Map<string, SignTileState>();
 
   /** Required to (de)serialize chest/furnace tiles with stable item keys; set before {@link init}. */
   private _itemRegistry: ItemRegistry | null = null;
@@ -346,6 +374,18 @@ export class World {
   private readonly _pendingLightChunks = new Map<number, number>();
   /** Coalesced per-frame light enqueues before merge into {@link _pendingLightChunks}. */
   private readonly _pendingLightChunksStaged = new Map<number, number>();
+  /**
+   * Camera-centre chunk (grid coords) for prioritizing {@link _pendingLightChunks}; set from the
+   * render path each frame. When null, {@link getStreamCentre} is used when draining backlog.
+   */
+  private _lightPriorityViewCx: number | null = null;
+  private _lightPriorityViewCy: number | null = null;
+  private readonly _lightFlushSortScratch: Array<{
+    key: number;
+    mode: number;
+    distSq: number;
+  }> = [];
+  private _lightFlushSortedLength = 0;
 
   /**
    * Block-changed events queued during the current tick.
@@ -362,14 +402,16 @@ export class World {
     bus?: EventBus,
     persistedBlockIdPalette?: readonly string[],
     itemIdLayoutRevision?: number,
+    genType: WorldGenType = "normal",
   ) {
     this.registry = registry;
     this.chunks = new ChunkManager();
-    this.worldGen = new WorldGenerator(seed, registry);
+    this.worldGen = new WorldGenerator(seed, registry, genType);
     this.airId = registry.getByIdentifier("stratum:air").id;
     this.cactusBlockId = registry.getByIdentifier("stratum:cactus").id;
     this.sugarCaneBlockId = registry.getByIdentifier("stratum:sugar_cane").id;
     this.seed = seed;
+    this.genType = genType;
     this.store = store;
     this.worldUuid = worldUuid;
     this._lootResolver = lootResolver;
@@ -575,6 +617,10 @@ export class World {
 
   getSeed(): number {
     return this.seed;
+  }
+
+  getWorldGenType(): WorldGenType {
+    return this.genType;
   }
 
   getWorldUuid(): string {
@@ -1465,6 +1511,8 @@ export class World {
     const newMeta = opts?.cellMetadata ?? 0;
     chunk.metadata[localIndex(lx, ly)] = newMeta;
     this.syncFurnaceTileAfterBlockChange(wx, wy, id);
+    this.syncSpawnerTileAfterBlockChange(wx, wy, id);
+    this.syncSignTileAfterBlockChange(wx, wy, id);
     if (this._chestBlockId !== null || this._barrelBlockId !== null) {
       if (id === this._chestBlockId) {
         tryMergeChestAfterPlace(wx, wy, this.chestMergeContext());
@@ -1760,6 +1808,8 @@ export class World {
     setBlock(chunk, lx, ly, id);
     chunk.metadata[localIndex(lx, ly)] = 0;
     this.syncFurnaceTileAfterBlockChange(wx, wy, id);
+    this.syncSpawnerTileAfterBlockChange(wx, wy, id);
+    this.syncSignTileAfterBlockChange(wx, wy, id);
     if (this._chestBlockId !== null || this._barrelBlockId !== null) {
       if (id === this._chestBlockId) {
         tryMergeChestAfterPlace(wx, wy, this.chestMergeContext());
@@ -1985,6 +2035,10 @@ export class World {
         this.setFurnaceTile(e.wx, e.wy, e.state as FurnaceTileState);
         continue;
       }
+      if (e.type === "spawner") {
+        this.setSpawnerTile(e.wx, e.wy, normalizeSpawnerTileStateForGeneratedPlacement(e.state));
+        continue;
+      }
       const anchor = this.getChestStorageAnchorForCell(e.wx, e.wy) ?? {
         ax: e.wx,
         ay: e.wy,
@@ -2038,6 +2092,12 @@ export class World {
           record.chests,
           this._needsItemIdLayoutMigration,
         );
+      }
+      if (record.spawners !== undefined && record.spawners.length > 0) {
+        this.applySpawnerEntitiesForChunk(coord.cx, coord.cy, record.spawners);
+      }
+      if (record.signs !== undefined && record.signs.length > 0) {
+        this.applySignEntitiesForChunk(coord.cx, coord.cy, record.signs);
       }
       this.invalidateSkyTopStripForChunk(coord.cx);
       this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
@@ -2124,7 +2184,7 @@ export class World {
     /**
      * Hysteresis can leave the stream centre several chunks behind the player's chunk on one axis
      * (e.g. westbound: target cx jumps far negative while the threshold still holds the old centre).
-     * Rendering only loads meshes within {@link VIEW_DISTANCE_CHUNKS} of the stream centre, so the
+     * Rendering only loads meshes within {@link getEffectiveViewDistanceChunks} of the stream centre, so the
      * player would see empty tiles / missing back-wall until they crossed a narrow boundary. Snap when
      * the lag exceeds the view ring so the player's chunk is always inside the rendered set.
      */
@@ -2132,7 +2192,7 @@ export class World {
       Math.abs(this.streamCentreCx - targ.cx),
       Math.abs(this.streamCentreCy - targ.cy),
     );
-    if (lag > VIEW_DISTANCE_CHUNKS) {
+    if (lag > getEffectiveViewDistanceChunks()) {
       this.streamCentreCx = targ.cx;
       this.streamCentreCy = targ.cy;
     }
@@ -2175,6 +2235,8 @@ export class World {
     for (const { cx, cy } of evicted) {
       this.removeFurnaceTilesInChunk(cx, cy);
       this.removeChestTilesInChunk(cx, cy);
+      this.removeSpawnerTilesInChunk(cx, cy);
+      this.removeSignTilesInChunk(cx, cy);
       this.clearDoorBottomKeysInChunk(cx, cy);
       this._activeWaterChunkKeys.delete(packChunkCoordKey(cx, cy));
     }
@@ -2246,6 +2308,12 @@ export class World {
             record.chests,
             this._needsItemIdLayoutMigration,
           );
+        }
+        if (record.spawners !== undefined && record.spawners.length > 0) {
+          this.applySpawnerEntitiesForChunk(coord.cx, coord.cy, record.spawners);
+        }
+        if (record.signs !== undefined && record.signs.length > 0) {
+          this.applySignEntitiesForChunk(coord.cx, coord.cy, record.signs);
         }
         this.invalidateSkyTopStripForChunk(coord.cx);
         this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
@@ -2469,6 +2537,90 @@ export class World {
     this._pendingBlockChangedEvents.length = 0;
   }
 
+  /** Called from the render loop so light drains prefer chunks near the camera. */
+  setLightRecomputeViewChunk(cx: number | null, cy: number | null): void {
+    this._lightPriorityViewCx = cx;
+    this._lightPriorityViewCy = cy;
+  }
+
+  private _priorityChunkForLightFlush(): { cx: number; cy: number } | null {
+    if (this._lightPriorityViewCx !== null && this._lightPriorityViewCy !== null) {
+      return { cx: this._lightPriorityViewCx, cy: this._lightPriorityViewCy };
+    }
+    return this.getStreamCentre();
+  }
+
+  private _prepareLightFlushSorted(): void {
+    this._mergeStagedLightRecomputes();
+    const pending = this._pendingLightChunks;
+    const scratch = this._lightFlushSortScratch;
+    scratch.length = 0;
+    if (pending.size === 0) {
+      this._lightFlushSortedLength = 0;
+      return;
+    }
+    const pri = this._priorityChunkForLightFlush();
+    for (const [key, mode] of pending) {
+      let distSq = 0;
+      if (pri !== null) {
+        const { cx, cy } = unpackChunkCoordKey(key);
+        const dx = cx - pri.cx;
+        const dy = cy - pri.cy;
+        distSq = dx * dx + dy * dy;
+      }
+      scratch.push({ key, mode, distSq });
+    }
+    pending.clear();
+    scratch.sort((a, b) => a.distSq - b.distSq);
+    this._lightFlushSortedLength = scratch.length;
+  }
+
+  private _executeLightFlushSlice(
+    maxChunks: number,
+    budgetMs: number,
+    wrapPerfSpan: boolean,
+  ): number {
+    const reader = this._makeReader();
+    const scratch = this._lightFlushSortScratch;
+    const pending = this._pendingLightChunks;
+    const t0 =
+      typeof performance !== "undefined" && performance.now !== undefined
+        ? performance.now()
+        : 0;
+    let processed = 0;
+    let i = 0;
+    for (; i < this._lightFlushSortedLength; i += 1) {
+      if (processed >= maxChunks) {
+        break;
+      }
+      if (
+        typeof performance !== "undefined" &&
+        performance.now !== undefined &&
+        performance.now() - t0 >= budgetMs
+      ) {
+        break;
+      }
+      const item = scratch[i]!;
+      const { cx, cy } = unpackChunkCoordKey(item.key);
+      const run = (): void => {
+        this.recomputeChunkLight(cx, cy, item.mode, reader);
+      };
+      if (wrapPerfSpan) {
+        withPerfSpan("World.recomputeChunkLight", run);
+      } else {
+        run();
+      }
+      processed += 1;
+    }
+    for (; i < this._lightFlushSortedLength; i += 1) {
+      const item = scratch[i]!;
+      const prev = pending.get(item.key) ?? 0;
+      pending.set(item.key, prev | item.mode);
+    }
+    this._lightFlushSortedLength = 0;
+    return processed;
+  }
+
   /** Flush pending light recomputes up to budgeted wall time per call. */
   flushPendingLightRecomputes(msBudget: number = LIGHT_RECOMPUTE_BUDGET_MS): void {
     this._mergeStagedLightRecomputes();
@@ -2482,37 +2634,19 @@ export class World {
     } else if (pending.size >= LIGHT_RECOMPUTE_BACKLOG_SOFT) {
       budgetMs += 1;
     }
-    const t0 =
-      typeof performance !== "undefined" && performance.now !== undefined
-        ? performance.now()
-        : 0;
     const tLog = import.meta.env.DEV ? chunkPerfNow() : 0;
-    let processed = 0;
     const queueBefore = pending.size;
-    const reader = this._makeReader();
-    for (const [key, mode] of pending) {
-      const { cx, cy } = unpackChunkCoordKey(key);
-      withPerfSpan("World.recomputeChunkLight", () => {
-        this.recomputeChunkLight(cx, cy, mode, reader);
-      });
-      pending.delete(key);
-      processed += 1;
-      if (processed >= LIGHT_RECOMPUTE_MAX_CHUNKS_PER_FLUSH) {
-        break;
-      }
-      if (
-        typeof performance !== "undefined" &&
-        performance.now !== undefined &&
-        performance.now() - t0 >= budgetMs
-      ) {
-        break;
-      }
-    }
+    this._prepareLightFlushSorted();
+    const processed = this._executeLightFlushSlice(
+      LIGHT_RECOMPUTE_MAX_CHUNKS_PER_FLUSH,
+      budgetMs,
+      true,
+    );
     if (import.meta.env.DEV) {
       chunkPerfLog("world:flushPendingLightRecomputes", chunkPerfNow() - tLog, {
         processed,
         queueBefore,
-        queueAfter: pending.size,
+        queueAfter: this._pendingLightChunks.size,
         budgetMs,
       });
     }
@@ -2528,38 +2662,19 @@ export class World {
    * then yielding a frame (chunk streaming settle — avoids multi‑hundred‑ms main-thread stalls).
    */
   private async _drainPendingLightRecomputesWithinFrames(msBudget: number): Promise<void> {
-    this._mergeStagedLightRecomputes();
     const pending = this._pendingLightChunks;
-    while (pending.size > 0) {
-      const sliceStart =
-        typeof performance !== "undefined" && performance.now !== undefined
-          ? performance.now()
-          : 0;
-      const reader = this._makeReader();
-      while (pending.size > 0) {
-        if (
-          typeof performance !== "undefined" &&
-          performance.now !== undefined &&
-          performance.now() - sliceStart >= msBudget
-        ) {
-          break;
-        }
-        const iter = pending.keys().next();
-        if (iter.done) {
-          break;
-        }
-        const key = iter.value;
-        const mode = pending.get(key);
-        pending.delete(key);
-        if (mode === undefined) {
-          continue;
-        }
-        const { cx, cy } = unpackChunkCoordKey(key);
-        this.recomputeChunkLight(cx, cy, mode, reader);
+    while (true) {
+      this._mergeStagedLightRecomputes();
+      if (pending.size === 0) {
+        break;
       }
+      this._prepareLightFlushSorted();
+      if (this._lightFlushSortedLength === 0) {
+        break;
+      }
+      this._executeLightFlushSlice(Number.POSITIVE_INFINITY, msBudget, false);
       if (pending.size > 0) {
         await yieldToNextFrame();
-        this._mergeStagedLightRecomputes();
       }
     }
   }
@@ -2608,10 +2723,12 @@ export class World {
     background?: Uint16Array,
     furnaces?: FurnacePersistedChunk[],
     chests?: ChestPersistedChunk[],
+    spawners?: SpawnerPersistedChunk[],
+    signs?: SignPersistedChunk[],
     metadata?: Uint8Array,
   ): void {
     this.applyAuthoritativeChunkBatch([
-      { cx, cy, blocks, background, furnaces, chests, metadata },
+      { cx, cy, blocks, background, furnaces, chests, spawners, signs, metadata },
     ]);
   }
 
@@ -2626,12 +2743,14 @@ export class World {
       background?: Uint16Array;
       furnaces?: FurnacePersistedChunk[];
       chests?: ChestPersistedChunk[];
+      spawners?: SpawnerPersistedChunk[];
+      signs?: SignPersistedChunk[];
       metadata?: Uint8Array;
     }>,
   ): void {
     const expected = CHUNK_SIZE * CHUNK_SIZE;
     const applied: ChunkCoord[] = [];
-    for (const { cx, cy, blocks, background, furnaces, chests, metadata } of entries) {
+    for (const { cx, cy, blocks, background, furnaces, chests, spawners, signs, metadata } of entries) {
       if (blocks.length !== expected) {
         continue;
       }
@@ -2667,6 +2786,16 @@ export class World {
         this.applyChestEntitiesForChunk(cx, cy, chests);
       } else {
         this.removeChestTilesInChunk(cx, cy);
+      }
+      if (spawners !== undefined) {
+        this.applySpawnerEntitiesForChunk(cx, cy, spawners);
+      } else {
+        this.removeSpawnerTilesInChunk(cx, cy);
+      }
+      if (signs !== undefined) {
+        this.applySignEntitiesForChunk(cx, cy, signs);
+      } else {
+        this.removeSignTilesInChunk(cx, cy);
       }
       this.indexDoorBottomsFromChunk(chunk);
       this.markWaterNeighborhoodActiveAtChunk(cx, cy);
@@ -3139,6 +3268,226 @@ export class World {
     return this._chestBlockId;
   }
 
+  setSpawnerBlockId(id: number | null): void {
+    this._spawnerBlockId = id;
+  }
+
+  getSpawnerBlockId(): number | null {
+    return this._spawnerBlockId;
+  }
+
+  setSignBlockIds(ids: readonly number[]): void {
+    this._signBlockIds.clear();
+    for (const id of ids) {
+      if (Number.isFinite(id)) {
+        this._signBlockIds.add(Math.floor(id));
+      }
+    }
+  }
+
+  getSignBlockIds(): readonly number[] {
+    return [...this._signBlockIds];
+  }
+
+  isSignBlockId(id: number): boolean {
+    return this._signBlockIds.has(id);
+  }
+
+  getSignTile(wx: number, wy: number): SignTileState | undefined {
+    return this._signTiles.get(signCellKey(wx, wy));
+  }
+
+  setSignTile(wx: number, wy: number, state: SignTileState): void {
+    this._signTiles.set(signCellKey(wx, wy), { text: state.text.slice(0, 640) });
+  }
+
+  removeSignTile(wx: number, wy: number): void {
+    this._signTiles.delete(signCellKey(wx, wy));
+  }
+
+  forEachSignTile(callback: (wx: number, wy: number, tile: SignTileState) => void): void {
+    if (this._signBlockIds.size === 0) {
+      return;
+    }
+    for (const [key, tile] of this._signTiles) {
+      const i = key.indexOf(",");
+      if (i <= 0) continue;
+      const wx = Number.parseInt(key.slice(0, i), 10);
+      const wy = Number.parseInt(key.slice(i + 1), 10);
+      if (!Number.isFinite(wx) || !Number.isFinite(wy)) continue;
+      if (!this._signBlockIds.has(this.getBlock(wx, wy).id)) continue;
+      callback(wx, wy, tile);
+    }
+  }
+
+  getSignEntitiesForChunk(cx: number, cy: number): SignPersistedChunk[] {
+    const out: SignPersistedChunk[] = [];
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    for (const [key, state] of this._signTiles) {
+      const i = key.indexOf(",");
+      if (i <= 0) continue;
+      const wx = Number.parseInt(key.slice(0, i), 10);
+      const wy = Number.parseInt(key.slice(i + 1), 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      out.push(signTileToPersisted(wx, wy, state));
+    }
+    return out;
+  }
+
+  applySignEntitiesForChunk(cx: number, cy: number, entries: SignPersistedChunk[]): void {
+    this.removeSignTilesInChunk(cx, cy);
+    for (const raw of entries) {
+      const e = normalizeSignPersistedChunk(raw as unknown);
+      if (e === undefined) continue;
+      const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
+      this._signTiles.set(signCellKey(wx, wy), persistedToSignTile(e));
+    }
+  }
+
+  removeSignTilesInChunk(cx: number, cy: number): void {
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    const stale: string[] = [];
+    for (const key of this._signTiles.keys()) {
+      const i = key.indexOf(",");
+      if (i <= 0) continue;
+      const wx = Number.parseInt(key.slice(0, i), 10);
+      const wy = Number.parseInt(key.slice(i + 1), 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      stale.push(key);
+    }
+    for (const k of stale) {
+      this._signTiles.delete(k);
+    }
+  }
+
+  getSpawnerTile(wx: number, wy: number): SpawnerTileState | undefined {
+    return this._spawnerTiles.get(spawnerCellKey(wx, wy));
+  }
+
+  setSpawnerTile(wx: number, wy: number, state: SpawnerTileState): void {
+    this._spawnerTiles.set(spawnerCellKey(wx, wy), {
+      ...state,
+      spawnPotentials: [...state.spawnPotentials],
+    });
+  }
+
+  removeSpawnerTile(wx: number, wy: number): void {
+    this._spawnerTiles.delete(spawnerCellKey(wx, wy));
+  }
+
+  forEachSpawnerTile(callback: (wx: number, wy: number, tile: SpawnerTileState) => void): void {
+    if (this._spawnerBlockId === null) {
+      return;
+    }
+    const sid = this._spawnerBlockId;
+    for (const [key, tile] of this._spawnerTiles) {
+      const i = key.indexOf(",");
+      if (i <= 0) {
+        continue;
+      }
+      const wx = Number.parseInt(key.slice(0, i), 10);
+      const wy = Number.parseInt(key.slice(i + 1), 10);
+      if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+        continue;
+      }
+      if (this.getBlock(wx, wy).id !== sid) {
+        continue;
+      }
+      callback(wx, wy, tile);
+    }
+  }
+
+  getSpawnerEntitiesForChunk(cx: number, cy: number): SpawnerPersistedChunk[] {
+    const out: SpawnerPersistedChunk[] = [];
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    for (const [key, state] of this._spawnerTiles) {
+      const i = key.indexOf(",");
+      if (i <= 0) {
+        continue;
+      }
+      const wx = Number.parseInt(key.slice(0, i), 10);
+      const wy = Number.parseInt(key.slice(i + 1), 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      out.push(spawnerTileToPersisted(wx, wy, state));
+    }
+    return out;
+  }
+
+  applySpawnerEntitiesForChunk(cx: number, cy: number, entries: SpawnerPersistedChunk[]): void {
+    this.removeSpawnerTilesInChunk(cx, cy);
+    for (const raw of entries) {
+      const e = normalizeSpawnerPersistedChunk(raw as unknown);
+      if (e === undefined) {
+        continue;
+      }
+      const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
+      this._spawnerTiles.set(spawnerCellKey(wx, wy), persistedToSpawnerTile(e));
+    }
+    const chunk = this.chunks.getChunk({ cx, cy });
+    if (chunk !== undefined) {
+      chunk.dirty = true;
+      chunk.renderDirty = true;
+    }
+  }
+
+  removeSpawnerTilesInChunk(cx: number, cy: number): void {
+    const baseX = cx * CHUNK_SIZE;
+    const baseY = cy * CHUNK_SIZE;
+    const stale: string[] = [];
+    for (const key of this._spawnerTiles.keys()) {
+      const i = key.indexOf(",");
+      if (i <= 0) {
+        continue;
+      }
+      const wx = Number.parseInt(key.slice(0, i), 10);
+      const wy = Number.parseInt(key.slice(i + 1), 10);
+      if (
+        !Number.isFinite(wx) ||
+        !Number.isFinite(wy) ||
+        wx < baseX ||
+        wx >= baseX + CHUNK_SIZE ||
+        wy < baseY ||
+        wy >= baseY + CHUNK_SIZE
+      ) {
+        continue;
+      }
+      stale.push(key);
+    }
+    for (const k of stale) {
+      this._spawnerTiles.delete(k);
+    }
+  }
+
   /**
    * Resizes chest storage at the clicked cell’s anchor to 18 or 36 slots to match paired blocks.
    * Safe to call when opening the chest UI (fixes load / merge edge cases).
@@ -3447,6 +3796,35 @@ export class World {
       }
     } else {
       this._furnaceTiles.delete(k);
+    }
+  }
+
+  private syncSpawnerTileAfterBlockChange(wx: number, wy: number, blockId: number): void {
+    const sid = this._spawnerBlockId;
+    if (sid === null) {
+      return;
+    }
+    const k = spawnerCellKey(wx, wy);
+    if (blockId === sid) {
+      if (!this._spawnerTiles.has(k)) {
+        this._spawnerTiles.set(k, createDefaultSpawnerTileState());
+      }
+    } else {
+      this._spawnerTiles.delete(k);
+    }
+  }
+
+  private syncSignTileAfterBlockChange(wx: number, wy: number, blockId: number): void {
+    if (this._signBlockIds.size === 0) {
+      return;
+    }
+    const k = signCellKey(wx, wy);
+    if (this._signBlockIds.has(blockId)) {
+      if (!this._signTiles.has(k)) {
+        this._signTiles.set(k, createDefaultSignTileState());
+      }
+    } else {
+      this._signTiles.delete(k);
     }
   }
 

@@ -143,6 +143,7 @@ import {
   REACH_BLOCKS,
   BOW_MAX_DRAW_SEC,
   DEFAULT_SKIN_ID,
+  ITEM_HALF_EXTENT_PX,
   TORCH_FLAME_TIP_PX_X,
   TORCH_FLAME_TIP_PX_Y,
 } from "../core/constants";
@@ -168,6 +169,8 @@ import { getSolidAABBs } from "./physics/Collision";
 import { createAABB, sweepAABB, type AABB } from "./physics/AABB";
 import { Player } from "./Player";
 
+const FISHING_HOOK_DIAMETER_WORLD_PX = ITEM_HALF_EXTENT_PX * 2;
+
 /** `strength` 0 = white, 1 = strong red (multiplies sprite RGB). */
 function playerHurtTintRgb(strength: number): number {
   const k = Math.min(1, Math.max(0, strength));
@@ -176,6 +179,13 @@ function playerHurtTintRgb(strength: number): number {
   const b = Math.round(255 * (1 - k * 0.78));
   return (r << 16) | (g << 8) | b;
 }
+
+/** Local-only pulse decay (higher = snappier return to neutral). */
+const PLAYER_IMPACT_PULSE_DECAY_PER_SEC = 20;
+/** Upper bound for temporary body squash amount. */
+const PLAYER_IMPACT_PULSE_SQUASH_MAX = 0.22;
+/** Upper bound for temporary body tilt amount (radians). */
+const PLAYER_IMPACT_PULSE_ROT_MAX_RAD = 0.2;
 
 function feetCollisionAABBForDoors(pos: { x: number; y: number }): AABB {
   const x = pos.x - PLAYER_WIDTH * 0.5;
@@ -1261,6 +1271,8 @@ export class EntityManager {
   private localPlayerAnim: AnimatedSprite | null = null;
   /** Sibling of the local body sprite; draw order via `zIndex` (body over tool when facing left). */
   private localHeldItemSprite: Sprite | null = null;
+  private fishingLineGraphic: Graphics | null = null;
+  private fishingHookSprite: Sprite | null = null;
   private localPlayerPlaceholder: Graphics | null = null;
   /** Sliced cells from {@link PLAYER_BODY_ATLAS_IMAGE_REL} (≥ {@link PLAYER_BODY_REQUIRED_FRAME_COUNT}). */
   private playerBodyAtlasFrames: Texture[] | null = null;
@@ -1330,6 +1342,15 @@ export class EntityManager {
   private readonly deathBitsSpawned = new Set<string>();
   private readonly deathBitSolidScratch: AABB[] = [];
   private readonly upStepVisualSmoothing = new Map<string, UpStepVisualSmoothingState>();
+  /** Local-only additive visual feedback; rendered, never replicated. */
+  private localImpactPulseSquash = 0;
+  private localImpactPulseRotRad = 0;
+  private prevDamageTintRemainSec = 0;
+  private prevHandSwingRemainSec = 0;
+  /** Generic per-entity pulse state (local, remote, mobs) keyed by stable entity key. */
+  private readonly entityImpactPulse = new Map<string, { squash: number; rotRad: number }>();
+  private readonly entityImpactPrevHurt = new Map<string, boolean>();
+  private readonly entityImpactPrevAttack = new Map<string, boolean>();
 
   /** Sliced iron armor overlay frames (same layout as {@link PLAYER_BODY_ATLAS_FRAMES}); null if asset missing. */
   private ironArmorHelmetFrames: Texture[] | null = null;
@@ -1387,6 +1408,18 @@ export class EntityManager {
     const aim = new Graphics();
     pipeline.layerForeground.addChild(aim);
     this.aimGraphic = aim;
+    const fishingLine = new Graphics();
+    fishingLine.visible = false;
+    pipeline.layerForeground.addChild(fishingLine);
+    this.fishingLineGraphic = fishingLine;
+    const fishingHook = new Sprite(Texture.WHITE);
+    fishingHook.visible = false;
+    fishingHook.anchor.set(0.5, 0.5);
+    fishingHook.roundPixels = true;
+    this.tryAssignFishingHookTexture(fishingHook);
+    pipeline.layerForeground.addChild(fishingHook);
+    this.fishingHookSprite = fishingHook;
+    void this.loadFishingHookTextureFallback();
 
     this.aimLineSprite = null;
     void this.loadAimLineSprite(pipeline);
@@ -1762,8 +1795,115 @@ export class EntityManager {
     return targetY + state.lagPx;
   }
 
+  private triggerLocalImpactPulse(baseSquash: number, baseRotRad: number): void {
+    const squashJitter = 0.9 + Math.random() * 0.2;
+    const rotJitter = 0.85 + Math.random() * 0.3;
+    this.localImpactPulseSquash = Math.min(
+      PLAYER_IMPACT_PULSE_SQUASH_MAX,
+      this.localImpactPulseSquash + baseSquash * squashJitter,
+    );
+    this.localImpactPulseRotRad = Math.max(
+      -PLAYER_IMPACT_PULSE_ROT_MAX_RAD,
+      Math.min(
+        PLAYER_IMPACT_PULSE_ROT_MAX_RAD,
+        this.localImpactPulseRotRad + baseRotRad * rotJitter,
+      ),
+    );
+  }
+
+  private triggerEntityImpactPulse(entityKey: string, baseSquash: number, baseRotRad: number): void {
+    const squashJitter = 0.9 + Math.random() * 0.2;
+    const rotJitter = 0.85 + Math.random() * 0.3;
+    const prev = this.entityImpactPulse.get(entityKey) ?? { squash: 0, rotRad: 0 };
+    const squash = Math.min(
+      PLAYER_IMPACT_PULSE_SQUASH_MAX,
+      prev.squash + baseSquash * squashJitter,
+    );
+    const rotRad = Math.max(
+      -PLAYER_IMPACT_PULSE_ROT_MAX_RAD,
+      Math.min(
+        PLAYER_IMPACT_PULSE_ROT_MAX_RAD,
+        prev.rotRad + baseRotRad * rotJitter,
+      ),
+    );
+    this.entityImpactPulse.set(entityKey, { squash, rotRad });
+  }
+
+  private getEntityImpactPulse(entityKey: string, dtSec: number): { squash: number; rotRad: number } {
+    const prev = this.entityImpactPulse.get(entityKey);
+    if (prev === undefined) {
+      return { squash: 0, rotRad: 0 };
+    }
+    const dt = Math.max(0, Math.min(0.05, dtSec));
+    const keep = Math.exp(-PLAYER_IMPACT_PULSE_DECAY_PER_SEC * dt);
+    const squash = prev.squash * keep;
+    const rotRad = prev.rotRad * keep;
+    if (Math.abs(squash) < 0.0005 && Math.abs(rotRad) < 0.0005) {
+      this.entityImpactPulse.delete(entityKey);
+      return { squash: 0, rotRad: 0 };
+    }
+    this.entityImpactPulse.set(entityKey, { squash, rotRad });
+    return { squash, rotRad };
+  }
+
+  private syncEntityImpactFlags(
+    entityKey: string,
+    hurtActive: boolean,
+    attackActive: boolean,
+    facingRight: boolean,
+  ): void {
+    const prevHurt = this.entityImpactPrevHurt.get(entityKey) ?? false;
+    const prevAttack = this.entityImpactPrevAttack.get(entityKey) ?? false;
+    const sign = facingRight ? -1 : 1;
+    if (hurtActive && !prevHurt) {
+      this.triggerEntityImpactPulse(entityKey, 0.12, sign * 0.07);
+    }
+    if (attackActive && !prevAttack) {
+      this.triggerEntityImpactPulse(entityKey, 0.05, sign * 0.03);
+    }
+    this.entityImpactPrevHurt.set(entityKey, hurtActive);
+    this.entityImpactPrevAttack.set(entityKey, attackActive);
+  }
+
+  private decayLocalImpactPulse(dtSec: number): void {
+    const dt = Math.max(0, Math.min(0.05, dtSec));
+    const keep = Math.exp(-PLAYER_IMPACT_PULSE_DECAY_PER_SEC * dt);
+    this.localImpactPulseSquash *= keep;
+    this.localImpactPulseRotRad *= keep;
+    if (Math.abs(this.localImpactPulseSquash) < 0.0005) {
+      this.localImpactPulseSquash = 0;
+    }
+    if (Math.abs(this.localImpactPulseRotRad) < 0.0005) {
+      this.localImpactPulseRotRad = 0;
+    }
+  }
+
+  private syncLocalImpactTriggers(): void {
+    const s = this.player.state;
+    if (s.damageTintRemainSec > this.prevDamageTintRemainSec + 0.0001) {
+      const strength = Math.min(
+        1,
+        (s.damageTintRemainSec - this.prevDamageTintRemainSec) /
+          PLAYER_DAMAGE_TINT_DURATION_SEC,
+      );
+      const sign = s.facingRight ? -1 : 1;
+      this.triggerLocalImpactPulse(0.11 + strength * 0.08, sign * (0.05 + strength * 0.06));
+    }
+    if (
+      s.handSwingRemainSec > this.prevHandSwingRemainSec + 0.0001 &&
+      s.damageTintRemainSec <= this.prevDamageTintRemainSec + 0.0001
+    ) {
+      const sign = s.facingRight ? -1 : 1;
+      this.triggerLocalImpactPulse(0.045, sign * 0.03);
+    }
+    this.prevDamageTintRemainSec = s.damageTintRemainSec;
+    this.prevHandSwingRemainSec = s.handSwingRemainSec;
+  }
+
   /** Sync placeholder rects to player + remote player world positions (call each render). */
   syncPlayerGraphic(alpha: number, dtSec: number, nowMs: number): void {
+    this.syncLocalImpactTriggers();
+    this.decayLocalImpactPulse(dtSec);
     const root = this.playerGraphic;
     if (root !== null) {
       const s = this.player.state;
@@ -1793,11 +1933,13 @@ export class EntityManager {
         root.alpha = 1;
       } else {
         root.pivot.set(0, 0);
-        root.rotation = 0;
+        root.rotation = this.localImpactPulseRotRad;
         root.alpha = 1;
         targetRootX = x - PLAYER_WIDTH / 2;
         targetRootY = -y - PLAYER_HEIGHT;
       }
+      const squash = this.localImpactPulseSquash;
+      root.scale.set(1 + squash * 0.18, 1 - squash * 0.3);
       const localRootY = this.smoothEntityStepUpScreenY(
         "player:local",
         targetRootY,
@@ -1850,6 +1992,13 @@ export class EntityManager {
           if (held !== null) {
             held.visible = false;
             held.rotation = 0;
+          }
+          if (this.fishingLineGraphic !== null) {
+            this.fishingLineGraphic.clear();
+            this.fishingLineGraphic.visible = false;
+          }
+          if (this.fishingHookSprite !== null) {
+            this.fishingHookSprite.visible = false;
           }
         } else if (idle !== null && cycle !== null && cycle.length > 0) {
           syncPlayerBodyAnimation(
@@ -1917,6 +2066,7 @@ export class EntityManager {
             aimFy,
             null,
           );
+          this.syncFishingCastVisual(held, heldItemId, alpha);
           }
         }
 
@@ -1948,6 +2098,9 @@ export class EntityManager {
         this.remoteAnimVelY.delete(peerId);
         this.remoteSkinTextures.delete(peerId);
         this.remoteArmorSprites.delete(peerId);
+        this.entityImpactPulse.delete(`remote:${peerId}`);
+        this.entityImpactPrevHurt.delete(`remote:${peerId}`);
+        this.entityImpactPrevAttack.delete(`remote:${peerId}`);
       }
     }
     for (const [peerId, rp] of remotePlayers) {
@@ -1978,6 +2131,7 @@ export class EntityManager {
         true,
       );
       remoteRoot.position.set(disp.x - PLAYER_WIDTH / 2, remoteRootY);
+      const remoteImpactKey = `remote:${peerId}`;
 
       let remoteBody: AnimatedSprite | null = null;
       let remoteHeld: Sprite | null = null;
@@ -2022,6 +2176,18 @@ export class EntityManager {
         const peerScale = peerSkin?.scale ?? this.playerSpriteBaseScale;
         const miningVisual =
           rp.miningVisualFromNetwork || rp.getBreakMining() !== null;
+        this.syncEntityImpactFlags(
+          remoteImpactKey,
+          false,
+          miningVisual,
+          disp.facingRight,
+        );
+        const remotePulse = this.getEntityImpactPulse(remoteImpactKey, dtSec);
+        remoteRoot.rotation = remotePulse.rotRad;
+        remoteRoot.scale.set(
+          1 + remotePulse.squash * 0.18,
+          1 - remotePulse.squash * 0.3,
+        );
         if (idle !== null && cycle !== null && cycle.length > 0 && mode !== undefined) {
           syncPlayerBodyAnimation(
             body,
@@ -2849,6 +3015,110 @@ export class EntityManager {
     this._heldTorchLightWorldBlock = [g.x / BLOCK_SIZE, -g.y / BLOCK_SIZE];
   }
 
+  private applyFishingHookWorldScale(sprite: Sprite): void {
+    const hookFrame = sprite.texture.frame;
+    if (hookFrame.width <= 0 || hookFrame.height <= 0) {
+      return;
+    }
+    sprite.scale.set(
+      FISHING_HOOK_DIAMETER_WORLD_PX / hookFrame.width,
+      FISHING_HOOK_DIAMETER_WORLD_PX / hookFrame.height,
+    );
+  }
+
+  private tryAssignFishingHookTexture(sprite: Sprite): void {
+    const hookTex = this.itemTextureAtlas.getTextureOrNull("fishing_hook");
+    if (hookTex === null || hookTex === Texture.EMPTY) {
+      this.applyFishingHookWorldScale(sprite);
+      return;
+    }
+    sprite.texture = hookTex;
+    if (hookTex.source !== undefined) {
+      hookTex.source.scaleMode = "nearest";
+    }
+    this.applyFishingHookWorldScale(sprite);
+  }
+
+  private async loadFishingHookTextureFallback(): Promise<void> {
+    const sprite = this.fishingHookSprite;
+    if (sprite === null) {
+      return;
+    }
+    if (sprite.texture !== Texture.WHITE) {
+      return;
+    }
+    try {
+      const url = stratumCoreTextureAssetUrl("entities/fishing_hook.png");
+      const tex = await Assets.load<Texture>(url);
+      if (this.fishingHookSprite === null || tex === Texture.EMPTY) {
+        return;
+      }
+      if (tex.source !== undefined) {
+        tex.source.scaleMode = "nearest";
+      }
+      this.fishingHookSprite.texture = tex;
+      this.applyFishingHookWorldScale(this.fishingHookSprite);
+    } catch {
+      // Keep placeholder if fallback load fails.
+    }
+  }
+
+  private syncFishingCastVisual(held: Sprite, heldItemId: number, alpha: number): void {
+    const line = this.fishingLineGraphic;
+    const hook = this.fishingHookSprite;
+    if (line === null || hook === null) {
+      return;
+    }
+    const s = this.player.state;
+    if (!s.fishingCastActive) {
+      line.clear();
+      line.visible = false;
+      hook.visible = false;
+      return;
+    }
+    const heldDef = this.itemRegistry.getById(heldItemId as ItemId);
+    if (heldDef?.key !== "stratum:casted_rod" || !held.visible) {
+      line.clear();
+      line.visible = false;
+      hook.visible = false;
+      return;
+    }
+    const playerFacingLineOffsetX = s.facingRight ? 16 : -16;
+    const playerLineX =
+      s.prevPosition.x +
+      (s.position.x - s.prevPosition.x) * alpha +
+      playerFacingLineOffsetX;
+    const playerLineY =
+      -(
+        s.prevPosition.y +
+        (s.position.y - s.prevPosition.y) * alpha +
+        PLAYER_HEIGHT * 0.62 +
+        4
+      );
+    const bobberX =
+      s.fishingHookPrevPosition.x +
+      (s.fishingHookPosition.x - s.fishingHookPrevPosition.x) * alpha;
+    const bobberY =
+      s.fishingHookPrevPosition.y +
+      (s.fishingHookPosition.y - s.fishingHookPrevPosition.y) * alpha;
+    const bobberScreenX = bobberX;
+    const bobberScreenY = -bobberY;
+    const bobberLineAttachY = bobberScreenY - 2;
+    hook.position.set(Math.round(bobberScreenX), Math.round(bobberScreenY));
+    hook.visible = true;
+    const midX = (playerLineX + bobberScreenX) * 0.5;
+    const sagPx =
+      8 +
+      Math.abs(bobberScreenX - playerLineX) * 0.08 +
+      Math.abs(bobberScreenY - playerLineY) * 0.22;
+    const controlY = Math.max(playerLineY, bobberLineAttachY) + sagPx;
+    line.clear();
+    line.moveTo(playerLineX, playerLineY);
+    line.quadraticCurveTo(midX, controlY, bobberScreenX, bobberLineAttachY);
+    line.stroke({ color: 0xf5f5f5, alpha: 0.9, width: 1.5 });
+    line.visible = true;
+  }
+
   /**
    * Body atlas cell for an armor piece, or null when the item is not a supported overlay material.
    */
@@ -3522,6 +3792,9 @@ export class EntityManager {
     const extraNudgeDownPx = 3;
     for (const v of views) {
       alive.add(v.id);
+      const impactKey = `mob:sheep:${v.id}`;
+      this.syncEntityImpactFlags(impactKey, v.hurt, false, v.facingRight);
+      const pulse = this.getEntityImpactPulse(impactKey, _dtSec);
       let rig = this.sheepSprites.get(v.id);
       if (rig === undefined) {
         const root = new Container();
@@ -3618,7 +3891,10 @@ export class EntityManager {
         (SHEEP_BODY_TRIM_TARGET_PX / effectiveH) * SHEEP_RENDER_SCALE_MULT;
       // Keep root X scale positive; flip facing on sprites (avoids odd transforms with layered sprites).
       const flipX = v.facingRight ? -1 : 1;
-      root.scale.set(baseScale, baseScale);
+      root.scale.set(
+        baseScale * (1 + pulse.squash * 0.18),
+        baseScale * (1 - pulse.squash * 0.3),
+      );
       base.scale.set(flipX, 1);
       if (wool !== null) {
         wool.scale.set(flipX, 1);
@@ -3675,7 +3951,7 @@ export class EntityManager {
         root.rotation = sign * t * (Math.PI * 0.5);
         root.alpha = 1 - t;
       } else {
-        root.rotation = 0;
+        root.rotation = pulse.rotRad;
         root.alpha = 1;
       }
       const sheepBarRemain = Math.max(
@@ -3699,6 +3975,9 @@ export class EntityManager {
         this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Sheep, id));
         this.sheepSprites.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
+        this.entityImpactPulse.delete(`mob:sheep:${id}`);
+        this.entityImpactPrevHurt.delete(`mob:sheep:${id}`);
+        this.entityImpactPrevAttack.delete(`mob:sheep:${id}`);
       }
     }
     this.pruneDeathBitsSpawned(MobType.Sheep, alive);
@@ -3727,6 +4006,9 @@ export class EntityManager {
     const extraNudgeDownPx = 6;
     for (const v of views) {
       alive.add(v.id);
+      const impactKey = `mob:pig:${v.id}`;
+      this.syncEntityImpactFlags(impactKey, v.hurt, false, v.facingRight);
+      const pulse = this.getEntityImpactPulse(impactKey, _dtSec);
       let rig = this.pigSprites.get(v.id);
       if (rig === undefined) {
         const root = new Container();
@@ -3776,7 +4058,10 @@ export class EntityManager {
       baseScale =
         (PIG_BODY_TRIM_TARGET_PX / effectiveH) * PIG_RENDER_SCALE_MULT;
       const flipX = v.facingRight ? -1 : 1;
-      root.scale.set(baseScale, baseScale);
+      root.scale.set(
+        baseScale * (1 + pulse.squash * 0.18),
+        baseScale * (1 - pulse.squash * 0.3),
+      );
       base.scale.set(flipX, 1);
       root.tint = v.hurt ? 0xff4a4a : 0xffffff;
       const pigTargetY =
@@ -3812,7 +4097,7 @@ export class EntityManager {
         root.rotation = sign * t * (Math.PI * 0.5);
         root.alpha = 1 - t;
       } else {
-        root.rotation = 0;
+        root.rotation = pulse.rotRad;
         root.alpha = 1;
       }
       const pigBarRemain = Math.max(
@@ -3836,6 +4121,9 @@ export class EntityManager {
         this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Pig, id));
         this.pigSprites.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
+        this.entityImpactPulse.delete(`mob:pig:${id}`);
+        this.entityImpactPrevHurt.delete(`mob:pig:${id}`);
+        this.entityImpactPrevAttack.delete(`mob:pig:${id}`);
       }
     }
     this.pruneDeathBitsSpawned(MobType.Pig, alive);
@@ -3863,6 +4151,9 @@ export class EntityManager {
     const extraNudgeDownPx = 0;
     for (const v of views) {
       alive.add(v.id);
+      const impactKey = `mob:duck:${v.id}`;
+      this.syncEntityImpactFlags(impactKey, v.hurt, false, v.facingRight);
+      const pulse = this.getEntityImpactPulse(impactKey, _dtSec);
       let rig = this.duckSprites.get(v.id);
       if (rig === undefined) {
         const root = new Container();
@@ -3921,7 +4212,10 @@ export class EntityManager {
       }
       base.tint = 0xffffff;
       const flipX = v.facingRight ? 1 : -1;
-      root.scale.set(PASSIVE_MOB_TEXEL_SCREEN_SCALE, PASSIVE_MOB_TEXEL_SCREEN_SCALE);
+      root.scale.set(
+        PASSIVE_MOB_TEXEL_SCREEN_SCALE * (1 + pulse.squash * 0.18),
+        PASSIVE_MOB_TEXEL_SCREEN_SCALE * (1 - pulse.squash * 0.3),
+      );
       base.scale.set(flipX, 1);
       // Keep duck sprite origin fixed across animation frames to avoid visible popping/jitter.
       base.position.set(0, 0);
@@ -3954,7 +4248,7 @@ export class EntityManager {
         root.rotation = sign * t * (Math.PI * 0.5);
         root.alpha = 1 - t;
       } else {
-        root.rotation = 0;
+        root.rotation = pulse.rotRad;
         root.alpha = 1;
       }
       const duckBarRemain = Math.max(
@@ -3979,6 +4273,9 @@ export class EntityManager {
         this.duckSprites.delete(id);
         this.duckClientAnim.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
+        this.entityImpactPulse.delete(`mob:duck:${id}`);
+        this.entityImpactPrevHurt.delete(`mob:duck:${id}`);
+        this.entityImpactPrevAttack.delete(`mob:duck:${id}`);
       }
     }
     this.pruneDeathBitsSpawned(MobType.Duck, alive);
@@ -4014,6 +4311,9 @@ export class EntityManager {
     const extraNudgeDownPx = 0;
     for (const v of views) {
       alive.add(v.id);
+      const impactKey = `mob:slime:${v.id}`;
+      this.syncEntityImpactFlags(impactKey, v.hurt, v.attacking, v.facingRight);
+      const pulse = this.getEntityImpactPulse(impactKey, dtSec);
       let rig = this.slimeSprites.get(v.id);
       if (rig === undefined) {
         const root = new Container();
@@ -4168,7 +4468,10 @@ export class EntityManager {
         !useJumpAir &&
         !useLandSquash;
       const wobble = canWobble ? Math.sin(anim.jellyWobblePhase * 5.2) * 0.014 : 0;
-      root.scale.set(baseScale * (1 + wobble), baseScale * (1 - wobble * 0.45));
+      root.scale.set(
+        baseScale * (1 + wobble + pulse.squash * 0.16),
+        baseScale * (1 - wobble * 0.45 - pulse.squash * 0.24),
+      );
       base.scale.set(flip, 1);
       base.position.set(0, 0);
       const slimeState = mm.getById(v.id);
@@ -4264,7 +4567,7 @@ export class EntityManager {
         root.rotation = sign * t * (Math.PI * 0.5);
         root.alpha = 1 - t;
       } else {
-        root.rotation = 0;
+        root.rotation = pulse.rotRad;
         root.alpha = 1;
       }
       const slimeBarRemain = Math.max(
@@ -4293,6 +4596,9 @@ export class EntityManager {
         this.slimeSprites.delete(id);
         this.slimeClientAnim.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
+        this.entityImpactPulse.delete(`mob:slime:${id}`);
+        this.entityImpactPrevHurt.delete(`mob:slime:${id}`);
+        this.entityImpactPrevAttack.delete(`mob:slime:${id}`);
       }
     }
     this.pruneDeathBitsSpawned(MobType.Slime, alive);
@@ -4323,6 +4629,10 @@ export class EntityManager {
     const extraNudgeDownPx = 1;
     for (const v of views) {
       alive.add(v.id);
+      const impactKey = `mob:zombie:${v.id}`;
+      const useAttackPulse = v.attacking && attack !== null && attack.length > 0;
+      this.syncEntityImpactFlags(impactKey, v.hurt, useAttackPulse, v.facingRight);
+      const pulse = this.getEntityImpactPulse(impactKey, _dtSec);
       let rig = this.zombieSprites.get(v.id);
       if (rig === undefined) {
         const root = new Container();
@@ -4396,7 +4706,10 @@ export class EntityManager {
           : PLAYER_WALK_ANIM_SPEED * 0.85) * zombieWalkMult;
       base.tint = 0xffffff;
       const flipX = v.facingRight ? -1 : 1;
-      root.scale.set(this.playerSpriteBaseScale, this.playerSpriteBaseScale);
+      root.scale.set(
+        this.playerSpriteBaseScale * (1 + pulse.squash * 0.18),
+        this.playerSpriteBaseScale * (1 - pulse.squash * 0.3),
+      );
       base.scale.set(flipX, 1);
       // The hit frame in some strips leans forward a few pixels; counter-nudge so the feet stay planted.
       const hitBackPx = 3;
@@ -4455,7 +4768,7 @@ export class EntityManager {
         root.rotation = sign * t * (Math.PI * 0.5);
         root.alpha = 1 - t;
       } else {
-        root.rotation = 0;
+        root.rotation = pulse.rotRad;
         root.alpha = 1;
       }
       const zombieBarRemain = Math.max(
@@ -4479,6 +4792,9 @@ export class EntityManager {
         this.upStepVisualSmoothing.delete(this.mobStepSmoothingKey(MobType.Zombie, id));
         this.zombieSprites.delete(id);
         this.mobHitHealthBarRemainSec.delete(id);
+        this.entityImpactPulse.delete(`mob:zombie:${id}`);
+        this.entityImpactPrevHurt.delete(`mob:zombie:${id}`);
+        this.entityImpactPrevAttack.delete(`mob:zombie:${id}`);
       }
     }
     this.pruneDeathBitsSpawned(MobType.Zombie, alive);
@@ -4502,6 +4818,13 @@ export class EntityManager {
     this.playerBreakingAnimTextures = null;
     this.localWalkAnimMode.v = "idle";
     this.localSurfaceMode.v = "ground";
+    this.localImpactPulseSquash = 0;
+    this.localImpactPulseRotRad = 0;
+    this.prevDamageTintRemainSec = 0;
+    this.prevHandSwingRemainSec = 0;
+    this.entityImpactPulse.clear();
+    this.entityImpactPrevHurt.clear();
+    this.entityImpactPrevAttack.clear();
     this.remoteWalkAnimMode.clear();
     this.remoteSurfaceMode.clear();
     this.upStepVisualSmoothing.clear();
@@ -4514,6 +4837,16 @@ export class EntityManager {
       this.aimLineSprite.parent?.removeChild(this.aimLineSprite);
       this.aimLineSprite.destroy();
       this.aimLineSprite = null;
+    }
+    if (this.fishingLineGraphic !== null) {
+      this.fishingLineGraphic.parent?.removeChild(this.fishingLineGraphic);
+      this.fishingLineGraphic.destroy();
+      this.fishingLineGraphic = null;
+    }
+    if (this.fishingHookSprite !== null) {
+      this.fishingHookSprite.parent?.removeChild(this.fishingHookSprite);
+      this.fishingHookSprite.destroy();
+      this.fishingHookSprite = null;
     }
     for (const sprite of this.remoteGraphics.values()) {
       sprite.parent?.removeChild(sprite);

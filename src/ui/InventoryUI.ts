@@ -109,6 +109,7 @@ export class InventoryUI {
   private readonly armorHudClipEls: HTMLDivElement[] = [];
   private prevHeartAriaLabel = "";
   private prevArmorHudPointsTen = -1;
+  private sandboxHud = false;
   private readonly itemTooltipEl: HTMLDivElement;
   private tooltipActiveSlot: number | null = null;
   private inventoryOpen = false;
@@ -198,13 +199,32 @@ export class InventoryUI {
     this.itemTooltipEl.replaceChildren();
   }
 
-  private fillItemTooltip(def: ItemDefinition): void {
+  private truncateDataLine(text: string, maxChars = 140): string {
+    if (text.length <= maxChars) {
+      return text;
+    }
+    return `${text.slice(0, Math.max(0, maxChars - 1))}\u2026`;
+  }
+
+  private displayNameForSlot(slotIndex: number, baseName: string): string {
+    const summary = this.getInventory().getSlotDataSummary(slotIndex);
+    return summary !== null ? `${baseName} (+ Data)` : baseName;
+  }
+
+  private fillItemTooltip(def: ItemDefinition, slotIndex: number): void {
     const root = this.itemTooltipEl;
     root.replaceChildren();
     const nameLine = document.createElement("div");
     nameLine.className = "inv-item-tooltip__name";
-    nameLine.textContent = def.displayName;
+    nameLine.textContent = this.displayNameForSlot(slotIndex, def.displayName);
     root.appendChild(nameLine);
+    const slotDataSummary = this.getInventory().getSlotDataSummary(slotIndex);
+    if (slotDataSummary !== null) {
+      const dataLine = document.createElement("div");
+      dataLine.className = "inv-item-tooltip__detail";
+      dataLine.textContent = `Data: ${this.truncateDataLine(slotDataSummary)}`;
+      root.appendChild(dataLine);
+    }
     const tip = def.inventoryTooltip;
     if (tip !== undefined && tip.length > 0) {
       const detail = document.createElement("div");
@@ -254,7 +274,7 @@ export class InventoryUI {
         return;
       }
       this.tooltipActiveSlot = slotIndex;
-      this.fillItemTooltip(def);
+      this.fillItemTooltip(def, slotIndex);
       this.itemTooltipEl.classList.add("inv-item-tooltip--visible");
       requestAnimationFrame(() => {
         this.positionItemTooltip(e.clientX, e.clientY);
@@ -926,6 +946,14 @@ export class InventoryUI {
     }
   }
 
+  setSandboxHud(enabled: boolean): void {
+    if (this.sandboxHud === enabled) {
+      return;
+    }
+    this.sandboxHud = enabled;
+    this.heartsRowEl.classList.toggle("inv-hearts-row--hidden", enabled);
+  }
+
   private syncHearts(health: number, temp: number, tempRemainSec: number): void {
     const h = Math.max(
       0,
@@ -1094,7 +1122,7 @@ export class InventoryUI {
       if (selStack !== null && selStack.count > 0) {
         const def = this.itemRegistry.getById(selStack.itemId);
         if (def !== undefined) {
-          this.showHotbarItemName(def.displayName);
+          this.showHotbarItemName(this.displayNameForSlot(sel, def.displayName));
         } else {
           this.hideHotbarItemNameImmediate();
         }
@@ -1258,7 +1286,11 @@ export class InventoryUI {
     iconEl.style.cssText = style;
     iconEl.removeAttribute("title");
     slotEl.removeAttribute("title");
-    slotEl.setAttribute("aria-label", def.displayName);
+    const displayName = this.displayNameForSlot(
+      hotbarBowContext?.worldSlot ?? -1,
+      def.displayName,
+    );
+    slotEl.setAttribute("aria-label", displayName);
 
     if (stack.count > 1) {
       countEl.textContent = String(stack.count);
@@ -1447,7 +1479,7 @@ export class InventoryUI {
       if (armorStack !== null && this.iconUrlLookup !== null) {
         const def = this.itemRegistry.getById(armorStack.itemId);
         if (def !== undefined) {
-          this.fillItemTooltip(def);
+          this.fillItemTooltip(def, -1);
           this.itemTooltipEl.classList.add("inv-item-tooltip--visible");
           this.positionItemTooltip(e.clientX, e.clientY);
         }

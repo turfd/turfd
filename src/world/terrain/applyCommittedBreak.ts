@@ -39,6 +39,7 @@ export function applyCommittedBreakOnWorld(
   gameMode: WorldGameMode,
 ): boolean {
   const canBreakUnbreakable = gameMode === "sandbox";
+  const sandboxNoDrops = gameMode === "sandbox";
   if (layer === "bg") {
     const bid = world.getBackgroundId(wx, wy);
     if (bid === 0) {
@@ -48,7 +49,7 @@ export function applyCommittedBreakOnWorld(
     if (def.hardness === 999 && !canBreakUnbreakable) {
       return false;
     }
-    const dropsLoot = canHarvestDrops(def, heldItemDef);
+    const dropsLoot = !sandboxNoDrops && canHarvestDrops(def, heldItemDef);
     if (dropsLoot) {
       world.spawnLootForBrokenBlock(def.id, wx, wy);
     }
@@ -66,7 +67,7 @@ export function applyCommittedBreakOnWorld(
     isTreeLogBlock(registry, def.id) &&
     (world.getMetadata(wx, wy) & WORLDGEN_NO_COLLIDE) !== 0;
 
-  const dropsLoot = canHarvestDrops(def, heldItemDef);
+  const dropsLoot = !sandboxNoDrops && canHarvestDrops(def, heldItemDef);
 
   if (def.tallGrass === "bottom" || def.tallGrass === "top") {
     const bottomWy = def.tallGrass === "bottom" ? wy : wy - 1;
@@ -166,7 +167,7 @@ export function applyCommittedBreakOnWorld(
     return true;
   }
 
-  if (def.identifier === "stratum:furnace") {
+  if (def.identifier === "stratum:furnace" && !sandboxNoDrops) {
     world.spawnFurnaceItemDropsAt(wx, wy);
   }
   if (def.identifier === "stratum:chest" || def.identifier === "stratum:barrel") {
@@ -178,7 +179,15 @@ export function applyCommittedBreakOnWorld(
     world.setBlock(wx, wy, 0);
   }
   if (wildTreeLogColumn) {
-    breakTreeLogsAboveColumn(world, registry, wx, wy, airId, heldItemDef);
+    breakTreeLogsAboveColumn(
+      world,
+      registry,
+      wx,
+      wy,
+      airId,
+      heldItemDef,
+      sandboxNoDrops,
+    );
   }
   return true;
 }

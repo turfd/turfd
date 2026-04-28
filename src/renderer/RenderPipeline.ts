@@ -25,10 +25,10 @@ import { BackgroundLayerRenderer } from "./BackgroundLayerRenderer";
 import { Camera } from "./Camera";
 import { LightingComposer } from "./lighting/LightingComposer";
 import { TonemapFilter } from "./lighting/TonemapFilter";
-import { getVideoPrefs } from "../ui/settings/videoPrefs";
 import { WeatherRainParticles } from "./WeatherRainParticles";
 import { WeatherSnowParticles } from "./WeatherSnowParticles";
 import { SpriteCloudLayer } from "./sky/SpriteCloudLayer";
+import { getVideoPrefs } from "../ui/settings/videoPrefs";
 
 /**
  * Named world layers (instances are created by {@link RenderPipeline}).
@@ -178,6 +178,8 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _lastBloomMaskBoundsW = Number.NaN;
   private _lastBloomMaskBoundsH = Number.NaN;
   private _compositeSyncDirty = true;
+  /** Last {@link getVideoPrefs}.renderScale applied to albedo/bloom RT resolution. */
+  private _lastVideoRenderScale = Number.NaN;
   private readonly _bloomMaskWorldVisScratch: Array<{ n: Container; v: boolean }> = [];
   private readonly _bloomMaskSiblingVisScratch: Array<{ n: Container; v: boolean }> = [];
   private _bgToneFilter: TonemapFilter | null = null;
@@ -376,18 +378,21 @@ export class RenderPipeline implements RenderPipelineLayers {
     this.mount.appendChild(canvas);
 
     const rtRes = application.renderer.resolution;
+    const scale0 = getVideoPrefs().renderScale;
+    this._lastVideoRenderScale = scale0;
     const initialRtWidth = Math.max(
       1,
-      Math.round(application.renderer.width) + this._overscanPadPx * 2,
+      Math.round(application.renderer.width + this._overscanPadPx * 2),
     );
     const initialRtHeight = Math.max(
       1,
-      Math.round(application.renderer.height) + this._overscanPadPx * 2,
+      Math.round(application.renderer.height + this._overscanPadPx * 2),
     );
+    const initialRtResolution = rtRes * scale0;
     this._albedoRT = RenderTexture.create({
       width: initialRtWidth,
       height: initialRtHeight,
-      resolution: rtRes,
+      resolution: initialRtResolution,
       dynamic: true,
     });
     // Nearest when sampled in {@link CompositePass}: avoids bilinear pulling wrong neighbors at
@@ -396,7 +401,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     this._bloomMaskRT = RenderTexture.create({
       width: initialRtWidth,
       height: initialRtHeight,
-      resolution: rtRes,
+      resolution: initialRtResolution,
       dynamic: true,
     });
     this._bloomMaskRT.source.scaleMode = "nearest";
@@ -868,10 +873,6 @@ export class RenderPipeline implements RenderPipelineLayers {
 
   /** Renders player silhouettes into {@link _bloomMaskRT} for composite bloom occlusion. */
   private renderBloomMask(): void {
-    const vp = getVideoPrefs();
-    if (!vp.bloom) {
-      return;
-    }
     const app = this.app;
     const maskRt = this._bloomMaskRT;
     const playerRoot = this._bloomMaskPlayerRoot;
@@ -985,41 +986,93 @@ export class RenderPipeline implements RenderPipelineLayers {
       withPerfSpan("RenderPipeline.renderWorldToAlbedo", () => {
         this.renderWorldWithOverscanOffset(this._albedoRT!);
       });
-      const vp = getVideoPrefs();
-      if (vp.bloom) {
-        // Render the bloom mask every other frame — the RT persists in between, and
-        // bloom occlusion tolerates a single-frame stale silhouette far better than it
-        // tolerates the duplicated world render this path implies at 60 FPS.
-        this._bloomMaskFrameCounter = (this._bloomMaskFrameCounter + 1) | 0;
-        const bloomCameraStill =
-          Number.isFinite(this._lastBloomMaskCameraX) &&
-          Math.abs(cameraPos.x - this._lastBloomMaskCameraX) < 1 &&
-          Math.abs(cameraPos.y - this._lastBloomMaskCameraY) < 1;
-        const bloomModulo = bloomCameraStill ? 3 : 2;
-        const bloomPlayerChanged = this.shouldRefreshBloomMaskForPlayerMotion();
-        if (
-          this._skyLightningAlpha > 0.001 ||
-          bloomPlayerChanged ||
-          this._bloomMaskFrameCounter % bloomModulo === 0
-        ) {
-          withPerfSpan("RenderPipeline.renderBloomMask", () => {
-            this.renderBloomMask();
-          });
-          this._lastBloomMaskCameraX = cameraPos.x;
-          this._lastBloomMaskCameraY = cameraPos.y;
-        }
+      // Render the bloom mask every other frame — the RT persists in between, and
+      // bloom occlusion tolerates a single-frame stale silhouette far better than it
+      // tolerates the duplicated world render this path implies at 60 FPS.
+      this._bloomMaskFrameCounter = (this._bloomMaskFrameCounter + 1) | 0;
+      const bloomCameraStill =
+        Number.isFinite(this._lastBloomMaskCameraX) &&
+        Math.abs(cameraPos.x - this._lastBloomMaskCameraX) < 1 &&
+        Math.abs(cameraPos.y - this._lastBloomMaskCameraY) < 1;
+      const bloomModulo = bloomCameraStill ? 3 : 2;
+      const bloomPlayerChanged = this.shouldRefreshBloomMaskForPlayerMotion();
+      if (
+        this._skyLightningAlpha > 0.001 ||
+        bloomPlayerChanged ||
+        this._bloomMaskFrameCounter % bloomModulo === 0
+      ) {
+        withPerfSpan("RenderPipeline.renderBloomMask", () => {
+          this.renderBloomMask();
+        });
+        this._lastBloomMaskCameraX = cameraPos.x;
+        this._lastBloomMaskCameraY = cameraPos.y;
       }
       try {
         this.camera.worldRoot.visible = false;
         withPerfSpan("RenderPipeline.compositeRender", () => {
-          this.app?.render();
+          this.renderAppWithNullChildRecovery();
         });
       } finally {
         this.camera.worldRoot.visible = true;
       }
     } else {
-      this.app.render();
+      this.renderAppWithNullChildRecovery();
     }
+  }
+
+  /**
+   * Guards against rare Pixi v8 crashes where a container's internal `children` array
+   * contains `null` and `validateRenderables` reads `renderPipeId` from it.
+   * If a frame throws this exact error, scrub null children and retry once.
+   */
+  private renderAppWithNullChildRecovery(): void {
+    const app = this.app;
+    if (app === null) {
+      return;
+    }
+    try {
+      app.render();
+    } catch (error) {
+      if (!this.isNullRenderPipeCrash(error)) {
+        throw error;
+      }
+      const removed =
+        this.pruneNullChildrenDeep(app.stage) +
+        this.pruneNullChildrenDeep(this.camera.worldRoot);
+      if (removed > 0) {
+        console.warn(
+          `[RenderPipeline] Recovered from null renderable crash by pruning ${removed} null scene children.`,
+        );
+      }
+      app.render();
+    }
+  }
+
+  private isNullRenderPipeCrash(error: unknown): boolean {
+    if (!(error instanceof TypeError) || typeof error.message !== "string") {
+      return false;
+    }
+    return error.message.includes("renderPipeId");
+  }
+
+  private pruneNullChildrenDeep(root: Container): number {
+    const children = (root as unknown as { children?: unknown[] }).children;
+    if (!Array.isArray(children) || children.length === 0) {
+      return 0;
+    }
+    let removed = 0;
+    for (let i = children.length - 1; i >= 0; i--) {
+      if (children[i] == null) {
+        children.splice(i, 1);
+        removed += 1;
+      }
+    }
+    for (const child of children) {
+      if (child instanceof Container) {
+        removed += this.pruneNullChildrenDeep(child);
+      }
+    }
+    return removed;
   }
 
   /**
@@ -1144,16 +1197,24 @@ export class RenderPipeline implements RenderPipelineLayers {
     const w = Math.max(1, Math.round(this.app.renderer.width));
     const h = Math.max(1, Math.round(this.app.renderer.height));
     const res = this.app.renderer.resolution;
+    const videoRenderScale = getVideoPrefs().renderScale;
+    const rtResolution = res * videoRenderScale;
+    const videoScaleChanged = videoRenderScale !== this._lastVideoRenderScale;
+    if (videoScaleChanged) {
+      this._compositeSyncDirty = true;
+    }
     let sizeChanged = false;
     if (
       w !== this.lastScreenW ||
       h !== this.lastScreenH ||
-      res !== this._lastRendererRes
+      res !== this._lastRendererRes ||
+      videoScaleChanged
     ) {
       sizeChanged = true;
       this.lastScreenW = w;
       this.lastScreenH = h;
       this._lastRendererRes = res;
+      this._lastVideoRenderScale = videoRenderScale;
       if (this._skyCssCanvas !== null && (w !== this._skyCssW || h !== this._skyCssH)) {
         this._skyCssCanvas.width = w;
         this._skyCssCanvas.height = h;
@@ -1161,16 +1222,16 @@ export class RenderPipeline implements RenderPipelineLayers {
         this._skyCssH = h;
       }
       this.camera.setScreenSize(w, h);
-      const rtW = Math.max(1, w + this._overscanPadPx * 2);
-      const rtH = Math.max(1, h + this._overscanPadPx * 2);
-      this._albedoRT?.resize(rtW, rtH, res);
+      const rtW = Math.max(1, Math.round(w + this._overscanPadPx * 2));
+      const rtH = Math.max(1, Math.round(h + this._overscanPadPx * 2));
+      this._albedoRT?.resize(rtW, rtH, rtResolution);
       if (this._albedoRT !== null) {
         const aw = Math.max(1, Math.round(this._albedoRT.width));
         const ah = Math.max(1, Math.round(this._albedoRT.height));
         const ar = this._albedoRT.source.resolution;
         this._bloomMaskRT?.resize(aw, ah, ar);
       } else {
-        this._bloomMaskRT?.resize(rtW, rtH, res);
+        this._bloomMaskRT?.resize(rtW, rtH, rtResolution);
       }
       this._compositeSyncDirty = true;
     }

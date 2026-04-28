@@ -6,6 +6,8 @@
 import { CHUNK_SIZE } from "../core/constants";
 import type { FurnacePersistedChunk } from "../world/furnace/furnacePersisted";
 import type { ChestPersistedChunk } from "../world/chest/chestPersisted";
+import type { SpawnerPersistedChunk } from "../world/spawner/spawnerPersisted";
+import type { SignPersistedChunk } from "../world/sign/signPersisted";
 import type { INetworkAdapter, PeerId } from "./INetworkAdapter";
 import { MsgType, type NetworkMessage } from "./protocol/messages";
 
@@ -16,6 +18,8 @@ type ChunkSnapshot = {
   background: Uint16Array;
   furnaces?: FurnacePersistedChunk[];
   chests?: ChestPersistedChunk[];
+  spawners?: SpawnerPersistedChunk[];
+  signs?: SignPersistedChunk[];
   metadata?: Uint8Array;
 };
 
@@ -80,6 +84,8 @@ export class ChunkSyncManager {
           background: chunk.background,
           furnaces: chunk.furnaces,
           chests: chunk.chests,
+          spawners: chunk.spawners,
+          signs: chunk.signs,
           metadata: chunk.metadata?.slice(),
         };
         this._adapter.send(peerId, msg);

@@ -7,6 +7,7 @@ import { mergeStoredKeyBindings, snapshotKeyBindings } from "./keyBindingMerge";
 
 const MOUSE_PLACE = 2;
 const MOUSE_BREAK = 0;
+const MOUSE_PICK = 1;
 
 /** True when the focused DOM node is typing-oriented (inventory search, chat field, etc.). */
 function isEditableDocumentFocus(el: Element | null): boolean {
@@ -144,6 +145,9 @@ export class InputManager {
   };
 
   private readonly onMouseDown = (e: MouseEvent): void => {
+    if (e.button === MOUSE_PICK && e.target === this.canvas) {
+      e.preventDefault();
+    }
     if (!this.mouseDown.has(e.button)) {
       this.mouseJustDown.add(e.button);
     }
@@ -164,6 +168,12 @@ export class InputManager {
 
   private readonly onContextMenu = (e: MouseEvent): void => {
     e.preventDefault();
+  };
+
+  private readonly onAuxClick = (e: MouseEvent): void => {
+    if (e.button === MOUSE_PICK) {
+      e.preventDefault();
+    }
   };
 
   private readonly onWheel = (e: WheelEvent): void => {
@@ -202,6 +212,7 @@ export class InputManager {
     window.addEventListener("resize", this.onCanvasMetricsInvalidated);
     window.addEventListener("scroll", this.onCanvasMetricsInvalidated, true);
     canvas.addEventListener("contextmenu", this.onContextMenu);
+    canvas.addEventListener("auxclick", this.onAuxClick);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
     if (typeof ResizeObserver !== "undefined") {
       this.canvasResizeObserver = new ResizeObserver(this.onCanvasMetricsInvalidated);
@@ -267,6 +278,7 @@ export class InputManager {
     window.removeEventListener("resize", this.onCanvasMetricsInvalidated);
     window.removeEventListener("scroll", this.onCanvasMetricsInvalidated, true);
     this.canvas.removeEventListener("contextmenu", this.onContextMenu);
+    this.canvas.removeEventListener("auxclick", this.onAuxClick);
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvasResizeObserver?.disconnect();
     this.canvasResizeObserver = null;
@@ -345,6 +357,13 @@ export class InputManager {
 
   mouseButton(btn: 0 | 1 | 2): boolean {
     return this.mouseDown.has(btn);
+  }
+
+  mouseButtonJustPressed(btn: 0 | 1 | 2): boolean {
+    if (this.chatOpen) {
+      return false;
+    }
+    return this.mouseJustDown.has(btn);
   }
 
   /** Raw keyboard code state (e.g. `ControlLeft`) for mode-specific controls. */

@@ -1,0 +1,47 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:barrel_t2",
+  "table": {
+    "roll": "one_of",
+    "picksMin": 3,
+    "picksMax": 5,
+    "entries": [
+      {
+        "itemKey": "stratum:iron_ore",
+        "countMin": 2,
+        "countMax": 5,
+        "chance": 0.62
+      },
+      {
+        "itemKey": "stratum:gold_ingot",
+        "countMin": 1,
+        "countMax": 3,
+        "chance": 0.4
+      },
+      {
+        "itemKey": "stratum:lapis",
+        "countMin": 5,
+        "countMax": 12,
+        "chance": 0.45
+      },
+      {
+        "itemKey": "stratum:diamond",
+        "countMin": 1,
+        "countMax": 2,
+        "chance": 0.16
+      },
+      {
+        "itemKey": "stratum:stone_pickaxe",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 0.16
+      },
+      {
+        "itemKey": "stratum:bread",
+        "countMin": 1,
+        "countMax": 2,
+        "chance": 0.22
+      }
+    ]
+  }
+}

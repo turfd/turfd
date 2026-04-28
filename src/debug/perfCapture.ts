@@ -17,12 +17,41 @@ type BottomUpEntry = {
   percent: number;
 };
 
+/** Optional world/scene counts at capture start (from {@link Game}). */
+export type PerfWorldSnapshot = {
+  loadedChunkCount: number;
+  activeMobCount: number;
+  worldTimeMs: number;
+  viewDistanceChunks: number;
+  streamCentreChunk: { cx: number; cy: number } | null;
+};
+
+type HotStackEntry = {
+  stackLabel: string;
+  totalMs: number;
+  samples: number;
+  percent: number;
+};
+
+type LongTaskEntry = {
+  startTimeMs: number;
+  durationMs: number;
+  name: string;
+};
+
 type PerfCaptureOptions = {
   durationMs?: number;
   sampleIntervalMs?: number;
+  /** Max rows in each bottom-up table (native + instrumented). Default 40. */
+  topBottomUpEntries?: number;
+  /** Distinct full JS stacks from self-profiling, ranked by sampled time. Default 15. */
+  hotStackCount?: number;
+  /** JS Self-Profiling API buffer size. Default 120_000. */
+  maxProfilerBufferSize?: number;
   worldName: string;
   worldUuid: string;
   networkRole: "offline" | "host" | "client";
+  worldSnapshot?: PerfWorldSnapshot;
 };
 
 type PerfCaptureResult = {
@@ -38,6 +67,7 @@ type PerfCaptureResult = {
     memoryMbPeak: number | null;
   };
   bottomUpAvailable: boolean;
+  /** Prefer native self-profile bottom-up when present; else instrumented (same as report `bottomUpTop` legacy field). */
   bottomUpTop: BottomUpEntry[];
 };
 
@@ -47,7 +77,11 @@ type MaybeProfiler = {
 
 const DEFAULT_DURATION_MS = 30_000;
 const DEFAULT_SAMPLE_INTERVAL_MS = 16;
-const TOP_BOTTOM_UP_ENTRIES = 20;
+const DEFAULT_TOP_BOTTOM_UP_ENTRIES = 40;
+const DEFAULT_HOT_STACK_COUNT = 15;
+const DEFAULT_MAX_PROFILER_BUFFER = 120_000;
+
+type ProfilerSampleRow = { timestamp: number; stack: string[] };
 
 function average(values: readonly number[]): number {
   if (values.length === 0) {
@@ -85,7 +119,8 @@ function memoryUsageMb(): number | null {
 }
 
 function estimateBottomUpFromSamples(
-  sampleRows: readonly { timestamp: number; stack: readonly string[] }[],
+  sampleRows: readonly ProfilerSampleRow[],
+  topN: number,
 ): BottomUpEntry[] {
   if (sampleRows.length === 0) {
     return [];
@@ -127,10 +162,10 @@ function estimateBottomUpFromSamples(
       percent: totalSelfMs > 0 ? Number(((entry.selfMs / totalSelfMs) * 100).toFixed(2)) : 0,
     }))
     .sort((a, b) => b.selfMs - a.selfMs)
-    .slice(0, TOP_BOTTOM_UP_ENTRIES);
+    .slice(0, Math.max(1, topN));
 }
 
-function extractBottomUpFromProfilerPayload(payload: unknown): BottomUpEntry[] {
+function parseProfilerSampleRows(payload: unknown): ProfilerSampleRow[] {
   const data = payload as {
     samples?: Array<{ timestamp?: number; stackId?: string }>;
     stacks?: Array<{ id?: string; parentId?: string; frameId?: string }>;
@@ -156,7 +191,7 @@ function extractBottomUpFromProfilerPayload(payload: unknown): BottomUpEntry[] {
     }
     frameNameById.set(frame.frameId, safeFunctionName(frame.name));
   }
-  const rows: { timestamp: number; stack: string[] }[] = [];
+  const rows: ProfilerSampleRow[] = [];
   for (const sample of data.samples) {
     if (typeof sample.timestamp !== "number" || typeof sample.stackId !== "string") {
       continue;
@@ -176,10 +211,42 @@ function extractBottomUpFromProfilerPayload(payload: unknown): BottomUpEntry[] {
     rows.push({ timestamp: sample.timestamp, stack });
   }
   rows.sort((a, b) => a.timestamp - b.timestamp);
-  return estimateBottomUpFromSamples(rows);
+  return rows;
 }
 
-function maybeCreateProfiler(sampleIntervalMs: number): MaybeProfiler | null {
+function hotStacksFromSampleRows(rows: readonly ProfilerSampleRow[], topN: number): HotStackEntry[] {
+  if (rows.length === 0) {
+    return [];
+  }
+  const totals = new Map<string, { totalMs: number; samples: number }>();
+  for (const [i, row] of rows.entries()) {
+    const nextTs = rows[i + 1]?.timestamp ?? row.timestamp;
+    const dtMs = Math.max(0, nextTs - row.timestamp);
+    if (row.stack.length === 0) {
+      continue;
+    }
+    const key = row.stack.join(" > ");
+    const e = totals.get(key) ?? { totalMs: 0, samples: 0 };
+    e.totalMs += dtMs;
+    e.samples += 1;
+    totals.set(key, e);
+  }
+  const totalWeight = [...totals.values()].reduce((s, x) => s + x.totalMs, 0);
+  return [...totals.entries()]
+    .map(([stackLabel, v]) => ({
+      stackLabel,
+      totalMs: Number(v.totalMs.toFixed(3)),
+      samples: v.samples,
+      percent: totalWeight > 0 ? Number(((v.totalMs / totalWeight) * 100).toFixed(2)) : 0,
+    }))
+    .sort((a, b) => b.totalMs - a.totalMs)
+    .slice(0, Math.max(1, topN));
+}
+
+function maybeCreateProfiler(
+  sampleIntervalMs: number,
+  maxBufferSize: number,
+): MaybeProfiler | null {
   const globalWithProfiler = globalThis as typeof globalThis & {
     Profiler?: new (options: { sampleInterval: number; maxBufferSize: number }) => MaybeProfiler;
   };
@@ -189,7 +256,7 @@ function maybeCreateProfiler(sampleIntervalMs: number): MaybeProfiler | null {
   try {
     return new globalWithProfiler.Profiler({
       sampleInterval: Math.max(10, Math.round(sampleIntervalMs * 1000)),
-      maxBufferSize: 60_000,
+      maxBufferSize: Math.max(10_000, Math.floor(maxBufferSize)),
     });
   } catch {
     return null;
@@ -213,13 +280,50 @@ function getProfilerCapability(): ProfilerCapability {
   };
 }
 
+function startLongTaskObserver(): {
+  disconnect: () => void;
+  drain: () => LongTaskEntry[];
+  observerActive: boolean;
+} {
+  const entries: LongTaskEntry[] = [];
+  let obs: PerformanceObserver | null = null;
+  let observerActive = false;
+  try {
+    obs = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        entries.push({
+          startTimeMs: Number(e.startTime.toFixed(3)),
+          durationMs: Number(e.duration.toFixed(3)),
+          name: typeof e.name === "string" && e.name.length > 0 ? e.name : "longtask",
+        });
+      }
+    });
+    obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+    observerActive = true;
+  } catch {
+    obs = null;
+  }
+  return {
+    disconnect: () => {
+      obs?.disconnect();
+    },
+    drain: () => entries,
+    observerActive,
+  };
+}
+
 export async function captureAndSavePerformanceReport(
   options: PerfCaptureOptions,
 ): Promise<PerfCaptureResult> {
   const durationMs = options.durationMs ?? DEFAULT_DURATION_MS;
   const sampleIntervalMs = options.sampleIntervalMs ?? DEFAULT_SAMPLE_INTERVAL_MS;
+  const topBottomUp = options.topBottomUpEntries ?? DEFAULT_TOP_BOTTOM_UP_ENTRIES;
+  const hotStackCount = options.hotStackCount ?? DEFAULT_HOT_STACK_COUNT;
+  const maxProfilerBufferSize = options.maxProfilerBufferSize ?? DEFAULT_MAX_PROFILER_BUFFER;
+
   const profilerCapability = getProfilerCapability();
-  const profiler = maybeCreateProfiler(sampleIntervalMs);
+  const profiler = maybeCreateProfiler(sampleIntervalMs, maxProfilerBufferSize);
+  const longTaskObs = startLongTaskObserver();
   startPerfSpanCapture(durationMs + 250);
   const samples: PerfSamplePoint[] = [];
   const start = performance.now();
@@ -245,10 +349,20 @@ export async function captureAndSavePerformanceReport(
       break;
     }
   }
+  longTaskObs.disconnect();
+  const longTasks = longTaskObs.drain();
+  const longTaskObserverActive = longTaskObs.observerActive;
+
   const rawProfile = profiler !== null ? await profiler.stop().catch(() => null) : null;
-  const nativeBottomUp = rawProfile === null ? [] : extractBottomUpFromProfilerPayload(rawProfile);
-  const spanBottomUp = stopPerfSpanCapture(TOP_BOTTOM_UP_ENTRIES);
-  const bottomUpTop = nativeBottomUp.length > 0 ? nativeBottomUp : spanBottomUp;
+  const profilerRows =
+    rawProfile === null ? [] : parseProfilerSampleRows(rawProfile);
+  const nativeBottomUp =
+    profilerRows.length === 0 ? [] : estimateBottomUpFromSamples(profilerRows, topBottomUp);
+  const hotStacksTop =
+    profilerRows.length === 0 ? [] : hotStacksFromSampleRows(profilerRows, hotStackCount);
+  const spanBottomUp = stopPerfSpanCapture(topBottomUp);
+  const bottomUpTop =
+    nativeBottomUp.length > 0 ? nativeBottomUp : spanBottomUp;
   const fpsSeries = samples.map((s) => s.fps);
   const frameSeries = samples.map((s) => s.frameMs);
   const memorySeries = samples
@@ -264,6 +378,20 @@ export async function captureAndSavePerformanceReport(
     memoryMbPeak:
       memorySeries.length > 0 ? Number(Math.max(...memorySeries).toFixed(2)) : null,
   };
+
+  const nativePresent = nativeBottomUp.length > 0;
+  const instrumentedPresent = spanBottomUp.length > 0;
+  let samplingMode: string;
+  if (nativePresent && instrumentedPresent) {
+    samplingMode = "js-self-profiling+instrumented";
+  } else if (nativePresent) {
+    samplingMode = "js-self-profiling";
+  } else if (instrumentedPresent) {
+    samplingMode = "instrumented-bottom-up";
+  } else {
+    samplingMode = "frame-metrics-fallback";
+  }
+
   const report = {
     meta: {
       createdAtIso: new Date().toISOString(),
@@ -274,23 +402,39 @@ export async function captureAndSavePerformanceReport(
       worldName: options.worldName,
       worldUuid: options.worldUuid,
       networkRole: options.networkRole,
+      productionBundle: import.meta.env.PROD,
+      gpuSpikeHint:
+        "Chrome DevTools → Performance: enable GPU track + Frame stats to see whether spikes are main-thread vs GPU queue.",
+      viewport: {
+        cssWidth: typeof window !== "undefined" ? window.innerWidth : null,
+        cssHeight: typeof window !== "undefined" ? window.innerHeight : null,
+        devicePixelRatio:
+          typeof window !== "undefined" && typeof window.devicePixelRatio === "number"
+            ? window.devicePixelRatio
+            : null,
+      },
+      worldSnapshot: options.worldSnapshot ?? null,
     },
     capture: {
       durationMs,
       sampleIntervalMs,
+      topBottomUpEntries: topBottomUp,
+      hotStackCount,
+      maxProfilerBufferSize,
       bottomUpAvailable: bottomUpTop.length > 0,
-      samplingMode:
-        nativeBottomUp.length > 0
-          ? "js-self-profiling"
-          : spanBottomUp.length > 0
-            ? "instrumented-bottom-up"
-            : "frame-metrics-fallback",
+      samplingMode,
       profilerCapability,
+      longTaskObserverActive,
     },
     summary,
     bottomUpTop,
+    bottomUpNative: nativeBottomUp,
+    bottomUpInstrumented: spanBottomUp,
+    hotStacksTop,
+    longTasks,
     samples,
   };
+
   const filename = buildPerfReportFilename();
   const exported = await exportPerfReportJson(filename, report);
   return {

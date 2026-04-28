@@ -26,6 +26,8 @@ import {
   writeChestPersistedV2ToView,
   type ChestPersistedChunk,
 } from "../../world/chest/chestPersisted";
+import type { SpawnerPersistedChunk } from "../../world/spawner/spawnerPersisted";
+import type { SignPersistedChunk } from "../../world/sign/signPersisted";
 
 const LE = true;
 
@@ -46,6 +48,8 @@ const FURNACE_SNAPSHOT_TYPE_BYTE = 0x0e;
 const CHEST_SNAPSHOT_TYPE_BYTE = 0x0f;
 const WORLD_MODE_SURVIVAL_BYTE = 0;
 const WORLD_MODE_CREATIVE_BYTE = 1;
+const WORLD_GEN_TYPE_NORMAL_BYTE = 0;
+const WORLD_GEN_TYPE_FLAT_BYTE = 1;
 
 /** Number of blocks per chunk (CHUNK_SIZE × CHUNK_SIZE). */
 const CHUNK_CELLS = CHUNK_SIZE * CHUNK_SIZE;
@@ -54,9 +58,11 @@ const CHUNK_BLOCK_BYTES = CHUNK_CELLS * 2;
 
 /** Trailing per-cell metadata (`Uint8` × cells) after furnace/chest tails; v10+. */
 const CHUNK_METADATA_MAGIC = 0x54_41_44_4d; // 'TADM' LE — per-cell flags (e.g. WORLDGEN_NO_COLLIDE)
+const CHUNK_SPAWNER_MAGIC = 0x57_50_53_53; // 'SSPW' LE
+const CHUNK_SIGN_MAGIC = 0x4e_47_53_53; // 'SSGN' LE
 
 /** Wire protocol version carried in handshake (this build). */
-export const WIRE_PROTOCOL_VERSION = 20;
+export const WIRE_PROTOCOL_VERSION = 21;
 /**
  * Oldest wire version this build still speaks. Bump when the binary layout breaks;
  * keep in sync with {@link WIRE_PROTOCOL_VERSION} when you drop old clients.
@@ -107,6 +113,8 @@ export type WorldSyncWirePayload = {
   gameMode: "survival" | "sandbox";
   /** Authoritative world cheat toggle; absent in legacy packets → `false`. */
   cheatsEnabled: boolean;
+  /** Authoritative world generation preset; absent in legacy packets → `"normal"`. */
+  worldGenType: "normal" | "flat";
 };
 
 export type ChunkDataWirePayload = {
@@ -119,6 +127,10 @@ export type ChunkDataWirePayload = {
   furnaces?: FurnacePersistedChunk[];
   /** Present when packet includes chest tile tail (v7). */
   chests?: ChestPersistedChunk[];
+  /** Present when packet includes spawner tile tail. */
+  spawners?: SpawnerPersistedChunk[];
+  /** Present when packet includes sign tile tail. */
+  signs?: SignPersistedChunk[];
   /** Present when packet includes per-cell metadata tail (v10); tree no-collision bits, etc. */
   metadata?: Uint8Array;
 };
@@ -318,14 +330,15 @@ export class BinarySerializer {
     };
   }
 
-  /** Serialize authoritative world metadata (seed + clock + game mode). */
+  /** Serialize authoritative world metadata (seed + clock + game mode + gen type). */
   public static serializeWorldSync(
     seed: number,
     worldTimeMs: number,
     gameMode: "survival" | "sandbox",
+    worldGenType: "normal" | "flat",
     cheatsEnabled: boolean,
   ): ArrayBuffer {
-    const buffer = new ArrayBuffer(1 + 4 + 8 + 1 + 1);
+    const buffer = new ArrayBuffer(1 + 4 + 8 + 1 + 1 + 1);
     const view = new DataView(buffer);
     view.setUint8(0, WORLD_SYNC_TYPE_BYTE);
     view.setUint32(1, seed >>> 0, LE);
@@ -335,6 +348,10 @@ export class BinarySerializer {
       gameMode === "sandbox" ? WORLD_MODE_CREATIVE_BYTE : WORLD_MODE_SURVIVAL_BYTE,
     );
     view.setUint8(14, cheatsEnabled ? 1 : 0);
+    view.setUint8(
+      15,
+      worldGenType === "flat" ? WORLD_GEN_TYPE_FLAT_BYTE : WORLD_GEN_TYPE_NORMAL_BYTE,
+    );
     return buffer;
   }
 
@@ -357,14 +374,19 @@ export class BinarySerializer {
     }
     let gameMode: "survival" | "sandbox" = "survival";
     let cheatsEnabled = false;
+    let worldGenType: "normal" | "flat" = "normal";
     if (buffer.byteLength >= 14) {
       gameMode =
         view.getUint8(13) === WORLD_MODE_CREATIVE_BYTE ? "sandbox" : "survival";
       if (buffer.byteLength >= 15) {
         cheatsEnabled = view.getUint8(14) !== 0;
       }
+      if (buffer.byteLength >= 16) {
+        worldGenType =
+          view.getUint8(15) === WORLD_GEN_TYPE_FLAT_BYTE ? "flat" : "normal";
+      }
     }
-    return { seed, worldTimeMs, gameMode, cheatsEnabled };
+    return { seed, worldTimeMs, gameMode, cheatsEnabled, worldGenType };
   }
 
   private static readonly FURNACE_LEGACY_ENTRY_BYTES = 38;
@@ -567,7 +589,9 @@ export class BinarySerializer {
     background: Uint16Array,
     furnaces?: readonly FurnacePersistedChunk[],
     chests?: readonly ChestPersistedChunk[],
+    spawners?: readonly SpawnerPersistedChunk[],
     metadata?: Uint8Array,
+    signs?: readonly SignPersistedChunk[],
   ): ArrayBuffer {
     if (blocks.length !== CHUNK_CELLS) {
       throw new Error(
@@ -596,6 +620,12 @@ export class BinarySerializer {
     }
     if (chests !== undefined && chests.length > 0) {
       outBuf = this.appendChestChunkTail(outBuf, chests);
+    }
+    if (spawners !== undefined && spawners.length > 0) {
+      outBuf = this.appendSpawnerChunkTail(outBuf, spawners);
+    }
+    if (signs !== undefined && signs.length > 0) {
+      outBuf = this.appendSignChunkTail(outBuf, signs);
     }
     if (metadata !== undefined) {
       if (metadata.length !== CHUNK_CELLS) {
@@ -636,6 +666,94 @@ export class BinarySerializer {
     const start = offset + 4;
     const bytes = new Uint8Array(view.buffer, start, CHUNK_CELLS).slice();
     return { bytes, endExclusive: start + CHUNK_CELLS };
+  }
+
+  private static appendSpawnerChunkTail(
+    base: ArrayBuffer,
+    spawners: readonly SpawnerPersistedChunk[],
+  ): ArrayBuffer {
+    const payload = textEnc.encode(JSON.stringify(spawners));
+    const out = new ArrayBuffer(base.byteLength + 4 + 4 + payload.byteLength);
+    new Uint8Array(out).set(new Uint8Array(base), 0);
+    const view = new DataView(out);
+    let o = base.byteLength;
+    view.setUint32(o, CHUNK_SPAWNER_MAGIC >>> 0, LE);
+    o += 4;
+    view.setUint32(o, payload.byteLength >>> 0, LE);
+    o += 4;
+    new Uint8Array(out, o, payload.byteLength).set(payload);
+    return out;
+  }
+
+  private static tryReadSpawnerChunkTail(
+    view: DataView,
+    offset: number,
+    byteLength: number,
+  ): { entries: SpawnerPersistedChunk[]; endExclusive: number } | undefined {
+    if (byteLength < offset + 8) {
+      return undefined;
+    }
+    if (view.getUint32(offset, LE) !== CHUNK_SPAWNER_MAGIC) {
+      return undefined;
+    }
+    const len = view.getUint32(offset + 4, LE);
+    const start = offset + 8;
+    const end = start + len;
+    if (end > byteLength) {
+      return undefined;
+    }
+    const parsed = JSON.parse(textDec.decode(new Uint8Array(view.buffer, start, len)));
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    const entries = parsed.filter(
+      (v): v is SpawnerPersistedChunk => v !== null && typeof v === "object",
+    );
+    return { entries, endExclusive: end };
+  }
+
+  private static appendSignChunkTail(
+    base: ArrayBuffer,
+    signs: readonly SignPersistedChunk[],
+  ): ArrayBuffer {
+    const payload = textEnc.encode(JSON.stringify(signs));
+    const out = new ArrayBuffer(base.byteLength + 4 + 4 + payload.byteLength);
+    new Uint8Array(out).set(new Uint8Array(base), 0);
+    const view = new DataView(out);
+    let o = base.byteLength;
+    view.setUint32(o, CHUNK_SIGN_MAGIC >>> 0, LE);
+    o += 4;
+    view.setUint32(o, payload.byteLength >>> 0, LE);
+    o += 4;
+    new Uint8Array(out, o, payload.byteLength).set(payload);
+    return out;
+  }
+
+  private static tryReadSignChunkTail(
+    view: DataView,
+    offset: number,
+    byteLength: number,
+  ): { entries: SignPersistedChunk[]; endExclusive: number } | undefined {
+    if (byteLength < offset + 8) {
+      return undefined;
+    }
+    if (view.getUint32(offset, LE) !== CHUNK_SIGN_MAGIC) {
+      return undefined;
+    }
+    const len = view.getUint32(offset + 4, LE);
+    const start = offset + 8;
+    const end = start + len;
+    if (end > byteLength) {
+      return undefined;
+    }
+    const parsed = JSON.parse(textDec.decode(new Uint8Array(view.buffer, start, len)));
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    const entries = parsed.filter(
+      (v): v is SignPersistedChunk => v !== null && typeof v === "object",
+    );
+    return { entries, endExclusive: end };
   }
 
   /** Single furnace cell at world coords (incremental sync). */
@@ -779,6 +897,18 @@ export class BinarySerializer {
         chests = ch.entries;
         off = ch.endExclusive;
       }
+      const sp = this.tryReadSpawnerChunkTail(view, off, buffer.byteLength);
+      let spawners: SpawnerPersistedChunk[] | undefined;
+      if (sp !== undefined) {
+        spawners = sp.entries;
+        off = sp.endExclusive;
+      }
+      const sg = this.tryReadSignChunkTail(view, off, buffer.byteLength);
+      let signs: SignPersistedChunk[] | undefined;
+      if (sg !== undefined) {
+        signs = sg.entries;
+        off = sg.endExclusive;
+      }
       const meta = this.tryReadChunkMetadataTail(view, off, buffer.byteLength);
       let metadata: Uint8Array | undefined;
       if (meta !== undefined) {
@@ -787,6 +917,8 @@ export class BinarySerializer {
       if (
         furnaces !== undefined ||
         chests !== undefined ||
+        spawners !== undefined ||
+        signs !== undefined ||
         metadata !== undefined
       ) {
         return {
@@ -796,6 +928,8 @@ export class BinarySerializer {
           background,
           furnaces,
           chests,
+          spawners,
+          signs,
           metadata,
         };
       }

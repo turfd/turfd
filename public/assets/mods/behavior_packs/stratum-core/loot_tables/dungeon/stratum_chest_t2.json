@@ -1,0 +1,47 @@
+{
+  "format_version": "1.0.0",
+  "table_id": "stratum:chest_t2",
+  "table": {
+    "roll": "one_of",
+    "picksMin": 4,
+    "picksMax": 6,
+    "entries": [
+      {
+        "itemKey": "stratum:gold_ingot",
+        "countMin": 2,
+        "countMax": 6,
+        "chance": 0.62
+      },
+      {
+        "itemKey": "stratum:iron_ore",
+        "countMin": 3,
+        "countMax": 8,
+        "chance": 0.72
+      },
+      {
+        "itemKey": "stratum:diamond",
+        "countMin": 1,
+        "countMax": 3,
+        "chance": 0.24
+      },
+      {
+        "itemKey": "stratum:lapis",
+        "countMin": 8,
+        "countMax": 20,
+        "chance": 0.55
+      },
+      {
+        "itemKey": "stratum:stone_pickaxe",
+        "countMin": 1,
+        "countMax": 1,
+        "chance": 0.18
+      },
+      {
+        "itemKey": "stratum:bread",
+        "countMin": 1,
+        "countMax": 3,
+        "chance": 0.2
+      }
+    ]
+  }
+}

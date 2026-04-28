@@ -44,6 +44,7 @@ import type { Chunk } from "../../world/chunk/Chunk";
 import { chunkToWorldOrigin, localIndex } from "../../world/chunk/ChunkCoord";
 import type { AtlasLoader } from "../AtlasLoader";
 import type { BlockIdWorldSampler } from "./TileDrawBatch";
+import { assignMeshGeometryPreferReuse } from "./meshGeometryReuse";
 
 const AIR_ID = 0;
 
@@ -650,6 +651,5 @@ export function updateLeafDecorationMesh(
   opts: LeafDecorationBuildOptions,
 ): void {
   const { geometry } = buildLeafDecorationGeometry(chunk, registry, atlas, opts);
-  mesh.geometry.destroy();
-  mesh.geometry = geometry as unknown as typeof mesh.geometry;
+  assignMeshGeometryPreferReuse(mesh, geometry);
 }

@@ -1,4 +1,3 @@
-import type { ItemId } from "../core/itemDefinition";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { ItemRegistry } from "../items/ItemRegistry";
 import type { RecipeRegistry } from "../world/RecipeRegistry";
@@ -130,31 +129,39 @@ export async function loadBehaviorPackBlocks(
       return { file, def: parseBlockJson(raw) };
     }),
   );
-  parsed.sort((a, b) => a.def.numericId - b.def.numericId);
+  parsed.sort((a, b) => a.def.identifier.localeCompare(b.def.identifier));
   let loaded = 0;
   for (const { file, def } of parsed) {
-    registry.registerInOrder(def);
+    if (registry.isRegistered(def.identifier)) {
+      console.warn(
+        `[behavior-pack] overriding block '${def.identifier}' from ${file} (last definition wins)`,
+      );
+    }
+    registry.register(def);
     loaded++;
     progress?.(loaded, total, file);
   }
 }
 
-/**
- * Register standalone items from JSON with explicit `stratum:numeric_id`, contiguous after existing ids
- * (e.g. block-items using the same ids as their blocks).
- */
-export function registerParsedItemsInOrder(
+/** Register standalone items from JSON; runtime ids are assigned by {@link ItemRegistry}. */
+export function registerParsedItems(
   registry: BlockRegistry,
   itemRegistry: ItemRegistry,
   parsed: readonly ParsedItemDefinition[],
 ): void {
-  const sorted = [...parsed].sort((a, b) => a.numericId - b.numericId);
-  let expected = itemRegistry.maxRegisteredNumericId() + 1;
+  const sorted = [...parsed].sort((a, b) => a.identifier.localeCompare(b.identifier));
+  const seen = new Map<string, number>();
   for (const def of sorted) {
-    if (def.numericId !== expected) {
-      throw new Error(
-        `Item '${def.identifier}': stratum:numeric_id is ${def.numericId}, expected ${expected} (must extend contiguously after block-items). ` +
-          `If expected is too low, the behavior pack manifest may be missing newer blocks (e.g. bed_head, granite) or the deploy is stale.`,
+    const seenCount = seen.get(def.identifier) ?? 0;
+    if (seenCount > 0) {
+      console.warn(
+        `[behavior-pack] duplicate item '${def.identifier}' in load set (occurrence ${seenCount + 1}); last definition wins`,
+      );
+    }
+    seen.set(def.identifier, seenCount + 1);
+    if (itemRegistry.getByKey(def.identifier) !== undefined) {
+      console.warn(
+        `[behavior-pack] overriding item '${def.identifier}' (last definition wins)`,
       );
     }
     let placesBlockId: number | undefined;
@@ -163,7 +170,6 @@ export function registerParsedItemsInOrder(
     }
     itemRegistry.register({
       key: def.identifier,
-      id: def.numericId as ItemId,
       textureName: def.textureKey,
       displayName: def.displayName,
       maxStack: def.maxStack,
@@ -178,7 +184,6 @@ export function registerParsedItemsInOrder(
       eatTemporaryDurationSec: def.eatTemporaryDurationSec,
       inventoryTooltip: def.inventoryTooltip,
     });
-    expected += 1;
   }
 }
 
@@ -202,7 +207,7 @@ export async function loadBehaviorPackItems(
     loaded++;
     progress?.(loaded, total, file);
   }
-  registerParsedItemsInOrder(registry, itemRegistry, parsed);
+  registerParsedItems(registry, itemRegistry, parsed);
 }
 
 export async function loadBehaviorPackRecipes(

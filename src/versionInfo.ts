@@ -12,7 +12,10 @@ export type StratumBuildInfo = {
   buildId: string;
   wireProtocol: number;
   minWireProtocol: number;
+  /** Vite `mode` string (`development`, `production`, …). */
   mode: string;
+  /** True when built with `vite build` / `import.meta.env.PROD`. */
+  production: boolean;
 };
 
 export function getStratumBuildInfo(): StratumBuildInfo {
@@ -22,11 +25,13 @@ export function getStratumBuildInfo(): StratumBuildInfo {
     wireProtocol: WIRE_PROTOCOL_VERSION,
     minWireProtocol: MIN_WIRE_PROTOCOL_VERSION,
     mode: import.meta.env.MODE,
+    production: import.meta.env.PROD,
   };
 }
 
 /** One line for chat / DevTools. */
 export function formatStratumBuildLine(): string {
   const b = getStratumBuildInfo();
-  return `Stratum ${b.appVersion} · build ${b.buildId} · wire ${b.wireProtocol} (accepts ${b.minWireProtocol}–${b.wireProtocol}) · ${b.mode}`;
+  const prod = b.production ? "prod" : "dev";
+  return `Stratum ${b.appVersion} · build ${b.buildId} · wire ${b.wireProtocol} (accepts ${b.minWireProtocol}–${b.wireProtocol}) · ${b.mode} (${prod})`;
 }

@@ -59,9 +59,20 @@ const furnaceEntitySchema = z
   })
   .strict();
 
+const spawnerEntitySchema = z
+  .object({
+    type: z.literal("spawner"),
+    x: z.number().int(),
+    y: z.number().int(),
+    state: z.unknown(),
+  })
+  .strict();
+
 const modernTileEntitiesSchema = z
   .object({
-    entities: z.array(z.union([containerEntitySchema, furnaceEntitySchema])).default([]),
+    entities: z
+      .array(z.union([containerEntitySchema, furnaceEntitySchema, spawnerEntitySchema]))
+      .default([]),
   })
   .strip();
 
@@ -123,7 +134,11 @@ const structureSchema = z
 
 export type StructureContainerEntity = z.infer<typeof containerEntitySchema>;
 export type StructureFurnaceEntity = z.infer<typeof furnaceEntitySchema>;
-export type StructureEntity = StructureContainerEntity | StructureFurnaceEntity;
+export type StructureSpawnerEntity = z.infer<typeof spawnerEntitySchema>;
+export type StructureEntity =
+  | StructureContainerEntity
+  | StructureFurnaceEntity
+  | StructureSpawnerEntity;
 
 export type ParsedStructure = {
   format: typeof STRUCTURE_FORMAT;

@@ -52,6 +52,7 @@
     "redstone_ore": "assets/mods/resource_packs/stratum-core/textures/tiles/redstone_ore.png",
     "lapis_ore": "assets/mods/resource_packs/stratum-core/textures/tiles/lapis_ore.png",
     "short_grass": "assets/mods/resource_packs/stratum-core/textures/tiles/short_grass.png",
+    "spawner": "assets/mods/resource_packs/stratum-core/textures/tiles/spawner.png",
     "tall_grass_bottom": "assets/mods/resource_packs/stratum-core/textures/tiles/tall_grass_bottom.png",
     "tall_grass_top": "assets/mods/resource_packs/stratum-core/textures/tiles/tall_grass_top.png",
     "dandelion": "assets/mods/resource_packs/stratum-core/textures/tiles/dandelion.png",
@@ -125,6 +126,9 @@
     "painting_arcade": "assets/mods/resource_packs/stratum-core/textures/painting/arcade.png",
     "painting_moonlight": "assets/mods/resource_packs/stratum-core/textures/painting/moonlight.png",
     "painting_easel": "assets/mods/resource_packs/stratum-core/textures/painting/easel.png",
-    "ladder": "assets/mods/resource_packs/stratum-core/textures/tiles/ladder.png"
+    "ladder": "assets/mods/resource_packs/stratum-core/textures/tiles/ladder.png",
+    "oak_sign": "assets/mods/resource_packs/stratum-core/textures/tiles/oak_sign.png",
+    "spruce_sign": "assets/mods/resource_packs/stratum-core/textures/tiles/spruce_sign.png",
+    "birch_sign": "assets/mods/resource_packs/stratum-core/textures/tiles/birch_sign.png"
   }
 }

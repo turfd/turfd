@@ -7,9 +7,11 @@ import {
   type BlockUpdateWirePayload,
 } from "./BinarySerializer";
 import type { WorkshopModRef } from "../../persistence/IndexedDBStore";
-import type { WorldGameMode } from "../../core/types";
+import type { WorldGameMode, WorldGenType } from "../../core/types";
 import type { FurnacePersistedChunk } from "../../world/furnace/furnacePersisted";
 import type { ChestPersistedChunk } from "../../world/chest/chestPersisted";
+import type { SpawnerPersistedChunk } from "../../world/spawner/spawnerPersisted";
+import type { SignPersistedChunk } from "../../world/sign/signPersisted";
 
 /** Message type IDs for the binary network protocol (first byte of every packet). */
 export enum MessageType {
@@ -128,6 +130,10 @@ export type ChunkDataMsg = {
   furnaces?: FurnacePersistedChunk[];
   /** Chest anchors in chunk; omitted when absent on wire. */
   chests?: ChestPersistedChunk[];
+  /** Spawner tiles in chunk; omitted when absent on wire. */
+  spawners?: SpawnerPersistedChunk[];
+  /** Sign tiles in chunk; omitted when absent on wire. */
+  signs?: SignPersistedChunk[];
   /** Per-cell flags (e.g. tree no-collision); v10+ wire tail; omitted → client zeros metadata. */
   metadata?: Uint8Array;
 };
@@ -137,6 +143,8 @@ export type WorldSyncMsg = {
   seed: number;
   worldTimeMs: number;
   gameMode: WorldGameMode;
+  /** Authoritative world generation preset; absent on legacy peers ⇒ `"normal"`. */
+  worldGenType: WorldGenType;
   cheatsEnabled: boolean;
 };
 
@@ -166,9 +174,11 @@ export type TerrainBreakCommitMsg = {
   wy: number;
   /** 0 = foreground, 1 = background. */
   layer: 0 | 1;
-  expectedBlockId: number;
+  expectedBlockId?: number;
+  expectedBlockKey?: string;
   hotbarSlot: number;
-  heldItemId: number;
+  heldItemId?: number;
+  heldItemKey?: string;
 };
 
 export type TerrainDoorToggleMsg = {
@@ -183,7 +193,8 @@ export type TerrainPlaceMsg = {
   wx: number;
   wy: number;
   hotbarSlot: number;
-  placesBlockId: number;
+  placesBlockId?: number;
+  placesBlockKey?: string;
   aux: number;
 };
 
@@ -410,6 +421,9 @@ export type EntitySpawnMsg = {
   y: number;
   /** Dye ordinal 0–15; absent on legacy packets (treated as white). */
   woolColor?: number;
+  /** Optional spawner-origin visual marker coordinates (block space). */
+  spawnerFxWx?: number;
+  spawnerFxWy?: number;
 };
 
 export type EntityDespawnMsg = {
@@ -765,7 +779,9 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         bg,
         msg.furnaces,
         msg.chests,
+        msg.spawners,
         msg.metadata,
+        msg.signs,
       );
     }
 
@@ -861,7 +877,8 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
 
     case MessageType.ENTITY_SPAWN: {
       const wc = msg.woolColor !== undefined ? msg.woolColor & 0xff : 0;
-      const buf = new ArrayBuffer(24);
+      const hasSpawnerFx = msg.spawnerFxWx !== undefined && msg.spawnerFxWy !== undefined;
+      const buf = new ArrayBuffer(hasSpawnerFx ? 32 : 24);
       const v = new DataView(buf);
       v.setUint8(0, MessageType.ENTITY_SPAWN);
       v.setUint32(1, msg.entityId, LE);
@@ -869,6 +886,10 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
       v.setFloat64(7, msg.x, LE);
       v.setFloat64(15, msg.y, LE);
       v.setUint8(23, wc);
+      if (hasSpawnerFx) {
+        v.setInt32(24, msg.spawnerFxWx as number, LE);
+        v.setInt32(28, msg.spawnerFxWy as number, LE);
+      }
       return buf;
     }
 
@@ -970,6 +991,7 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         msg.seed,
         msg.worldTimeMs,
         msg.gameMode,
+        msg.worldGenType,
         msg.cheatsEnabled,
       );
     }
@@ -1046,15 +1068,24 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
     }
 
     case MessageType.TERRAIN_BREAK_COMMIT: {
-      const buf = new ArrayBuffer(16);
+      const expectedB = textEnc.encode(msg.expectedBlockKey ?? "");
+      const heldB = textEnc.encode(msg.heldItemKey ?? "");
+      const buf = new ArrayBuffer(16 + 2 + expectedB.length + 2 + heldB.length);
       const v = new DataView(buf);
       v.setUint8(0, MessageType.TERRAIN_BREAK_COMMIT);
       v.setInt32(1, msg.wx, LE);
       v.setInt32(5, msg.wy, LE);
       v.setUint8(9, msg.layer & 1);
-      v.setUint16(10, msg.expectedBlockId & 0xffff, LE);
+      v.setUint16(10, (msg.expectedBlockId ?? 0) & 0xffff, LE);
       v.setUint8(12, msg.hotbarSlot & 0xff);
-      v.setUint16(13, msg.heldItemId & 0xffff, LE);
+      v.setUint16(13, (msg.heldItemId ?? 0) & 0xffff, LE);
+      v.setUint16(15, expectedB.length, LE);
+      let o = 17;
+      new Uint8Array(buf, o, expectedB.length).set(expectedB);
+      o += expectedB.length;
+      v.setUint16(o, heldB.length, LE);
+      o += 2;
+      new Uint8Array(buf, o, heldB.length).set(heldB);
       return buf;
     }
 
@@ -1068,15 +1099,18 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
     }
 
     case MessageType.TERRAIN_PLACE: {
-      const buf = new ArrayBuffer(16);
+      const keyB = textEnc.encode(msg.placesBlockKey ?? "");
+      const buf = new ArrayBuffer(16 + 2 + keyB.length);
       const v = new DataView(buf);
       v.setUint8(0, MessageType.TERRAIN_PLACE);
       v.setUint8(1, msg.subtype & 0xff);
       v.setInt32(2, msg.wx, LE);
       v.setInt32(6, msg.wy, LE);
       v.setUint8(10, msg.hotbarSlot & 0xff);
-      v.setUint16(11, msg.placesBlockId & 0xffff, LE);
+      v.setUint16(11, (msg.placesBlockId ?? 0) & 0xffff, LE);
       v.setUint16(13, msg.aux & 0xffff, LE);
+      v.setUint16(15, keyB.length, LE);
+      new Uint8Array(buf, 17, keyB.length).set(keyB);
       return buf;
     }
 
@@ -1388,6 +1422,12 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       if (payload.chests !== undefined) {
         out.chests = payload.chests;
       }
+      if (payload.spawners !== undefined) {
+        out.spawners = payload.spawners;
+      }
+      if (payload.signs !== undefined) {
+        out.signs = payload.signs;
+      }
       if (payload.metadata !== undefined) {
         out.metadata = payload.metadata;
       }
@@ -1542,6 +1582,9 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         x: v.getFloat64(7, LE),
         y: v.getFloat64(15, LE),
         woolColor,
+        ...(v.byteLength >= 32
+          ? { spawnerFxWx: v.getInt32(24, LE), spawnerFxWy: v.getInt32(28, LE) }
+          : {}),
       };
     }
 
@@ -1659,6 +1702,7 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         seed: payload.seed,
         worldTimeMs: payload.worldTimeMs,
         gameMode: payload.gameMode,
+        worldGenType: payload.worldGenType,
         cheatsEnabled: payload.cheatsEnabled,
       };
     }
@@ -1727,14 +1771,33 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       if (v.byteLength < 16) {
         throw new Error("TERRAIN_BREAK_COMMIT: buffer too short");
       }
+      let expectedBlockKey: string | undefined;
+      let heldItemKey: string | undefined;
+      if (v.byteLength >= 18) {
+        const expectedLen = v.getUint16(15, LE);
+        let o = 17;
+        if (o + expectedLen <= v.byteLength) {
+          expectedBlockKey = textDec.decode(new Uint8Array(buf, o, expectedLen));
+          o += expectedLen;
+          if (o + 2 <= v.byteLength) {
+            const heldLen = v.getUint16(o, LE);
+            o += 2;
+            if (o + heldLen <= v.byteLength) {
+              heldItemKey = textDec.decode(new Uint8Array(buf, o, heldLen));
+            }
+          }
+        }
+      }
       return {
         type: MessageType.TERRAIN_BREAK_COMMIT,
         wx: v.getInt32(1, LE),
         wy: v.getInt32(5, LE),
         layer: v.getUint8(9) === 1 ? 1 : 0,
         expectedBlockId: v.getUint16(10, LE),
+        ...(expectedBlockKey !== undefined ? { expectedBlockKey } : {}),
         hotbarSlot: v.getUint8(12),
         heldItemId: v.getUint16(13, LE),
+        ...(heldItemKey !== undefined ? { heldItemKey } : {}),
       };
     }
 
@@ -1753,6 +1816,13 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
       if (v.byteLength < 16) {
         throw new Error("TERRAIN_PLACE: buffer too short");
       }
+      let placesBlockKey: string | undefined;
+      if (v.byteLength >= 18) {
+        const keyLen = v.getUint16(15, LE);
+        if (17 + keyLen <= v.byteLength) {
+          placesBlockKey = textDec.decode(new Uint8Array(buf, 17, keyLen));
+        }
+      }
       return {
         type: MessageType.TERRAIN_PLACE,
         subtype: v.getUint8(1),
@@ -1760,6 +1830,7 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         wy: v.getInt32(6, LE),
         hotbarSlot: v.getUint8(10),
         placesBlockId: v.getUint16(11, LE),
+        ...(placesBlockKey !== undefined ? { placesBlockKey } : {}),
         aux: v.getUint16(13, LE),
       };
     }

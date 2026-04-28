@@ -21,7 +21,14 @@ import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
 import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
 import { injectSettingsSharedStyles } from "./settingsSharedStyles";
 import { getSkipIntro, setSkipIntro } from "./uiPrefs";
-import { getVideoPrefs, setVideoPrefs, type Tonemapper } from "./videoPrefs";
+import { SIMULATION_DISTANCE_CHUNKS } from "../../core/constants";
+import {
+  getVideoPrefs,
+  setVideoPrefs,
+  VIDEO_RENDER_SCALE_MIN,
+  VIDEO_VIEW_DISTANCE_MIN,
+  type Tonemapper,
+} from "./videoPrefs";
 
 function applyStoredVolumesToEngine(audio: AudioEngine): void {
   audio.setMasterVolume(readVolumeStored(VOL_KEYS.master, 80) / 100);
@@ -408,7 +415,7 @@ export async function mountSettingsPanel(
   });
   panelPacks.appendChild(texBtn);
 
-  // --- Video (tonemapper, bloom) ---
+  // --- Video (tonemapper) ---
   const videoTitle = document.createElement("div");
   videoTitle.className = "st-settings-section";
   videoTitle.style.marginTop = "0";
@@ -453,29 +460,73 @@ export async function mountSettingsPanel(
     panelVideo.appendChild(row);
   }
 
-  // Bloom
+  // Internal albedo RT resolution (lower = less GPU fill; same on-screen layout).
+  {
+    const row = document.createElement("div");
+    row.className = "st-settings-row";
+    const lbl = document.createElement("label");
+    lbl.textContent = "Internal render scale";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(Math.round(VIDEO_RENDER_SCALE_MIN * 100));
+    slider.max = "100";
+    slider.step = "5";
+    const pct0 = Math.round(getVideoPrefs().renderScale * 100);
+    slider.value = String(pct0);
+    const val = document.createElement("span");
+    val.className = "st-settings-val";
+    val.textContent = `${pct0}%`;
+    slider.addEventListener("input", () => {
+      const pct = Number(slider.value);
+      val.textContent = `${pct}%`;
+      setVideoPrefs({ renderScale: pct / 100 });
+    });
+    row.appendChild(lbl);
+    row.appendChild(slider);
+    row.appendChild(val);
+    panelVideo.appendChild(row);
+  }
+
+  // Chunk mesh sync radius (smaller = fewer chunk meshes).
+  {
+    const row = document.createElement("div");
+    row.className = "st-settings-row";
+    const lbl = document.createElement("label");
+    lbl.textContent = "View distance (chunks)";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(VIDEO_VIEW_DISTANCE_MIN);
+    slider.max = String(SIMULATION_DISTANCE_CHUNKS);
+    slider.step = "1";
+    const vd0 = getVideoPrefs().viewDistanceChunks;
+    slider.value = String(vd0);
+    const val = document.createElement("span");
+    val.className = "st-settings-val";
+    val.textContent = String(vd0);
+    slider.addEventListener("input", () => {
+      const n = Number(slider.value);
+      val.textContent = String(n);
+      setVideoPrefs({ viewDistanceChunks: n });
+    });
+    row.appendChild(lbl);
+    row.appendChild(slider);
+    row.appendChild(val);
+    panelVideo.appendChild(row);
+  }
+
   {
     const row = document.createElement("div");
     row.className = "st-settings-toggle-row";
     const lbl = document.createElement("label");
-    lbl.textContent = "Bloom";
-    const toggleId = "st-toggle-bloom";
-    lbl.htmlFor = toggleId;
-    const toggle = document.createElement("span");
-    toggle.className = "st-toggle";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.id = toggleId;
-    input.checked = vpVideo.bloom;
-    input.addEventListener("change", () => {
-      setVideoPrefs({ bloom: input.checked });
+    lbl.textContent = "Lighting bloom";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = getVideoPrefs().bloomEnabled;
+    cb.addEventListener("change", () => {
+      setVideoPrefs({ bloomEnabled: cb.checked });
     });
-    const track = document.createElement("span");
-    track.className = "st-toggle-track";
-    toggle.appendChild(input);
-    toggle.appendChild(track);
     row.appendChild(lbl);
-    row.appendChild(toggle);
+    row.appendChild(cb);
     panelVideo.appendChild(row);
   }
 
@@ -488,7 +539,7 @@ export async function mountSettingsPanel(
   const debugHint = document.createElement("p");
   debugHint.className = "st-settings-hint";
   debugHint.textContent =
-    "Capture a 30-second performance report with bottom-up timings for bug reports.";
+    "Capture a 30-second performance report with bottom-up timings for bug reports. For comparable numbers to shipped builds, run `npm run perf:preview` and capture from that session; JSON includes `meta.productionBundle` and a GPU-track hint. Compare spans such as RenderPipeline.renderWorldToAlbedo, RenderPipeline.compositeRender, LightingComposer.update.*, ChunkRenderer.syncChunks, and ChunkRenderer.updateDirtyChunk.";
   panelDebug.appendChild(debugHint);
   const startProfilerBtn = makeBtn("Start Profiler", "mm-btn", "mm-btn-secondary");
   const profilerStatus = document.createElement("div");

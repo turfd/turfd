@@ -36,8 +36,83 @@ export function computePlacedStairShape(
 
 const HALF = BLOCK_SIZE / 2;
 
+/** Which outer edge of a stair cell touches the orthogonally adjacent block (world +X = right). */
+export type StairOuterFace = "top" | "bottom" | "left" | "right";
+
+function merge1dIntervals(intervals: [number, number][]): [number, number][] {
+  if (intervals.length === 0) {
+    return [];
+  }
+  intervals.sort((a, b) => a[0]! - b[0]!);
+  const out: [number, number][] = [];
+  let cs = intervals[0]![0]!;
+  let ce = intervals[0]![1]!;
+  for (let k = 1; k < intervals.length; k++) {
+    const s = intervals[k]![0]!;
+    const e = intervals[k]![1]!;
+    if (s <= ce) {
+      ce = Math.max(ce, e);
+    } else {
+      out.push([cs, ce]);
+      cs = s;
+      ce = e;
+    }
+  }
+  out.push([cs, ce]);
+  return out;
+}
+
+/**
+ * Union of 1D spans along an outer face (parameter t runs 0→{@link BLOCK_SIZE} along that edge:
+ * top/bottom → x left→right; left/right → y top→bottom in cell pixel space, Pixi Y down).
+ * Used for fg-on-bg contact shadows so stairs do not cast a full-tile strip.
+ */
+export function stairSolidContactSpansOnFace(
+  shape: StairShape,
+  face: StairOuterFace,
+): readonly [number, number][] {
+  const b = BLOCK_SIZE;
+  const raw: [number, number][] = [];
+  for (const [rx, ry, rw, rh] of stairSolidRectsInCellPixels(shape)) {
+    switch (face) {
+      case "left":
+        if (rx === 0 && rw > 0) {
+          raw.push([ry, ry + rh]);
+        }
+        break;
+      case "right":
+        if (rx < b && rx + rw >= b) {
+          raw.push([ry, ry + rh]);
+        }
+        break;
+      case "top":
+        if (ry === 0 && rh > 0) {
+          raw.push([rx, rx + rw]);
+        }
+        break;
+      case "bottom":
+        if (ry < b && ry + rh >= b) {
+          raw.push([rx, rx + rw]);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  const merged = merge1dIntervals(raw);
+  return merged
+    .map(
+      ([s, e]): [number, number] => [
+        Math.max(0, Math.min(b, s)),
+        Math.max(0, Math.min(b, e)),
+      ],
+    )
+    .filter(([s, e]) => e > s);
+}
+
 /**
  * Two axis-aligned solid regions inside a block cell (Pixi Y down), matching mesh quads.
+ * Each tuple is `[originX, originY, width, height]` in cell pixels (see {@link getSolidAABBs}).
  */
 export function stairSolidRectsInCellPixels(shape: StairShape): readonly [
   readonly [number, number, number, number],

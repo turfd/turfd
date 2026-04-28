@@ -1,5 +1,6 @@
 /** Builds one batched {@link MeshGeometry} per chunk from block IDs + atlas UVs (no per-tile Graphics). */
 import { Mesh, MeshGeometry, Texture } from "pixi.js";
+import { assignMeshGeometryPreferReuse } from "./meshGeometryReuse";
 import {
   BLOCK_SIZE,
   CHUNK_SIZE,
@@ -12,10 +13,14 @@ import {
 } from "../../world/water/waterMetadata";
 import type { BlockDefinition } from "../../world/blocks/BlockDefinition";
 import type { BlockRegistry } from "../../world/blocks/BlockRegistry";
-import { getStairShape } from "../../world/blocks/stairMetadata";
+import {
+  getStairShape,
+  stairSolidContactSpansOnFace,
+  type StairOuterFace,
+} from "../../world/blocks/stairMetadata";
 import type { Chunk } from "../../world/chunk/Chunk";
 import { getBlock } from "../../world/chunk/Chunk";
-import { chunkToWorldOrigin, localIndex } from "../../world/chunk/ChunkCoord";
+import { chunkToWorldOrigin, localIndex, worldToLocalBlock } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
 import type { AtlasLoader } from "../AtlasLoader";
 import { chestVisualRole } from "../../world/chest/chestVisual";
@@ -205,6 +210,8 @@ export type TileWindSway = {
   maxPx: number;
   /** `sin` amplitude multiplier for bottom edge of this quad (0–1). */
   bottomWaveMul: number;
+  /** Relative displacement gain for bottom edge (default 0.5; 1 for rigid seams like sugar cane). */
+  bottomEdgeRel: number;
   /** `sin` amplitude multiplier for top edge of this quad (0–1). */
   topWaveMul: number;
   /** Phase tier for BL/BR (`seam` matches the cell below’s top edge). */
@@ -356,6 +363,11 @@ function buildGeometryFromCells(
   opts?: TileMeshBuildOptions,
   /** When false, water stays in the main mesh (background layer; no entity overlap). */
   splitWaterOverlay = true,
+  /**
+   * When true, `cells` is the back-wall layer: skip quads where same-cell foreground
+   * {@link BlockRegistry#foregroundOccludesBackgroundWall} (saves overdraw vs fg mesh).
+   */
+  cullBackgroundBehindOpaqueFg = false,
 ): BuiltTileGeometry {
   const chunkOrigin = chunkToWorldOrigin(chunk.coord);
   const sugarCaneBlockId = registry.isRegistered("stratum:sugar_cane")
@@ -391,6 +403,12 @@ function buildGeometryFromCells(
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       const id = cells[localIndex(lx, ly)]!;
       if (id === AIR_ID) {
+        continue;
+      }
+      if (
+        cullBackgroundBehindOpaqueFg &&
+        registry.foregroundOccludesBackgroundWall(chunk.blocks[localIndex(lx, ly)]!)
+      ) {
         continue;
       }
       const def = registry.getById(id);
@@ -465,6 +483,12 @@ function buildGeometryFromCells(
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       const id = cells[localIndex(lx, ly)]!;
       if (id === AIR_ID) {
+        continue;
+      }
+      if (
+        cullBackgroundBehindOpaqueFg &&
+        registry.foregroundOccludesBackgroundWall(chunk.blocks[localIndex(lx, ly)]!)
+      ) {
         continue;
       }
 
@@ -902,6 +926,7 @@ function buildGeometryFromCells(
           maxPx: maxWind,
           bottomWaveMul:
             sugarRange !== null ? sugarCaneEdgeSwayMul(worldY, sugarRange) : 0,
+          bottomEdgeRel: isSugarCane ? 1 : FOLIAGE_SWAY_BOTTOM_REL,
           topWaveMul: isSugarCane
             ? sugarCaneEdgeSwayMul(worldY + 1, sugarRange!)
             : def.tallGrass === "bottom"
@@ -914,7 +939,7 @@ function buildGeometryFromCells(
               ? "seam"
               : "crown",
           bodySwayWorldCenterX: chunkOrigin.wx * BLOCK_SIZE + px + b * 0.5,
-          bodySwayWorldBlockY: worldY,
+          bodySwayWorldBlockY: sugarRange?.baseWy ?? worldY,
         });
       } else {
         if (def.identifier === "stratum:water" && splitWaterOverlay) {
@@ -1077,11 +1102,12 @@ function buildGeometryFromCells(
             freqMul: windFreqMul(worldX, ay),
             maxPx: maxWind,
             bottomWaveMul,
+            bottomEdgeRel: isSugarCane ? 1 : FOLIAGE_SWAY_BOTTOM_REL,
             topWaveMul,
             bottomWaveTier,
             topWaveTier,
             bodySwayWorldCenterX: chunkOrigin.wx * BLOCK_SIZE + px + b * 0.5,
-            bodySwayWorldBlockY: worldY,
+            bodySwayWorldBlockY: sugarRange?.baseWy ?? worldY,
           });
         }
       }
@@ -1166,21 +1192,39 @@ function getFgShadowTexture(): Texture {
 
 /** Samples foreground blocks that cast back-wall contact shadows (chunk boundaries, loaded chunks only). */
 export type FgShadowSampler = {
-  castsFgContactShadowAt(wx: number, wy: number): boolean;
+  /**
+   * Solid span(s) on an outer face of the block at (wx,wy), in 0…{@link BLOCK_SIZE} along that edge
+   * (top/bottom → x; left/right → y, cell space, Pixi Y down). Empty = no shadow cast from that face.
+   */
+  contactShadowSpansOnFace(
+    wx: number,
+    wy: number,
+    face: StairOuterFace,
+  ): readonly [number, number][];
 };
+
+const FULL_BLOCK_FG_SHADOW_SPANS: readonly [number, number][] = [[0, BLOCK_SIZE]];
 
 export function createWorldFgShadowSampler(world: World): FgShadowSampler {
   const reg = world.getRegistry();
   return {
-    castsFgContactShadowAt(wx: number, wy: number): boolean {
+    contactShadowSpansOnFace(wx: number, wy: number, face: StairOuterFace): readonly [number, number][] {
       const chunk = world.getChunkAt(wx, wy);
       if (chunk === undefined) {
-        return false;
+        return [];
       }
-      const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-      const ly = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+      const { lx, ly } = worldToLocalBlock(wx, wy);
       const id = getBlock(chunk, lx, ly);
-      return reg.castsFgContactShadow(id);
+      if (!reg.castsFgContactShadow(id)) {
+        return [];
+      }
+      const def = reg.getById(id);
+      if (def.isStair !== true) {
+        return FULL_BLOCK_FG_SHADOW_SPANS;
+      }
+      const meta = chunk.metadata[localIndex(lx, ly)]!;
+      const shape = getStairShape(meta);
+      return stairSolidContactSpansOnFace(shape, face);
     },
   };
 }
@@ -1242,15 +1286,17 @@ function pushShadowQuad(
 function buildFgShadowGeometry(
   chunk: Chunk,
   sampler: FgShadowSampler,
+  registry: BlockRegistry,
 ): MeshGeometry {
   const backgrounds = chunk.background;
+  const blocks = chunk.blocks;
   const depth = Math.max(4, FG_ON_BG_SHADOW_DEPTH_PX);
   const origin = chunkToWorldOrigin(chunk.coord);
   const cellCount = CHUNK_SIZE * CHUNK_SIZE;
-  const wantTop = new Uint8Array(cellCount);
-  const wantBottom = new Uint8Array(cellCount);
-  const wantLeft = new Uint8Array(cellCount);
-  const wantRight = new Uint8Array(cellCount);
+  const topSpans: (readonly [number, number][] | undefined)[] = new Array(cellCount);
+  const bottomSpans: (readonly [number, number][] | undefined)[] = new Array(cellCount);
+  const leftSpans: (readonly [number, number][] | undefined)[] = new Array(cellCount);
+  const rightSpans: (readonly [number, number][] | undefined)[] = new Array(cellCount);
 
   for (let ly = 0; ly < CHUNK_SIZE; ly++) {
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -1258,12 +1304,15 @@ function buildFgShadowGeometry(
       if (backgrounds[i]! === AIR_ID) {
         continue;
       }
+      if (registry.foregroundOccludesBackgroundWall(blocks[i]!)) {
+        continue;
+      }
       const wx = origin.wx + lx;
       const wy = origin.wy + ly;
-      if (sampler.castsFgContactShadowAt(wx, wy + 1)) wantTop[i] = 1;
-      if (sampler.castsFgContactShadowAt(wx, wy - 1)) wantBottom[i] = 1;
-      if (sampler.castsFgContactShadowAt(wx - 1, wy)) wantLeft[i] = 1;
-      if (sampler.castsFgContactShadowAt(wx + 1, wy)) wantRight[i] = 1;
+      topSpans[i] = sampler.contactShadowSpansOnFace(wx, wy + 1, "bottom");
+      bottomSpans[i] = sampler.contactShadowSpansOnFace(wx, wy - 1, "top");
+      leftSpans[i] = sampler.contactShadowSpansOnFace(wx - 1, wy, "right");
+      rightSpans[i] = sampler.contactShadowSpansOnFace(wx + 1, wy, "left");
     }
   }
 
@@ -1274,10 +1323,25 @@ function buildFgShadowGeometry(
       if (backgrounds[i]! === AIR_ID) {
         continue;
       }
-      if (wantTop[i]) quadCount += 1;
-      if (wantBottom[i]) quadCount += 1;
-      if (wantLeft[i]) quadCount += 1;
-      if (wantRight[i]) quadCount += 1;
+      if (registry.foregroundOccludesBackgroundWall(blocks[i]!)) {
+        continue;
+      }
+      const top = topSpans[i];
+      const bottom = bottomSpans[i];
+      const left = leftSpans[i];
+      const right = rightSpans[i];
+      if (top !== undefined) {
+        quadCount += top.length;
+      }
+      if (bottom !== undefined) {
+        quadCount += bottom.length;
+      }
+      if (left !== undefined) {
+        quadCount += left.length;
+      }
+      if (right !== undefined) {
+        quadCount += right.length;
+      }
     }
   }
 
@@ -1305,96 +1369,111 @@ function buildFgShadowGeometry(
       if (backgrounds[i]! === AIR_ID) {
         continue;
       }
+      if (registry.foregroundOccludesBackgroundWall(blocks[i]!)) {
+        continue;
+      }
       const px = lx * BLOCK_SIZE;
       const py = -(ly + 1) * BLOCK_SIZE;
       const cellBottomY = py + BLOCK_SIZE;
 
-      if (wantTop[i]) {
-        const x0 = px;
-        const x1 = px + BLOCK_SIZE;
-        if (x1 > x0) {
-          const r = pushShadowQuad(
-            positions,
-            uvs,
-            indices,
-            pi,
-            ii,
-            vertBase,
-            0,
-            x0,
-            py,
-            x1,
-            py + depth,
-          );
-          pi = r.pi;
-          vertBase = r.vertBase;
-          ii += 6;
+      const top = topSpans[i];
+      if (top !== undefined) {
+        for (const [t0, t1] of top) {
+          const x0 = px + t0;
+          const x1 = px + t1;
+          if (x1 > x0) {
+            const r = pushShadowQuad(
+              positions,
+              uvs,
+              indices,
+              pi,
+              ii,
+              vertBase,
+              0,
+              x0,
+              py,
+              x1,
+              py + depth,
+            );
+            pi = r.pi;
+            vertBase = r.vertBase;
+            ii += 6;
+          }
         }
       }
-      if (wantBottom[i]) {
-        const x0 = px;
-        const x1 = px + BLOCK_SIZE;
-        if (x1 > x0) {
-          const r = pushShadowQuad(
-            positions,
-            uvs,
-            indices,
-            pi,
-            ii,
-            vertBase,
-            1,
-            x0,
-            cellBottomY - depth,
-            x1,
-            cellBottomY,
-          );
-          pi = r.pi;
-          vertBase = r.vertBase;
-          ii += 6;
+      const bottom = bottomSpans[i];
+      if (bottom !== undefined) {
+        for (const [t0, t1] of bottom) {
+          const x0 = px + t0;
+          const x1 = px + t1;
+          if (x1 > x0) {
+            const r = pushShadowQuad(
+              positions,
+              uvs,
+              indices,
+              pi,
+              ii,
+              vertBase,
+              1,
+              x0,
+              cellBottomY - depth,
+              x1,
+              cellBottomY,
+            );
+            pi = r.pi;
+            vertBase = r.vertBase;
+            ii += 6;
+          }
         }
       }
-      if (wantLeft[i]) {
-        const y0 = py;
-        const y1 = py + BLOCK_SIZE;
-        if (y1 > y0) {
-          const r = pushShadowQuad(
-            positions,
-            uvs,
-            indices,
-            pi,
-            ii,
-            vertBase,
-            2,
-            px,
-            y0,
-            px + depth,
-            y1,
-          );
-          pi = r.pi;
-          vertBase = r.vertBase;
-          ii += 6;
+      const left = leftSpans[i];
+      if (left !== undefined) {
+        for (const [t0, t1] of left) {
+          const y0 = py + t0;
+          const y1 = py + t1;
+          if (y1 > y0) {
+            const r = pushShadowQuad(
+              positions,
+              uvs,
+              indices,
+              pi,
+              ii,
+              vertBase,
+              2,
+              px,
+              y0,
+              px + depth,
+              y1,
+            );
+            pi = r.pi;
+            vertBase = r.vertBase;
+            ii += 6;
+          }
         }
       }
-      if (wantRight[i]) {
-        const y0 = py;
-        const y1 = py + BLOCK_SIZE;
-        if (y1 > y0) {
-          const r = pushShadowQuad(
-            positions,
-            uvs,
-            indices,
-            pi,
-            ii,
-            vertBase,
-            3,
-            px + BLOCK_SIZE - depth,
-            y0,
-            px + BLOCK_SIZE,
-            y1,
-          );
-          pi = r.pi;
-          vertBase = r.vertBase;
-          ii += 6;
+      const right = rightSpans[i];
+      if (right !== undefined) {
+        for (const [t0, t1] of right) {
+          const y0 = py + t0;
+          const y1 = py + t1;
+          if (y1 > y0) {
+            const r = pushShadowQuad(
+              positions,
+              uvs,
+              indices,
+              pi,
+              ii,
+              vertBase,
+              3,
+              px + BLOCK_SIZE - depth,
+              y0,
+              px + BLOCK_SIZE,
+              y1,
+            );
+            pi = r.pi;
+            vertBase = r.vertBase;
+            ii += 6;
+          }
         }
       }
     }
@@ -1411,8 +1490,9 @@ function buildFgShadowGeometry(
 export function buildFgShadowMesh(
   chunk: Chunk,
   sampler: FgShadowSampler,
+  registry: BlockRegistry,
 ): Mesh {
-  const geometry = buildFgShadowGeometry(chunk, sampler);
+  const geometry = buildFgShadowGeometry(chunk, sampler, registry);
   return new Mesh({
     geometry,
     texture: getFgShadowTexture(),
@@ -1424,10 +1504,10 @@ export function updateFgShadowMesh(
   mesh: Mesh,
   chunk: Chunk,
   sampler: FgShadowSampler,
+  registry: BlockRegistry,
 ): void {
-  const next = buildFgShadowGeometry(chunk, sampler);
-  mesh.geometry.destroy();
-  mesh.geometry = next;
+  const next = buildFgShadowGeometry(chunk, sampler, registry);
+  assignMeshGeometryPreferReuse(mesh, next);
 }
 
 export type ForegroundTileMeshBundle = {
@@ -1482,6 +1562,7 @@ export function buildBackgroundMesh(
     atlas,
     undefined,
     false,
+    true,
   );
   return new Mesh({
     geometry,
@@ -1509,10 +1590,8 @@ export function updateMesh(
     furnaceFires,
     waterSurfaces,
   } = buildGeometryFromCells(chunk, chunk.blocks, registry, atlas, opts);
-  mesh.geometry.destroy();
-  waterMesh.geometry.destroy();
-  mesh.geometry = geometry as unknown as typeof mesh.geometry;
-  waterMesh.geometry = waterOverlayGeometry as unknown as typeof waterMesh.geometry;
+  assignMeshGeometryPreferReuse(mesh, geometry);
+  assignMeshGeometryPreferReuse(waterMesh, waterOverlayGeometry);
   return { windSways, furnaceFires, waterSurfaces };
 }
 
@@ -1529,9 +1608,9 @@ export function updateBackgroundMesh(
     atlas,
     undefined,
     false,
+    true,
   );
-  mesh.geometry.destroy();
-  mesh.geometry = geometry as unknown as typeof mesh.geometry;
+  assignMeshGeometryPreferReuse(mesh, geometry);
 }
 
 function foliageHitboxesOverlap(
@@ -1652,13 +1731,13 @@ export function applyWindSwayToMesh(
               ),
             ),
           );
-    const dxBottomWind = Math.round(dxBottomWindRaw * FOLIAGE_SWAY_BOTTOM_REL);
+    const dxBottomWind = Math.round(dxBottomWindRaw * s.bottomEdgeRel);
     const extra = Math.round(extraSwayFromBodies(s, influences));
     /** Body: rooted ground edge = 0; else bottom gets half, top 2× that so crown : base ≈ 2 : 1. */
     const extraBodyBottom =
       s.bottomWaveTier === "ground"
         ? 0
-        : Math.round(extra * FOLIAGE_SWAY_BOTTOM_REL);
+        : Math.round(extra * s.bottomEdgeRel);
     const extraBodyTop =
       s.bottomWaveTier === "ground"
         ? Math.round(extra)

@@ -75,6 +75,11 @@ export interface BlockDefinitionBase {
    */
   castsFgContactShadow?: boolean;
   /**
+   * When true, back-wall mesh still emits a quad behind this foreground cell (thin/partial art).
+   * Omitted: inferred from stairs, doors, beds, tall grass, leaves, paintings, non-solid, `transparent`, `water`.
+   */
+  revealsBackgroundWall?: boolean;
+  /**
    * Pixels cropped from the top of the cell when drawing (0–15). Bottom of the quad stays
    * on the block’s lower edge so short plants don’t visually float above the ground.
    */
@@ -104,4 +109,12 @@ export interface BlockDefinitionBase {
   noBlockItem?: true;
   /** Painting block: multi-cell decoration placed on background walls. */
   isPainting?: true;
+  /** Spawner defaults used for newly placed spawner block entities. */
+  spawnerDefaults?: {
+    delay: number;
+    maxCount: number;
+    playerRange: number;
+    spawnRange: number;
+    spawnPotentials: readonly string[];
+  };
 }

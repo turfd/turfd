@@ -7,7 +7,7 @@ import type { Player } from "../entities/Player";
 import type { World } from "../world/World";
 import type { WorldModerationPersisted } from "../network/moderation/WorldModerationState";
 import type { WorldGameMode } from "../core/types";
-import { normalizeWorldGameMode } from "../core/types";
+import { normalizeWorldGameMode, normalizeWorldGenType } from "../core/types";
 import { ITEM_ID_LAYOUT_REVISION_CURRENT } from "../items/itemIdLayoutMigration";
 import {
   IndexedDBStore,
@@ -175,6 +175,8 @@ export class SaveGame {
       chunks,
       (cx, cy) => this.world.getFurnaceEntitiesForChunk(cx, cy),
       (cx, cy) => this.world.getChestEntitiesForChunk(cx, cy),
+      (cx, cy) => this.world.getSpawnerEntitiesForChunk(cx, cy),
+      (cx, cy) => this.world.getSignEntitiesForChunk(cx, cy),
     );
     for (const c of chunks) {
       c.persistDirty = false;
@@ -236,6 +238,9 @@ export class SaveGame {
       gameMode: normalizeWorldGameMode(
         this.getWorldGameMode?.() ?? existing?.gameMode,
       ),
+      worldGenType: normalizeWorldGenType(
+        this.world.getWorldGenType() ?? existing?.worldGenType,
+      ),
       enableCheats: this.getCheatsEnabled?.() ?? existing?.enableCheats ?? false,
       createdAt: existing?.createdAt ?? now,
       lastPlayedAt: now,
@@ -255,6 +260,7 @@ export class SaveGame {
       playerInventory: this.player.inventory.serialize(),
       playerArmor: this.player.inventory.serializeArmor(),
       blockIdPalette: this.world.getRegistry().buildIdentifierPalette(),
+      itemIdPalette: this.player.inventory.buildItemIdentifierPalette(),
       itemIdLayoutRevision: Math.max(
         existing?.itemIdLayoutRevision ?? 0,
         ITEM_ID_LAYOUT_REVISION_CURRENT,

@@ -6,6 +6,7 @@ import {
   WORLD_Y_MIN,
   WORLDGEN_NO_COLLIDE,
 } from "../../core/constants";
+import type { WorldGenType } from "../../core/types";
 import type { BlockRegistry } from "../blocks/BlockRegistry";
 import { chunkToWorldOrigin, localIndex } from "../chunk/ChunkCoord";
 import type { ChunkCoord } from "../chunk/ChunkCoord";
@@ -23,6 +24,14 @@ import {
 } from "./SeaLevelWaterFill";
 import type { ParsedStructure } from "../structure/structureSchema";
 import type { StructureFeatureEntry } from "../structure/StructureRegistry";
+
+/**
+ * Surface Y for `"flat"` worlds (grass row). Sits comfortably above
+ * {@link WATER_SEA_LEVEL_WY} so sea-level flood never touches the ground.
+ */
+const FLAT_WORLD_SURFACE_Y = 4;
+/** Number of dirt rows below the grass cap on flat worlds. */
+const FLAT_WORLD_DIRT_DEPTH = 3;
 export type GeneratedStructureEntity =
   | {
       type: "container";
@@ -36,7 +45,20 @@ export type GeneratedStructureEntity =
       wx: number;
       wy: number;
       state: unknown;
+    }
+  | {
+      type: "spawner";
+      wx: number;
+      wy: number;
+      state: unknown;
     };
+
+type StructurePlacementResolution = {
+  featureIndex: number;
+  structure: ParsedStructure;
+  originX: number;
+  originY: number;
+};
 
 // ---------------------------------------------------------------------------
 // Oak tree shapes (round-ish canopy)
@@ -141,6 +163,7 @@ const HORIZONTAL_NEIGHBOR_DX = [-1, 1] as const;
 
 export class WorldGenerator {
   private readonly blockRegistry: BlockRegistry;
+  private readonly genType: WorldGenType;
   private readonly terrain: TerrainNoise;
   private readonly caves: CaveGenerator;
   private readonly ores: OreVeins;
@@ -175,8 +198,9 @@ export class WorldGenerator {
     placement: StructureFeatureEntry["placement"];
   }> = [];
 
-  constructor(seed: number, registry: BlockRegistry) {
+  constructor(seed: number, registry: BlockRegistry, genType: WorldGenType = "normal") {
     this.blockRegistry = registry;
+    this.genType = genType;
     const root = new GeneratorContext(seed);
     this.terrain = new TerrainNoise(seed);
     this.caves = new CaveGenerator(root.fork(0xca_57));
@@ -223,11 +247,17 @@ export class WorldGenerator {
   }
 
   getSurfaceHeight(wx: number): number {
+    if (this.genType === "flat") {
+      return FLAT_WORLD_SURFACE_Y;
+    }
     return this.terrain.getSurfaceHeight(wx);
   }
 
   /** Same desert mask as surface sand/cacti (column `wx`). */
   isDesertColumn(wx: number): boolean {
+    if (this.genType === "flat") {
+      return false;
+    }
     return this.terrain.isDesert(wx);
   }
 
@@ -241,7 +271,7 @@ export class WorldGenerator {
 
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       const wx = origin.wx + lx;
-      const surfaceY = this.terrain.getSurfaceHeight(wx);
+      const surfaceY = this.getSurfaceHeight(wx);
 
       for (let ly = 0; ly < CHUNK_SIZE; ly++) {
         const wy = origin.wy + ly;
@@ -255,6 +285,12 @@ export class WorldGenerator {
 
   /** Trees, flowers, desert plants — run after water placement. */
   decorateChunkSurface(chunk: Chunk, originWx: number, originWy: number): void {
+    if (this.genType === "flat") {
+      // Flat worlds intentionally skip vegetation/trees for a clean superflat slate.
+      chunk.dirty = true;
+      chunk.renderDirty = true;
+      return;
+    }
     this.placeBackgroundTrees(chunk, originWx, originWy);
     this.decorateSurfaceVegetation(chunk, originWx, originWy);
     this.decorateWaterEdgeSugarCane(chunk, originWx, originWy);
@@ -332,7 +368,7 @@ export class WorldGenerator {
       maxCy: number;
     },
   ): void {
-    if (this.waterId === null) {
+    if (this.waterId === null || this.genType === "flat") {
       return;
     }
     applySeaLevelFloodWaterRegion(chunkMap, bounds, {
@@ -351,7 +387,7 @@ export class WorldGenerator {
   generateChunk(coord: ChunkCoord): Chunk {
     const chunk = this.generateChunkTerrainOnly(coord);
     const origin = chunkToWorldOrigin(coord);
-    if (this.waterId !== null) {
+    if (this.waterId !== null && this.genType !== "flat") {
       applySeaLevelFloodWater(chunk, origin.wx, origin.wy, {
         registry: this.blockRegistry,
         airId: this.airId,
@@ -365,13 +401,18 @@ export class WorldGenerator {
       });
     }
     this.decorateChunkSurface(chunk, origin.wx, origin.wy);
-    this.applyStructureFeatures(chunk, origin.wx, origin.wy);
+    if (this.genType !== "flat") {
+      this.applyStructureFeatures(chunk, origin.wx, origin.wy);
+    }
     return chunk;
   }
 
   private naturalBackdropId(wx: number, wy: number, surfaceY: number): number {
     if (wy > surfaceY) {
       return 0;
+    }
+    if (this.genType === "flat") {
+      return this.flatBlockId(wy, surfaceY);
     }
     const topsoilDepth = this.topsoilDepth(wx);
     if (wy > surfaceY - topsoilDepth) {
@@ -539,10 +580,10 @@ export class WorldGenerator {
     surfaceY: number,
     shape: TreeShape,
   ): void {
-    if (this.treeFootprintIntersectsWater(chunk, originWx, originWy, anchorWx)) {
+    if (this.treeFootprintIntersectsWater(anchorWx)) {
       return;
     }
-    const plantedY = this.resolvePlantedSurfaceY(chunk, originWx, originWy, anchorWx, surfaceY, shape);
+    const plantedY = this.resolvePlantedSurfaceY(anchorWx, surfaceY, shape);
     if (plantedY === null) {
       return;
     }
@@ -618,73 +659,14 @@ export class WorldGenerator {
    * Noise surface can sit above the real top soil when water filled the column above the bed
    * (trunk cells skip water → floating logs). Twin oaks use the lower of the two columns when both resolve.
    */
-  private resolvePlantedSurfaceY(
-    chunk: Chunk,
-    originWx: number,
-    originWy: number,
-    anchorWx: number,
-    nominalSurfaceY: number,
-    shape: TreeShape,
-  ): number | null {
-    const sy0 = this.resolveTreeSurfaceY(chunk, originWx, originWy, anchorWx, nominalSurfaceY);
-    if (sy0 === null) {
-      return null;
-    }
+  private resolvePlantedSurfaceY(anchorWx: number, nominalSurfaceY: number, shape: TreeShape): number {
+    const sy0 = nominalSurfaceY;
     const twinFork = shape.type === "oak" && shape.shape.kind === "twinFork";
     if (!twinFork) {
       return sy0;
     }
-    const sy1 = this.resolveTreeSurfaceY(chunk, originWx, originWy, anchorWx + 1, nominalSurfaceY);
-    return sy1 === null ? sy0 : Math.min(sy0, sy1);
-  }
-
-  /**
-   * Highest grass/sand in this chunk column whose cell above is air or surface decor (not water).
-   * Scans downward from near nominal surface height.
-   */
-  private resolveTreeSurfaceY(
-    chunk: Chunk,
-    originWx: number,
-    originWy: number,
-    wx: number,
-    nominalSurfaceY: number,
-  ): number | null {
-    const lx = wx - originWx;
-    // For out-of-bounds columns, assume terrain matches the noise height
-    // This allows trees near chunk edges to extend their canopies into neighboring chunks
-    if (lx < 0 || lx >= CHUNK_SIZE) {
-      return nominalSurfaceY;
-    }
-    const chunkWyLo = originWy;
-    const chunkWyHi = originWy + CHUNK_SIZE - 1;
-    const scanHi = Math.min(chunkWyHi, nominalSurfaceY + 8);
-    const scanLo = Math.max(chunkWyLo, nominalSurfaceY - 48);
-
-    for (let wy = scanHi; wy >= scanLo; wy--) {
-      const ly = wy - originWy;
-      const idx = localIndex(lx, ly);
-      const id = chunk.blocks[idx]!;
-      if (id !== this.grassId && id !== this.sandId) {
-        continue;
-      }
-      if (ly + 1 >= CHUNK_SIZE) {
-        return wy;
-      }
-      const aboveId = chunk.blocks[localIndex(lx, ly + 1)]!;
-      if (aboveId === this.airId || this.isSurfaceVegetationBlock(aboveId)) {
-        return wy;
-      }
-    }
-    return null;
-  }
-
-  private isSurfaceVegetationBlock(id: number): boolean {
-    return (
-      id === this.shortGrassId ||
-      id === this.tallGrassBottomId ||
-      id === this.dandelionId ||
-      id === this.poppyId
-    );
+    const sy1 = this.terrain.getSurfaceHeight(anchorWx + 1);
+    return Math.min(sy0, sy1);
   }
 
   // -------------------------------------------------------------------------
@@ -739,48 +721,19 @@ export class WorldGenerator {
    * Skip the whole tree if any in-chunk cell in a broad footprint (trunk + canopy + shoreline)
    * is water — avoids trunks through pools, roots on water, and floating crowns over lakes.
    */
-  private treeFootprintIntersectsWater(
-    chunk: Chunk,
-    originWx: number,
-    originWy: number,
-    anchorWx: number,
-  ): boolean {
+  private treeFootprintIntersectsWater(anchorWx: number): boolean {
     if (this.waterId === null) {
       return false;
     }
-    const wid = this.waterId;
     const padX = 12;
     let minSurf = this.terrain.getSurfaceHeight(anchorWx);
-    let maxSurf = minSurf;
     for (let wx = anchorWx - padX; wx <= anchorWx + padX; wx++) {
       const s = this.terrain.getSurfaceHeight(wx);
       if (s < minSurf) {
         minSurf = s;
       }
-      if (s > maxSurf) {
-        maxSurf = s;
-      }
-    }
-    const chunkWyLo = originWy;
-    const chunkWyHi = originWy + CHUNK_SIZE - 1;
-    const yStart = Math.max(
-      Math.min(minSurf - 6, WATER_SEA_LEVEL_WY),
-      chunkWyLo,
-    );
-    const yEnd = Math.min(maxSurf + 28, chunkWyHi);
-    if (yStart > yEnd) {
-      return false;
-    }
-    for (let wx = anchorWx - padX; wx <= anchorWx + padX; wx++) {
-      for (let wy = yStart; wy <= yEnd; wy++) {
-        const lx = wx - originWx;
-        const ly = wy - originWy;
-        if (lx < 0 || lx >= CHUNK_SIZE || ly < 0 || ly >= CHUNK_SIZE) {
-          continue;
-        }
-        if (chunk.blocks[localIndex(lx, ly)] === wid) {
-          return true;
-        }
+      if (s < WATER_SEA_LEVEL_WY && !this.terrain.isDesert(wx)) {
+        return true;
       }
     }
     return false;
@@ -996,6 +949,9 @@ export class WorldGenerator {
     if (wy > surfaceY) {
       return this.airId;
     }
+    if (this.genType === "flat") {
+      return this.flatBlockId(wy, surfaceY);
+    }
     const topsoilDepth = this.topsoilDepth(wx);
     if (wy > surfaceY - topsoilDepth) {
       return this.topsoilBlockId(wx, wy, surfaceY);
@@ -1022,89 +978,89 @@ export class WorldGenerator {
     return this.granite.applyToStoneFill(wx, wy, surfaceY, fill);
   }
 
+  /**
+   * Flat-world column profile: bedrock at {@link WORLD_Y_MIN}, stone, dirt, grass cap.
+   * Caller guarantees `wy <= surfaceY`.
+   */
+  private flatBlockId(wy: number, surfaceY: number): number {
+    if (wy === WORLD_Y_MIN) {
+      return this.bedrockId;
+    }
+    if (wy === surfaceY) {
+      return this.grassId;
+    }
+    if (wy >= surfaceY - FLAT_WORLD_DIRT_DEPTH) {
+      return this.dirtId;
+    }
+    return this.stoneId;
+  }
+
   private applyStructureFeatures(chunk: Chunk, originWx: number, originWy: number): void {
     if (this._structureFeatures.length === 0) {
       return;
     }
     const chunkX = Math.floor(originWx / CHUNK_SIZE);
     const chunkY = Math.floor(originWy / CHUNK_SIZE);
+    const accepted: StructurePlacementResolution[] = [];
     for (let i = 0; i < this._structureFeatures.length; i++) {
       const feature = this._structureFeatures[i]!;
-      if (feature.structures.length === 0) {
-        continue;
+      if (feature.structures.length === 0) continue;
+      let maxWidth = 1;
+      let maxHeight = 1;
+      for (const s of feature.structures) {
+        maxWidth = Math.max(maxWidth, s.width);
+        maxHeight = Math.max(maxHeight, s.height);
       }
-      const h = this.hash2(chunkX * 7919 + i * 149, chunkY * 6151 + 97);
-      const pick = (h >>> 20) % feature.structures.length;
-      const structure = feature.structures[pick]!;
-      const roll = (h % 1_000_000) / 1_000_000;
-      if (roll >= feature.placement.frequency) {
-        continue;
-      }
-      const anchorLx = (h >>> 8) % CHUNK_SIZE;
-      const anchorWx = originWx + anchorLx;
-      const originX = anchorWx;
-      let originY = originWy;
-      if (feature.placement.pass === "underground") {
-        const minDepth = Math.max(0, feature.placement.min_depth);
-        const maxDepth = Math.max(minDepth, feature.placement.max_depth);
-        const depth = minDepth + ((h >>> 12) % (maxDepth - minDepth + 1));
-        originY = -depth;
-      } else {
-        const padX = feature.placement.terrain?.pad_x ?? 0;
-        const sampleMin = originX - padX;
-        const sampleMax = originX + structure.width - 1 + padX;
-        let minSurface = Number.POSITIVE_INFINITY;
-        let maxSurface = Number.NEGATIVE_INFINITY;
-        let sumSurface = 0;
-        let samples = 0;
-        for (let wx = sampleMin; wx <= sampleMax; wx++) {
-          const sy = this.terrain.getSurfaceHeight(wx);
-          minSurface = Math.min(minSurface, sy);
-          maxSurface = Math.max(maxSurface, sy);
-          sumSurface += sy;
-          samples++;
-        }
-        const maxSlope = feature.placement.terrain?.max_slope ?? 999;
-        if (maxSurface - minSurface > maxSlope) {
-          continue;
-        }
-        const targetGroundY =
-          feature.placement.terrain?.mode === "flatten"
-            ? Math.round(sumSurface / Math.max(1, samples))
-            : this.terrain.getSurfaceHeight(originX);
-        originY = targetGroundY - (structure.height - 1);
-        if (feature.placement.terrain?.mode === "flatten") {
-          this.flattenColumns(
-            chunk,
-            originWx,
-            originWy,
-            originX - padX,
-            originX + structure.width - 1 + padX,
-            targetGroundY,
+      const spanX = Math.max(1, Math.ceil(maxWidth / CHUNK_SIZE));
+      const spanY = Math.max(1, Math.ceil(maxHeight / CHUNK_SIZE));
+      for (let sourceChunkY = chunkY - (spanY - 1); sourceChunkY <= chunkY; sourceChunkY++) {
+        for (let sourceChunkX = chunkX - (spanX - 1); sourceChunkX <= chunkX; sourceChunkX++) {
+          const sourceOriginWx = sourceChunkX * CHUNK_SIZE;
+          const sourceOriginWy = sourceChunkY * CHUNK_SIZE;
+          const resolved = this.resolveFeaturePlacementForChunk(
+            i,
+            sourceChunkX,
+            sourceChunkY,
+            sourceOriginWx,
+            sourceOriginWy,
+            sourceChunkX === chunkX && sourceChunkY === chunkY ? chunk : undefined,
           );
+          if (resolved === null) {
+            continue;
+          }
+          const { structure, originX, originY } = resolved;
+          if (
+            originX + structure.width <= originWx ||
+            originX >= originWx + CHUNK_SIZE ||
+            originY + structure.height <= originWy ||
+            originY >= originWy + CHUNK_SIZE
+          ) {
+            continue;
+          }
+          const candidate: StructurePlacementResolution = {
+            featureIndex: i,
+            structure,
+            originX,
+            originY,
+          };
+          if (this.overlapsAcceptedPlacement(candidate, accepted)) {
+            continue;
+          }
+          accepted.push(candidate);
+          this.stampStructure(chunk, originWx, originWy, originX, originY, structure, i);
+          if (feature.placement.suppress_vegetation) {
+            const pad = feature.placement.terrain?.pad_x ?? 0;
+            this.clearVegetationInRange(
+              chunk,
+              originWx,
+              originWy,
+              originX - pad,
+              originX + structure.width - 1 + pad,
+              originY,
+              originY + structure.height - 1,
+            );
+          }
         }
-      }
-      // Allow multi-chunk structures (e.g. mineshafts), but skip chunks with no overlap.
-      if (
-        originX + structure.width <= originWx ||
-        originX >= originWx + CHUNK_SIZE ||
-        originY + structure.height <= originWy ||
-        originY >= originWy + CHUNK_SIZE
-      ) {
-        continue;
-      }
-      this.stampStructure(chunk, originWx, originWy, originX, originY, structure, i);
-      if (feature.placement.suppress_vegetation) {
-        const pad = feature.placement.terrain?.pad_x ?? 0;
-        this.clearVegetationInRange(
-          chunk,
-          originWx,
-          originWy,
-          originX - pad,
-          originX + structure.width - 1 + pad,
-          originY,
-          originY + structure.height - 1,
-        );
       }
     }
   }
@@ -1123,64 +1079,216 @@ export class WorldGenerator {
     const originWy = origin.wy;
     const chunkX = Math.floor(originWx / CHUNK_SIZE);
     const chunkY = Math.floor(originWy / CHUNK_SIZE);
+    const accepted: StructurePlacementResolution[] = [];
     for (let i = 0; i < this._structureFeatures.length; i++) {
       const feature = this._structureFeatures[i]!;
-      if (feature.structures.length === 0) {
-        continue;
+      if (feature.structures.length === 0) continue;
+      let maxWidth = 1;
+      let maxHeight = 1;
+      for (const s of feature.structures) {
+        maxWidth = Math.max(maxWidth, s.width);
+        maxHeight = Math.max(maxHeight, s.height);
       }
-      const h = this.hash2(chunkX * 7919 + i * 149, chunkY * 6151 + 97);
-      const pick = (h >>> 20) % feature.structures.length;
-      const structure = feature.structures[pick]!;
-      const roll = (h % 1_000_000) / 1_000_000;
-      if (roll >= feature.placement.frequency) {
-        continue;
-      }
-      const anchorLx = (h >>> 8) % CHUNK_SIZE;
-      const anchorWx = originWx + anchorLx;
-      const originX = anchorWx;
-      let originY = originWy;
-      if (feature.placement.pass === "underground") {
-        const minDepth = Math.max(0, feature.placement.min_depth);
-        const maxDepth = Math.max(minDepth, feature.placement.max_depth);
-        const depth = minDepth + ((h >>> 12) % (maxDepth - minDepth + 1));
-        originY = -depth;
-      } else {
-        const targetGroundY = this.terrain.getSurfaceHeight(originX);
-        originY = targetGroundY - (structure.height - 1);
-      }
-      if (
-        originX + structure.width <= originWx ||
-        originX >= originWx + CHUNK_SIZE ||
-        originY + structure.height <= originWy ||
-        originY >= originWy + CHUNK_SIZE
-      ) {
-        continue;
-      }
-      for (const e of structure.entities) {
-        const wx = originX + e.x;
-        const wy = originY + e.y;
-        if (
-          wx < originWx ||
-          wx >= originWx + CHUNK_SIZE ||
-          wy < originWy ||
-          wy >= originWy + CHUNK_SIZE
-        ) {
-          continue;
-        }
-        if (e.type === "furnace") {
-          out.push({ type: "furnace", wx, wy, state: e.state });
-        } else {
-          out.push({
-            type: "container",
-            wx,
-            wy,
-            lootTable: e.lootTable,
-            items: e.items ?? undefined,
-          });
+      const spanX = Math.max(1, Math.ceil(maxWidth / CHUNK_SIZE));
+      const spanY = Math.max(1, Math.ceil(maxHeight / CHUNK_SIZE));
+      for (let sourceChunkY = chunkY - (spanY - 1); sourceChunkY <= chunkY; sourceChunkY++) {
+        for (let sourceChunkX = chunkX - (spanX - 1); sourceChunkX <= chunkX; sourceChunkX++) {
+          const sourceOriginWx = sourceChunkX * CHUNK_SIZE;
+          const sourceOriginWy = sourceChunkY * CHUNK_SIZE;
+          const resolved = this.resolveFeaturePlacementForChunk(
+            i,
+            sourceChunkX,
+            sourceChunkY,
+            sourceOriginWx,
+            sourceOriginWy,
+          );
+          if (resolved === null) {
+            continue;
+          }
+          const { structure, originX, originY } = resolved;
+          if (
+            originX + structure.width <= originWx ||
+            originX >= originWx + CHUNK_SIZE ||
+            originY + structure.height <= originWy ||
+            originY >= originWy + CHUNK_SIZE
+          ) {
+            continue;
+          }
+          const candidate: StructurePlacementResolution = {
+            featureIndex: i,
+            structure,
+            originX,
+            originY,
+          };
+          if (this.overlapsAcceptedPlacement(candidate, accepted)) {
+            continue;
+          }
+          accepted.push(candidate);
+          for (const e of structure.entities) {
+            const wx = originX + e.x;
+            const wy = originY + e.y;
+            if (
+              wx < originWx ||
+              wx >= originWx + CHUNK_SIZE ||
+              wy < originWy ||
+              wy >= originWy + CHUNK_SIZE
+            ) {
+              continue;
+            }
+            if (e.type === "furnace") {
+              out.push({ type: "furnace", wx, wy, state: e.state });
+            } else if (e.type === "spawner") {
+              out.push({ type: "spawner", wx, wy, state: e.state });
+            } else {
+              out.push({
+                type: "container",
+                wx,
+                wy,
+                lootTable: e.lootTable,
+                items: e.items ?? undefined,
+              });
+            }
+          }
         }
       }
     }
     return out;
+  }
+
+  private overlapsAcceptedPlacement(
+    candidate: StructurePlacementResolution,
+    accepted: StructurePlacementResolution[],
+  ): boolean {
+    const cMinX = candidate.originX;
+    const cMaxX = candidate.originX + candidate.structure.width - 1;
+    const cMinY = candidate.originY;
+    const cMaxY = candidate.originY + candidate.structure.height - 1;
+    for (const existing of accepted) {
+      const eMinX = existing.originX;
+      const eMaxX = existing.originX + existing.structure.width - 1;
+      const eMinY = existing.originY;
+      const eMaxY = existing.originY + existing.structure.height - 1;
+      const overlapX = cMinX <= eMaxX && cMaxX >= eMinX;
+      const overlapY = cMinY <= eMaxY && cMaxY >= eMinY;
+      if (overlapX && overlapY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private resolveFeaturePlacementForChunk(
+    featureIndex: number,
+    chunkX: number,
+    chunkY: number,
+    originWx: number,
+    originWy: number,
+    chunk?: Chunk,
+  ): StructurePlacementResolution | null {
+    const feature = this._structureFeatures[featureIndex]!;
+    if (feature.structures.length === 0) {
+      return null;
+    }
+    const h = this.hash2(chunkX * 7919 + featureIndex * 149, chunkY * 6151 + 97);
+    const pick = (h >>> 20) % feature.structures.length;
+    const structure = feature.structures[pick]!;
+    const roll = (h % 1_000_000) / 1_000_000;
+    if (roll >= feature.placement.frequency) {
+      return null;
+    }
+    const retryCount = feature.placement.pass === "underground" ? 4 : 1;
+    for (let attempt = 0; attempt < retryCount; attempt++) {
+      const attemptHash = this.hash2(h + attempt * 0x9e37, h ^ (attempt * 0x85eb));
+      const anchorLx = (attemptHash >>> 8) % CHUNK_SIZE;
+      const originX = originWx + anchorLx;
+      const undergroundOriginY = this.resolveUndergroundOriginY(featureIndex, attemptHash, originX, structure);
+      if (feature.placement.pass === "underground") {
+        if (undergroundOriginY === null) {
+          continue;
+        }
+        return { featureIndex, structure, originX, originY: undergroundOriginY };
+      }
+      const surfacePlacement = this.resolveSurfaceOriginY(featureIndex, originX, structure);
+      if (surfacePlacement === null) {
+        continue;
+      }
+      if (surfacePlacement.flatten !== null && chunk !== undefined) {
+        this.flattenColumns(
+          chunk,
+          originWx,
+          originWy,
+          originX - surfacePlacement.padX,
+          originX + structure.width - 1 + surfacePlacement.padX,
+          surfacePlacement.flatten,
+        );
+      }
+      return { featureIndex, structure, originX, originY: surfacePlacement.originY };
+    }
+    return null;
+  }
+
+  private resolveUndergroundOriginY(
+    featureIndex: number,
+    attemptHash: number,
+    originX: number,
+    structure: ParsedStructure,
+  ): number | null {
+    const feature = this._structureFeatures[featureIndex]!;
+    const minDepth = Math.max(0, feature.placement.min_depth);
+    const maxDepth = Math.max(minDepth, feature.placement.max_depth);
+    const depth = minDepth + ((attemptHash >>> 12) % (maxDepth - minDepth + 1));
+    const originY = -depth;
+    const structureTopY = originY + structure.height - 1;
+    const clearance = feature.placement.clearance?.height ?? 0;
+    for (let dx = 0; dx < structure.width; dx++) {
+      const wx = originX + dx;
+      const surfaceY = this.terrain.getSurfaceHeight(wx);
+      if (structureTopY + clearance > surfaceY) {
+        return null;
+      }
+    }
+    const bedrockSafetyMargin = 5;
+    const structureBottomY = originY;
+    if (structureBottomY <= WORLD_Y_MIN + bedrockSafetyMargin) {
+      return null;
+    }
+    return originY;
+  }
+
+  private resolveSurfaceOriginY(
+    featureIndex: number,
+    originX: number,
+    structure: ParsedStructure,
+  ): { originY: number; flatten: number | null; padX: number } | null {
+    const feature = this._structureFeatures[featureIndex]!;
+    const padX = feature.placement.terrain?.pad_x ?? 0;
+    const sampleMin = originX - padX;
+    const sampleMax = originX + structure.width - 1 + padX;
+    let minSurface = Number.POSITIVE_INFINITY;
+    let maxSurface = Number.NEGATIVE_INFINITY;
+    let sumSurface = 0;
+    let samples = 0;
+    for (let wx = sampleMin; wx <= sampleMax; wx++) {
+      const sy = this.terrain.getSurfaceHeight(wx);
+      minSurface = Math.min(minSurface, sy);
+      maxSurface = Math.max(maxSurface, sy);
+      sumSurface += sy;
+      samples++;
+    }
+    const maxSlope = feature.placement.terrain?.max_slope ?? 999;
+    if (maxSurface - minSurface > maxSlope) {
+      return null;
+    }
+    const targetGroundY =
+      feature.placement.terrain?.mode === "flatten"
+        ? Math.round(sumSurface / Math.max(1, samples))
+        : this.terrain.getSurfaceHeight(originX);
+    const originY = targetGroundY - (structure.height - 1);
+    return {
+      originY,
+      flatten: feature.placement.terrain?.mode === "flatten" ? targetGroundY : null,
+      padX,
+    };
   }
 
   private flattenColumns(

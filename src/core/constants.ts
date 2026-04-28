@@ -629,6 +629,13 @@ export const LIGHT_PROPAGATION_NEIGHBOUR_RADIUS = 1;
 
 /** Max chunk mesh updates (existing meshes) per frame; excess `renderDirty` work rolls to the next frame. */
 export const CHUNK_SYNC_MAX_PER_FRAME = 8;
+/**
+ * When this many dirty chunks are waiting, cap updates per frame lower so uploads spread across
+ * frames (reduces single-frame spikes after bulk edits or streaming).
+ */
+export const CHUNK_SYNC_DEFER_DIRTY_THRESHOLD = 28;
+/** Per-frame dirty mesh cap when {@link CHUNK_SYNC_DEFER_DIRTY_THRESHOLD} is exceeded. */
+export const CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD = 5;
 
 /** Min interval between render-path `InputManager.updateMouseWorldPos` calls (~60 Hz). */
 export const POINTER_MOVE_THROTTLE_MS = 16;

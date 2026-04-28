@@ -9,7 +9,9 @@ import type { ChunkCoord } from "../../world/chunk/ChunkCoord";
 import {
   BLOCK_SIZE,
   CHUNK_SIZE,
+  CHUNK_SYNC_DEFER_DIRTY_THRESHOLD,
   CHUNK_SYNC_MAX_PER_FRAME,
+  CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD,
 } from "../../core/constants";
 import { chunkKey, chunkToWorldOrigin } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
@@ -148,7 +150,7 @@ export class ChunkRenderer {
       let triple = this.meshes.get(key);
       if (triple === undefined) {
         const bg = buildBackgroundMesh(chunk, this.registry, this.atlas);
-        const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler);
+        const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler, this.registry);
         const {
           mesh: fg,
           waterMesh: fgWater,
@@ -197,6 +199,11 @@ export class ChunkRenderer {
     }
     // Keep only the nearest dirty chunks each frame. `CHUNK_SYNC_MAX_PER_FRAME` is small,
     // so this bounded insertion is cheaper than sorting the full queue every render.
+    const maxDirtyThisFrame =
+      dirtyQueued > CHUNK_SYNC_DEFER_DIRTY_THRESHOLD
+        ? CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD
+        : CHUNK_SYNC_MAX_PER_FRAME;
+
     for (const item of dirtyQueue) {
       if (nearestDirty.length === 0) {
         nearestDirty.push(item);
@@ -206,9 +213,9 @@ export class ChunkRenderer {
       while (insertAt > 0 && nearestDirty[insertAt - 1]!.distSq > item.distSq) {
         insertAt -= 1;
       }
-      if (nearestDirty.length < CHUNK_SYNC_MAX_PER_FRAME) {
+      if (nearestDirty.length < maxDirtyThisFrame) {
         nearestDirty.splice(insertAt, 0, item);
-      } else if (insertAt < CHUNK_SYNC_MAX_PER_FRAME) {
+      } else if (insertAt < maxDirtyThisFrame) {
         nearestDirty.splice(insertAt, 0, item);
         nearestDirty.pop();
       }
@@ -218,7 +225,7 @@ export class ChunkRenderer {
       updatesThisFrame += 1;
       withPerfSpan("ChunkRenderer.updateDirtyChunk", () => {
         updateBackgroundMesh(item.meshes.bg, item.chunk, this.registry, this.atlas);
-        updateFgShadowMesh(item.meshes.fgShadow, item.chunk, this.fgShadowSampler);
+        updateFgShadowMesh(item.meshes.fgShadow, item.chunk, this.fgShadowSampler, this.registry);
         const { windSways, furnaceFires, waterSurfaces } = updateMesh(
           item.meshes.fg,
           item.meshes.fgWater,
