@@ -129,10 +129,11 @@ export class NametagOverlay {
       this.updateCanvasMetrics(canvas);
     }
 
-    const cw = Math.max(1, canvas.width);
-    const ch = Math.max(1, canvas.height);
-    const cssPerBufX = this.canvasCssW / cw;
-    const cssPerBufY = this.canvasCssH / ch;
+    /** Match {@link InputManager#updateMouseWorldPos}: camera/worldToScreen use logical pixels. */
+    const lw = Math.max(1, canvas.clientWidth || this.canvasCssW);
+    const lh = Math.max(1, canvas.clientHeight || this.canvasCssH);
+    const cssPerLogicalX = this.canvasCssW / lw;
+    const cssPerLogicalY = this.canvasCssH / lh;
 
     this.spatialPhase = (this.spatialPhase + 1) & 1;
     const applySpatialThisFrame = this.spatialPhase === 0;
@@ -177,8 +178,8 @@ export class NametagOverlay {
       }
       const headY = -worldY - PLAYER_HEIGHT;
       const { x: sx, y: sy } = camera.worldToScreen(worldX, headY);
-      const px = Math.round(sx * cssPerBufX);
-      const py = Math.round(sy * cssPerBufY);
+      const px = Math.round(sx * cssPerLogicalX);
+      const py = Math.round(sy * cssPerLogicalY);
       const transform = `translate3d(${px}px,${py}px,0) translate(-50%,calc(-100% - ${NAMETAG_GAP_ABOVE_HEAD_PX}px))`;
       if (view.lastTransform !== transform) {
         view.lastTransform = transform;

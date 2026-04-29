@@ -923,9 +923,9 @@ export class RenderPipeline implements RenderPipelineLayers {
     if (this.app === null || this._spriteCloud === null) {
       return;
     }
-    const dpr = this.app.renderer.resolution;
-    const w = this.app.renderer.width / dpr;
-    const h = this.app.renderer.height / dpr;
+    /** Match {@link Camera#setScreenSize} / sky canvas: Pixi stage + backbuffer use full renderer pixels. */
+    const w = Math.max(1, Math.round(this.app.renderer.width));
+    const h = Math.max(1, Math.round(this.app.renderer.height));
     this._spriteCloud.resize(w, h);
   }
 

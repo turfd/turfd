@@ -191,10 +191,10 @@ export class DamageNumbersOverlay {
       this.updateCanvasMetrics(canvas);
     }
 
-    const cw = Math.max(1, canvas.width);
-    const ch = Math.max(1, canvas.height);
-    const cssPerBufX = this.canvasCssW / cw;
-    const cssPerBufY = this.canvasCssH / ch;
+    const lw = Math.max(1, canvas.clientWidth || this.canvasCssW);
+    const lh = Math.max(1, canvas.clientHeight || this.canvasCssH);
+    const cssPerLogicalX = this.canvasCssW / lw;
+    const cssPerLogicalY = this.canvasCssH / lh;
 
     for (let i = this.pops.length - 1; i >= 0; i--) {
       const p = this.pops[i]!;
@@ -239,8 +239,8 @@ export class DamageNumbersOverlay {
       const fade = Math.min(timeFade, heightFade);
 
       const { x: sx, y: sy } = camera.worldToScreen(p.worldX, -p.worldY);
-      const px = Math.round(sx * cssPerBufX);
-      const py = Math.round(sy * cssPerBufY);
+      const px = Math.round(sx * cssPerLogicalX);
+      const py = Math.round(sy * cssPerLogicalY);
       const transform = `translate3d(${px}px,${py}px,0) translate(-50%,-50%) scale(${scale})`;
       p.el.style.transform = transform;
       p.el.style.opacity = String(Math.max(0, Math.min(1, fade)));

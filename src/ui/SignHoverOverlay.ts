@@ -86,8 +86,10 @@ export class SignHoverOverlay {
     }
     const { x, y } = camera.worldToScreen((wx + 0.5) * BLOCK_SIZE, -(wy + 0.18) * BLOCK_SIZE);
     const rect = canvas.getBoundingClientRect();
-    const sx = Math.round((x / Math.max(1, canvas.width)) * rect.width);
-    const sy = Math.round((y / Math.max(1, canvas.height)) * rect.height);
+    const lw = Math.max(1, canvas.clientWidth || rect.width);
+    const lh = Math.max(1, canvas.clientHeight || rect.height);
+    const sx = Math.round((x / lw) * rect.width);
+    const sy = Math.round((y / lh) * rect.height);
     const transform = `translate3d(${sx}px,${sy}px,0) translate(-50%,calc(-100% - 12px))`;
     if (this.lastTransform !== transform) {
       this.lastTransform = transform;

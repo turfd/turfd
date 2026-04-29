@@ -506,9 +506,9 @@ export class MenuBackground {
     this.chunkMap = chunkMap;
     const fgShadowSampler = createWorldFgShadowSampler(chunkMap.asWorld());
 
-    const dpr     = app.renderer.resolution;
-    const screenW = app.renderer.width  / dpr;
-    const screenH = app.renderer.height / dpr;
+    /** Full backbuffer size — same convention as gameplay {@link RenderPipeline} / {@link Camera}. */
+    const screenW = Math.max(1, Math.round(app.renderer.width));
+    const screenH = Math.max(1, Math.round(app.renderer.height));
     const zoom    = computeZoom(
       screenW,
       screenH,
@@ -711,15 +711,12 @@ export class MenuBackground {
     const rhR = Math.max(1, Math.round(rh));
     albedoRT.resize(rwR, rhR, rRes);
 
-    const dpr     = app.renderer.resolution;
-    const screenW = rw / dpr;
-    const screenH = rh / dpr;
-    composite.resize(screenW, screenH);
-    this.spriteCloud?.resize(screenW, screenH);
+    composite.resize(rwR, rhR);
+    this.spriteCloud?.resize(rwR, rhR);
 
     const zoom = computeZoom(
-      screenW,
-      screenH,
+      rwR,
+      rhR,
       this.getMaxVisibleBlocksX(),
       this.getMinZoom(),
     );
@@ -740,15 +737,15 @@ export class MenuBackground {
     }
 
     this.baseX =
-      screenW / 2 -
+      rwR / 2 -
       (CHUNKS_X * CHUNK_SIZE * BLOCK_SIZE * zoom) / 2 -
       MENU_VIEW_OFFSET_X_BLOCKS * BLOCK_SIZE * zoom;
     this.baseY =
-      screenH * 0.55 +
+      rhR * 0.55 +
       (this.surfaceYForLayout + 1) * BLOCK_SIZE * zoom;
     this.panRangeXPx = PAN_RANGE_X_BLOCKS * BLOCK_SIZE * zoom;
 
-    this.introSlideMaxPx = screenH * MENU_INTRO_SLIDE_FRAC;
+    this.introSlideMaxPx = rhR * MENU_INTRO_SLIDE_FRAC;
     void MENU_INTRO_PARALLAX_DEEPEN;
 
     this.lastCenterCX = -9999;
@@ -837,9 +834,8 @@ export class MenuBackground {
     // -- Sky (CSS canvas) ---------------------------------------------------
     this.paintSky(worldContainer.x, worldContainer.y);
 
-    const dpr = app.renderer.resolution;
-    const sw = app.renderer.width / dpr;
-    const sh = app.renderer.height / dpr;
+    const sw = Math.max(1, Math.round(app.renderer.width));
+    const sh = Math.max(1, Math.round(app.renderer.height));
     const localCX = (sw / 2 - worldContainer.x) / this.zoom;
     const strip = this.parallaxStrip;
     if (strip !== null) {

@@ -93,8 +93,8 @@ export class ParallaxTileStripRenderer {
   regenerate(opts: ParallaxStripRegenerateOptions): void {
     const { seed, registry, atlas, chestBlockId } = opts;
     const renderer = this.app.renderer;
-    const res = renderer.resolution;
-    const screenW = renderer.width / res;
+    /** Same pixel space as {@link Camera#setScreenSize} (full backbuffer, not CSS / resolution). */
+    const screenW = Math.max(1, Math.round(renderer.width));
 
     const zoom = this.getZoom();
     const stripZoom = zoom * BACKGROUND_TILE_STRIP_VISUAL_SCALE;
@@ -543,9 +543,8 @@ export class ParallaxTileStripRenderer {
       return;
     }
     const renderer = this.app.renderer;
-    const res = renderer.resolution;
-    const screenW = renderer.width / res;
-    const screenH = renderer.height / res;
+    const screenW = Math.max(1, Math.round(renderer.width));
+    const screenH = Math.max(1, Math.round(renderer.height));
     const zoom = this.getZoom();
     const stripZoom = zoom * BACKGROUND_TILE_STRIP_VISUAL_SCALE;
     const { startCx, nChunkCols, alignBlocks, surfaceY } = this.stripLayout;

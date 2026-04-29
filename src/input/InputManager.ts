@@ -407,8 +407,15 @@ export class InputManager {
     if (this.canvasMetricsDirty) {
       this.updateCanvasMetrics();
     }
-    const scaleX = this.canvas.width / this.canvasCssW;
-    const scaleY = this.canvas.height / this.canvasCssH;
+    /**
+     * Pixi v8 `renderer.width` / {@link Camera} screen space are **logical** pixels (CSS layout
+     * size). `canvas.width` is the backing-store size (`logical × resolution`). Map pointer into
+     * logical space so `screenToWorld` matches `worldToScreen` and DOM overlays.
+     */
+    const logicalW = Math.max(1, this.canvas.clientWidth || this.canvasCssW);
+    const logicalH = Math.max(1, this.canvas.clientHeight || this.canvasCssH);
+    const scaleX = logicalW / this.canvasCssW;
+    const scaleY = logicalH / this.canvasCssH;
     const cssX = this.mouseClientX - this.canvasRectLeft;
     const cssY = this.mouseClientY - this.canvasRectTop;
     const sx = cssX * scaleX;
