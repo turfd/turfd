@@ -31,6 +31,13 @@ export class Camera {
   private posX = 0;
   private posY = 0;
   private zoomLevel: number;
+  /**
+   * Backing-buffer resolution multiplier for snap precision (1 = CSS pixel, 2 = retina device pixel, …).
+   * Driven by Pixi's `renderer.resolution`; set by {@link RenderPipeline} after init/resize. Snapping
+   * to `1 / snapResolution` CSS units keeps the world translation on the device-pixel grid (no
+   * seams from nearest sampling) while halving the visible camera-follow jitter on hi-DPI displays.
+   */
+  private snapResolution = 1;
 
   constructor(options: Partial<CameraOptions> = {}) {
     this.options = { ...defaultCameraOptions, ...options };
@@ -45,6 +52,22 @@ export class Camera {
     }
     this.screenW = width;
     this.screenH = height;
+    this.applyTransform();
+  }
+
+  /**
+   * Pass `pixiApp.renderer.resolution` here whenever it changes. Higher resolution → finer snap
+   * step (1 / res CSS units = 1 backing-buffer pixel), which produces less visible camera jitter
+   * during follow without breaking the integer backing-buffer alignment that prevents tile seams.
+   */
+  setSnapResolution(resolution: number): void {
+    if (!Number.isFinite(resolution) || resolution <= 0) {
+      return;
+    }
+    if (resolution === this.snapResolution) {
+      return;
+    }
+    this.snapResolution = resolution;
     this.applyTransform();
   }
 
@@ -114,9 +137,16 @@ export class Camera {
     this.worldRoot.scale.set(z);
     const rawX = this.screenW * 0.5 - this.posX * z;
     const rawY = this.screenH * 0.5 - this.posY * z;
-    // Integer pixel translation + block-aligned zoom avoids 1px seams between tiles
-    // (fractional screen coords + nearest-neighbor sampling shows gaps at certain camera positions).
-    this.worldRoot.position.set(Math.round(rawX), Math.round(rawY));
+    // Snap translation to the backing-buffer pixel grid (1 / snapResolution CSS px). At dpr=1 this
+    // is identical to the previous Math.round(rawX) behaviour; at dpr=2 it halves the snap step,
+    // which materially reduces the visible "staircase" jitter during camera follow at high zoom.
+    // The grid is still integer in *device* pixels, so nearest-neighbor sampling still meets at
+    // tile edges and the "no seams" property documented previously is preserved.
+    const r = this.snapResolution;
+    this.worldRoot.position.set(
+      Math.round(rawX * r) / r,
+      Math.round(rawY * r) / r,
+    );
   }
 
   private getEffectiveZoom(): number {

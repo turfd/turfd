@@ -65,4 +65,4 @@ Most of the work here is under-the-hood, but the goal is simple: less hitching, 
 
 Thank you for the performance reports and repro cases - especially around dense builds and frequent door interaction areas.
 
-If you still notice spikes, sharing **OS + browser + GPU + rough world scenario** (for example "many doors near spawn") helps us tune faster.
+If you still notice spikes, sharing **OS + browser + GPU + rough world scenario** (for example "many doors near spawn") helps us tune faster

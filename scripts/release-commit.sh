@@ -137,7 +137,7 @@ trap cleanup EXIT
 
 echo ""
 echo "────────────────────────── COMMIT PREVIEW ──────────────────────────"
-echo "(Subject = first line. Body = what Stratum parses for the menu + modal.)"
+echo "(Subject = first line.  Body = what Stratum parses for the menu + modal.)"
 echo "────────────────────────────────────────────────────────────────────"
 cat "$COMMIT_FILE"
 echo "────────────────────────────────────────────────────────────────────"

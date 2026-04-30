@@ -1276,6 +1276,9 @@ export class RenderPipeline implements RenderPipelineLayers {
         this._skyCssH = h;
       }
       this.camera.setScreenSize(w, h);
+      // Snap camera translation at backing-buffer precision rather than CSS-pixel precision; on
+      // hi-DPI displays this halves the camera-follow jitter step without re-introducing tile seams.
+      this.camera.setSnapResolution(res);
       const rtW = Math.max(1, Math.round(w + this._overscanPadPx * 2));
       const rtH = Math.max(1, Math.round(h + this._overscanPadPx * 2));
       this._albedoRT?.resize(rtW, rtH, rtResolution);
