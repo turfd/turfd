@@ -24,12 +24,26 @@ export type InputAction =
   | "chat"
   | "dropItem"
   /** Hard-bound to F3; not user-rebindable (see {@link InputManager}). */
-  | "toggleGpuDebug";
+  | "toggleGpuDebug"
+  /** Hard-bound to F3+1; toggles profiler chart mode. */
+  | "toggleGpuDebugProfiler"
+  /** Hard-bound to F3+2; toggles FPS/TPS chart mode. */
+  | "toggleGpuDebugPerfGraphs"
+  /** Hard-bound to F3+3; toggles bandwidth/ping chart mode. */
+  | "toggleGpuDebugNetGraphs"
+  /** Hard-bound to F3+F6; cycles debug profile presets. */
+  | "cycleGpuDebugProfile";
 
 /** Keyboard-only actions (mouse handles place/break). */
 export type KeybindableAction = Exclude<
   InputAction,
-  "place" | "break" | "toggleGpuDebug"
+  | "place"
+  | "break"
+  | "toggleGpuDebug"
+  | "toggleGpuDebugProfiler"
+  | "toggleGpuDebugPerfGraphs"
+  | "toggleGpuDebugNetGraphs"
+  | "cycleGpuDebugProfile"
 >;
 
 export const KEYBINDABLE_ACTION_ORDER: readonly KeybindableAction[] = [

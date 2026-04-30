@@ -20,7 +20,8 @@
       "stratum:light_absorption": 15,
       "stratum:material": "stone",
       "stratum:loot_table": "stratum:gold_ore",
-      "stratum:numeric_id": 35
+      "stratum:numeric_id": 35,
+      "stratum:creative_category": "items"
     }
   }
 }

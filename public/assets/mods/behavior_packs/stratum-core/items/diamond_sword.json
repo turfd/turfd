@@ -10,7 +10,8 @@
       "stratum:max_stack": 1,
       "stratum:tool_tier": 3,
       "stratum:max_durability": 1561,
-      "stratum:numeric_id": 128
+      "stratum:numeric_id": 128,
+      "stratum:creative_category": "equipment"
     }
   }
 }

@@ -2,12 +2,6 @@
  * Escape: full-screen pause overlay (main-menu styling). Settings opens from a
  * secondary action button (same style as Save) and shares the main-menu panel.
  */
-import {
-  DAWN_LENGTH_MS,
-  DAYLIGHT_LENGTH_MS,
-  DAY_LENGTH_MS,
-  DUSK_LENGTH_MS,
-} from "../../core/constants";
 import type { EventBus } from "../../core/EventBus";
 import type { GameEvent } from "../../core/types";
 import type { CachedMod } from "../../mods/workshopTypes";
@@ -16,27 +10,7 @@ import { stratumCoreTextureAssetUrl } from "../../core/textureManifest";
 import { blurFocusContainedBy } from "../blurOverlayFocus";
 import { mountSettingsPanel } from "../settings/mountSettingsPanel";
 
-const U_DAWN_END = DAWN_LENGTH_MS / DAY_LENGTH_MS;
-const U_DAY_END = (DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS) / DAY_LENGTH_MS;
-const U_DUSK_END =
-  (DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS + DUSK_LENGTH_MS) / DAY_LENGTH_MS;
-
-const TIME_SLIDER_STEPS = 1000;
-
 const PAUSE_STYLE_ID = "stratum-pause-styles";
-
-function skyPeriodLabel(phase: number): string {
-  if (phase < U_DAWN_END) {
-    return "Dawn";
-  }
-  if (phase < U_DAY_END) {
-    return "Day";
-  }
-  if (phase < U_DUSK_END) {
-    return "Dusk";
-  }
-  return "Night";
-}
 
 function injectPauseStyles(base: string): void {
   if (document.getElementById(PAUSE_STYLE_ID)) {
@@ -296,12 +270,6 @@ export class PauseMenu {
   private readonly unsubs: (() => void)[] = [];
   private pauseSettingsAbort: AbortController | null = null;
 
-  private isOpen = false;
-  private adjustingWorldTime = false;
-  private lastObservedWorldTimeMs = 0;
-  private lastTimeHintText = "";
-  private lastTimeInputValue = "";
-  private syncTimeUi: ((worldTimeMs: number) => void) | null = null;
   private networkRole: "offline" | "host" | "client" = "offline";
   private roomCode: string | null = null;
   private mpBtn: HTMLButtonElement | null = null;
@@ -431,99 +399,7 @@ export class PauseMenu {
         this._syncMultiplayerPanel();
       }),
     );
-    const timeSection = document.createElement("div");
-    timeSection.className = "pm-section";
-    const timeTitle = document.createElement("div");
-    timeTitle.className = "pm-section-title";
-    timeTitle.textContent = "Time of day";
-    const timeLab = document.createElement("label");
-    timeLab.className = "pm-label";
-    timeLab.textContent = "Cycle";
-    const timeInput = document.createElement("input");
-    timeInput.type = "range";
-    timeInput.min = "0";
-    timeInput.max = String(TIME_SLIDER_STEPS);
-    timeInput.step = "1";
-    timeInput.value = "0";
-    timeInput.className = "pm-range";
-    const timeHint = document.createElement("div");
-    timeHint.className = "pm-hint";
-    timeHint.textContent = "—";
-
-    const syncTimeUi = (worldTimeMs: number): void => {
-      this.lastObservedWorldTimeMs = worldTimeMs;
-      if (!this.isOpen) {
-        return;
-      }
-      const phase = worldTimeMs / DAY_LENGTH_MS;
-      const hintText = `${skyPeriodLabel(phase)} · ${Math.round(phase * 100)}% of cycle`;
-      if (hintText !== this.lastTimeHintText) {
-        this.lastTimeHintText = hintText;
-        timeHint.textContent = hintText;
-      }
-      if (!this.adjustingWorldTime) {
-        const inputValue = String(
-          Math.min(
-            TIME_SLIDER_STEPS,
-            Math.max(0, Math.round(phase * TIME_SLIDER_STEPS)),
-          ),
-        );
-        if (inputValue !== this.lastTimeInputValue) {
-          this.lastTimeInputValue = inputValue;
-          timeInput.value = inputValue;
-        }
-      }
-    };
-    this.syncTimeUi = syncTimeUi;
-
-    const applyTimeDisabled = (): void => {
-      const client = this.networkRole === "client";
-      timeInput.disabled = client;
-      timeLab.style.opacity = client ? "0.55" : "1";
-      timeHint.style.opacity = client ? "0.55" : "1";
-    };
-
-    timeInput.addEventListener("focus", () => {
-      this.adjustingWorldTime = true;
-    });
-    timeInput.addEventListener("blur", () => {
-      this.adjustingWorldTime = false;
-    });
-
-    timeInput.addEventListener("input", () => {
-      if (this.networkRole === "client") {
-        return;
-      }
-      const raw = parseInt(timeInput.value, 10);
-      if (!Number.isFinite(raw)) {
-        return;
-      }
-      const phase = raw / TIME_SLIDER_STEPS;
-      syncTimeUi(phase * DAY_LENGTH_MS);
-      bus.emit({
-        type: "ui:set-world-time-phase",
-        phase,
-      } satisfies GameEvent);
-    });
-
-    this.unsubs.push(
-      bus.on("game:tick", (e) => {
-        syncTimeUi(e.worldTimeMs);
-      }),
-    );
-    this.unsubs.push(
-      bus.on("game:network-role", () => {
-        applyTimeDisabled();
-      }),
-    );
-
-    timeSection.appendChild(timeTitle);
-    timeSection.appendChild(timeLab);
-    timeSection.appendChild(timeInput);
-    timeSection.appendChild(timeHint);
-    applyTimeDisabled();
-
-    paneGame.append(title, actions, mpSection, timeSection);
+    paneGame.append(title, actions, mpSection);
 
     const paneSettings = document.createElement("div");
     paneSettings.className = "pm-pane";
@@ -581,14 +457,12 @@ export class PauseMenu {
     if (el === null) {
       return;
     }
-    this.isOpen = open;
     if (!open) {
       blurFocusContainedBy(el);
     }
     el.classList.toggle("pm-overlay--open", open);
     el.setAttribute("aria-hidden", open ? "false" : "true");
     if (open) {
-      this.syncTimeUi?.(this.lastObservedWorldTimeMs);
       queueMicrotask(() => {
         this.resumeBtn?.focus();
       });
@@ -628,7 +502,6 @@ export class PauseMenu {
   destroy(): void {
     this.pauseSettingsAbort?.abort();
     this.pauseSettingsAbort = null;
-    this.syncTimeUi = null;
     for (const u of this.unsubs) {
       u();
     }

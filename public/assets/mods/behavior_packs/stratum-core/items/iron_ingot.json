@@ -7,7 +7,8 @@
     "components": {
       "stratum:display_name": "Iron Ingot",
       "stratum:texture_key": "iron_ingot",
-      "stratum:numeric_id": 108
+      "stratum:numeric_id": 108,
+      "stratum:creative_category": "items"
     }
   }
 }

@@ -19,7 +19,8 @@
       "stratum:loot_table": "stratum:birch_leaves",
       "stratum:random_flip_x": true,
       "stratum:decoration_leaves": true,
-      "stratum:numeric_id": 47
+      "stratum:numeric_id": 47,
+      "stratum:creative_category": "nature"
     }
   }
 }

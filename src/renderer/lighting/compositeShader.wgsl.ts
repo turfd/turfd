@@ -224,11 +224,13 @@ fn torchBloomGain(worldPos: vec2<f32>, tip: vec2<f32>) -> f32 {
 
 @fragment
 fn mainFragment(@location(0) vTextureCoord: vec2<f32>) -> @location(0) vec4<f32> {
-  let sampleUv = clamp(
+  let sampleUvRaw = clamp(
     vTextureCoord * compositeUniforms.uUvScale + compositeUniforms.uUvBaseOffset + compositeUniforms.uUvSubpixelOffset,
     vec2<f32>(0.0),
     vec2<f32>(1.0),
   );
+  let ts = max(gfu.uInputSize.xy, vec2<f32>(1.0));
+  let sampleUv = (floor(sampleUvRaw * ts) + vec2<f32>(0.5)) / ts;
   let albedo = textureSample(uTexture, uSampler, sampleUv);
 
   let padPx = compositeUniforms.uUvBaseOffset * gfu.uInputSize.xy;

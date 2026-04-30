@@ -8,7 +8,8 @@
       "stratum:display_name": "Arrow",
       "stratum:texture_key": "arrow",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 138
+      "stratum:numeric_id": 138,
+      "stratum:creative_category": "equipment"
     }
   }
 }

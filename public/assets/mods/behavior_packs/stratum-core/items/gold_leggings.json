@@ -14,7 +14,8 @@
         "stratum:armor",
         "stratum:armor_leggings"
       ],
-      "stratum:inventory_tooltip": "Leg armor"
+      "stratum:inventory_tooltip": "Leg armor",
+      "stratum:creative_category": "equipment"
     }
   }
 }

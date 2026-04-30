@@ -8,9 +8,8 @@
 /public/secrets.local.json
 .cursor/plans/furnace_smelting_system.md
 /.cursor
-
-# Optional local overlay for Cursor / AI changelog tone (see changelogs/AUTHORING_FOR_AI.md).
 /changelog-cursor-authoring.md
+/,changelogs
 /node_modules
 /node_modules
 .env.local

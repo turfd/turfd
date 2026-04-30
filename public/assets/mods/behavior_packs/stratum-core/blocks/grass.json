@@ -19,7 +19,8 @@
       "stratum:random_flip_x": true,
       "stratum:material": "grass",
       "stratum:loot_table": "stratum:dirt",
-      "stratum:numeric_id": 2
+      "stratum:numeric_id": 2,
+      "stratum:creative_category": "nature"
     }
   }
 }

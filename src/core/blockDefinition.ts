@@ -1,3 +1,5 @@
+import type { CreativeCategory } from "./creativeCategory";
+
 /** Material category for audio (break / place / step SFX). */
 export type BlockMaterial =
   | "stone"
@@ -117,4 +119,7 @@ export interface BlockDefinitionBase {
     spawnRange: number;
     spawnPotentials: readonly string[];
   };
+
+  /** Copied to the auto-registered block item for creative inventory tabs. */
+  creativeCategory?: CreativeCategory;
 }

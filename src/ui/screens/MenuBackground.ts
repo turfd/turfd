@@ -268,7 +268,6 @@ export class MenuBackground {
   private destroyed = false;
   private disableMotion = false;
   private disableIntroSlide = false;
-  private deferHeavyInitMs = 0;
 
   constructor(
     opts: {
@@ -276,7 +275,6 @@ export class MenuBackground {
       minZoom?: number;
       disableMotion?: boolean;
       disableIntroSlide?: boolean;
-      deferHeavyInitMs?: number;
     } = {},
   ) {
     this.maxVisibleBlocksX =
@@ -284,7 +282,6 @@ export class MenuBackground {
     this.minZoom = opts.minZoom ?? DEFAULT_MIN_ZOOM;
     this.disableMotion = opts.disableMotion ?? false;
     this.disableIntroSlide = opts.disableIntroSlide ?? false;
-    this.deferHeavyInitMs = Math.max(0, Math.floor(opts.deferHeavyInitMs ?? 0));
     this.initFinished = new Promise<void>((resolve) => {
       this.resolveInitFinished = resolve;
     });
@@ -476,11 +473,6 @@ export class MenuBackground {
     this.app = app;
 
     // -- Atlas + registry ---------------------------------------------------
-    if (this.deferHeavyInitMs > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, this.deferHeavyInitMs);
-      });
-    }
     performance.mark("menu-bg:heavy-start");
     const atlas = new AtlasLoader(BLOCK_TEXTURE_MANIFEST_PATH);
     const registry = new BlockRegistry();
@@ -920,6 +912,28 @@ export class MenuBackground {
    */
   isLive(): boolean {
     return !this.destroyed && this.app !== null;
+  }
+
+  /**
+   * If {@link mount} was cleared (e.g. `replaceChildren`) after prewarm {@link init}, the backdrop
+   * subtree can be detached while `isLive()` stays true. Re-insert it and drop duplicate placeholders.
+   */
+  ensureBackdropMountedFirst(mount: HTMLElement): void {
+    if (this.destroyed || this.backdropRoot === null) {
+      return;
+    }
+    for (const el of Array.from(
+      mount.querySelectorAll(":scope > .stratum-menu-backdrop"),
+    )) {
+      if (el !== this.backdropRoot) {
+        el.remove();
+      }
+    }
+    if (this.backdropRoot.parentElement !== mount) {
+      mount.insertBefore(this.backdropRoot, mount.firstChild);
+    } else if (mount.firstChild !== this.backdropRoot) {
+      mount.insertBefore(this.backdropRoot, mount.firstChild);
+    }
   }
 
   getBlockAtlasLoader(): AtlasLoader | null {

@@ -80,6 +80,10 @@ export class AudioEngine {
   private readonly environmentDetector = new EnvironmentDetector();
   /** Occlusion raycasts for positional SFX; set from the game loop when a world exists. */
   private worldForSpatial: World | null = null;
+  /** Active non-spatial one-shot SFX buffer sources. */
+  private readonly activeSfxOneShots = new Set<AudioBufferSourceNode>();
+  /** One-shots played without world-space attenuation (typically player/UI feedback). */
+  private readonly activeSfxNonSpatial = new Set<AudioBufferSourceNode>();
 
   constructor() {
     // AudioContext is created on first playSfx/loadSfx (browser policy).
@@ -444,7 +448,49 @@ export class AudioEngine {
     playGain.gain.value = gain;
     src.connect(playGain);
     playGain.connect(sfx);
+    this.activeSfxOneShots.add(src);
+    this.activeSfxNonSpatial.add(src);
+    src.onended = () => {
+      this.activeSfxOneShots.delete(src);
+      this.activeSfxNonSpatial.delete(src);
+      try {
+        src.disconnect();
+      } catch {
+        /* */
+      }
+      try {
+        playGain.disconnect();
+      } catch {
+        /* */
+      }
+    };
     src.start();
+  }
+
+  getDebugVoiceCounts(): {
+    sfxOneShots: number;
+    sfxNonSpatial: number;
+    spatial: number;
+    ambientLoops: number;
+    rainLoops: number;
+    music: number;
+    total: number;
+  } {
+    const sfxOneShots = this.activeSfxOneShots.size;
+    const sfxNonSpatial = this.activeSfxNonSpatial.size;
+    const spatial = this.spatialMixer?.getActiveCount() ?? 0;
+    const ambientLoops = this.sfxAmbientSource !== null ? 1 : 0;
+    const rainLoops = this.sfxRainSlots.length;
+    const music = this.musicSource !== null ? 1 : 0;
+    return {
+      sfxOneShots,
+      sfxNonSpatial,
+      spatial,
+      ambientLoops,
+      rainLoops,
+      music,
+      total: sfxOneShots + spatial + ambientLoops + rainLoops + music,
+    };
   }
 
   /**
@@ -593,6 +639,8 @@ export class AudioEngine {
     this.sfxPositionalTrim = null;
     this.buffers.clear();
     this.sfxVariantCount.clear();
+    this.activeSfxOneShots.clear();
+    this.activeSfxNonSpatial.clear();
     if (this.ctx !== null) {
       void this.ctx.close();
       this.ctx = null;

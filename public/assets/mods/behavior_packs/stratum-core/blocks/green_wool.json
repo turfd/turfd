@@ -19,7 +19,8 @@
       "stratum:tags": [
         "stratum:wool"
       ],
-      "stratum:numeric_id": 74
+      "stratum:numeric_id": 74,
+      "stratum:creative_category": "construction"
     }
   }
 }

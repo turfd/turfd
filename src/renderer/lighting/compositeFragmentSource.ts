@@ -220,11 +220,15 @@ float torchBloomGain(vec2 worldPos, vec2 tip) {
 }
 
 void main() {
-  vec2 sampleUv = clamp(
+  vec2 sampleUvRaw = clamp(
     vTextureCoord * uUvScale + uUvBaseOffset + uUvSubpixelOffset,
     vec2(0.0),
     vec2(1.0)
   );
+  // Nearest albedo texel (GPU sampler may still be linear on some paths). Keeps fractional
+  // canvas resolution + renderScale upscales sharp instead of bilinear-soft.
+  vec2 ts = max(uInputSize.xy, vec2(1.0));
+  vec2 sampleUv = (floor(sampleUvRaw * ts) + vec2(0.5)) / ts;
   vec4 albedo = texture(uTexture, sampleUv);
 
   // View pixels (0,0) = top-left of the visible viewport. Must use the same UV crop as

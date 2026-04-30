@@ -8,7 +8,8 @@
       "stratum:display_name": "String",
       "stratum:texture_key": "string",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 140
+      "stratum:numeric_id": 140,
+      "stratum:creative_category": "items"
     }
   }
 }

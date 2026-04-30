@@ -22,7 +22,8 @@
       "stratum:plant_foot_offset_px": 6,
       "stratum:plant_render_offset_y_px": 1,
       "stratum:wind_sway_max_px": 1,
-      "stratum:numeric_id": 30
+      "stratum:numeric_id": 30,
+      "stratum:creative_category": "nature"
     }
   }
 }

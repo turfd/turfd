@@ -18,12 +18,15 @@
       "stratum:light_absorption": 15,
       "stratum:material": "wood",
       "stratum:loot_table": "stratum:oak_log_stairs",
-      "stratum:tags": ["stratum:logs"],
+      "stratum:tags": [
+        "stratum:logs"
+      ],
       "stratum:fuel": {
         "burn_seconds": 12
       },
       "stratum:stair": true,
-      "stratum:numeric_id": 53
+      "stratum:numeric_id": 53,
+      "stratum:creative_category": "construction"
     }
   }
 }

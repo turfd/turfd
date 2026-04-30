@@ -31,6 +31,18 @@ import {
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import { WorldGenerator } from "../world/gen/WorldGenerator";
 
+/**
+ * Match {@link Camera#getEffectiveZoom}: the strip uses a fractional visual scale
+ * ({@link BACKGROUND_TILE_STRIP_VISUAL_SCALE}), so raw `zoom * scale` often yields a
+ * non-integer block width in screen pixels. That lets NN tile edges drift between
+ * pixels each frame (seams + shimmer), especially with {@link BlurFilter}.
+ */
+function snappedBackgroundStripZoom(zoom: number): number {
+  const raw = zoom * BACKGROUND_TILE_STRIP_VISUAL_SCALE;
+  const pixelsPerBlock = Math.max(1, Math.round(BLOCK_SIZE * raw));
+  return pixelsPerBlock / BLOCK_SIZE;
+}
+
 export type ParallaxStripRegenerateOptions = {
   seed: number;
   registry: BlockRegistry;
@@ -97,7 +109,7 @@ export class ParallaxTileStripRenderer {
     const screenW = Math.max(1, Math.round(renderer.width));
 
     const zoom = this.getZoom();
-    const stripZoom = zoom * BACKGROUND_TILE_STRIP_VISUAL_SCALE;
+    const stripZoom = snappedBackgroundStripZoom(zoom);
     const viewportBlocksX = screenW / (BLOCK_SIZE * stripZoom);
     const widthScale = opts.stripWidthScale ?? BACKGROUND_TILE_STRIP_WIDTH_SCALE;
     const nChunkCols = Math.max(
@@ -546,7 +558,7 @@ export class ParallaxTileStripRenderer {
     const screenW = Math.max(1, Math.round(renderer.width));
     const screenH = Math.max(1, Math.round(renderer.height));
     const zoom = this.getZoom();
-    const stripZoom = zoom * BACKGROUND_TILE_STRIP_VISUAL_SCALE;
+    const stripZoom = snappedBackgroundStripZoom(zoom);
     const { startCx, nChunkCols, alignBlocks, surfaceY } = this.stripLayout;
     this.stripRoot.scale.set(stripZoom);
     const baseX =

@@ -18,9 +18,12 @@
       "stratum:light_emission": 0,
       "stratum:light_absorption": 15,
       "stratum:material": "stone",
-      "stratum:tags": ["stratum:furnace_material"],
+      "stratum:tags": [
+        "stratum:furnace_material"
+      ],
       "stratum:loot_table": "stratum:smooth_stone",
-      "stratum:numeric_id": 82
+      "stratum:numeric_id": 82,
+      "stratum:creative_category": "construction"
     }
   }
 }

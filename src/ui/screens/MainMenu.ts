@@ -37,7 +37,10 @@ import { WorkshopScreen } from "./WorkshopScreen";
 import { parseJsoncText } from "../../core/jsonc";
 import { formatStratumReleaseTitle } from "../../releaseDisplay";
 import { getStratumBuildInfo } from "../../versionInfo";
-import { mountReleaseChangesMarkdown } from "../releaseChangesMarkdown";
+import {
+  mountReleaseChangesMarkdown,
+  normalizeReleaseTypography,
+} from "../releaseChangesMarkdown";
 
 export type MainMenuResult =
   | {
@@ -385,6 +388,7 @@ function injectStyles(base: string): void {
     .mm-whats-new {
       min-width: 0;
       overflow-y: auto;
+      overscroll-behavior: contain;
     }
     .mm-content-home .mm-whats-new.mm-home-changelog {
       flex: 0 0 auto;
@@ -398,7 +402,7 @@ function injectStyles(base: string): void {
       display: flex;
       flex-direction: column;
       min-height: 0;
-      max-height: min(42vh, 280px);
+      max-height: min(46vh, 320px);
       overflow: hidden;
       border: 1px solid var(--mm-border);
       border-radius: var(--mm-radius-md);
@@ -433,7 +437,7 @@ function injectStyles(base: string): void {
       text-wrap: balance;
     }
     .mm-whats-new::-webkit-scrollbar { width: 4px; }
-    .mm-whats-new::-webkit-scrollbar-track { background: transparent; }
+    .mm-whats-new::-webkit-scrollbar-track { background: rgb(44, 44, 46); }
     .mm-whats-new::-webkit-scrollbar-thumb {
       background: var(--mm-border-strong);
       border-radius: 4px;
@@ -469,23 +473,101 @@ function injectStyles(base: string): void {
     .mm-whats-new-readmore:hover {
       color: var(--mm-ink);
     }
+    /* Full changelog modal: same stack as home (panel surface + inner deep card). */
     .mm-modal-card.mm-release-notes-modal-card {
       width: min(52rem, 100%);
-      max-height: min(85vh, 640px);
+      max-height: min(92vh, 760px);
       display: flex;
       flex-direction: column;
       min-height: 0;
+      background: var(--mm-surface);
+      border: 1px solid var(--mm-border);
+      padding: 1.35rem 1.5rem;
+      box-sizing: border-box;
+    }
+    .mm-release-notes-modal-head {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex-shrink: 0;
+      margin: 0 0 10px;
+    }
+    .mm-release-notes-modal-head .mm-home-changelog-title {
+      margin: 0;
+      font-weight: normal;
     }
     .mm-release-changes-scroll {
-      flex: 1;
-      min-height: 0;
+      position: relative;
+      flex: 1 1 auto;
+      min-height: min(42vh, 360px);
+      max-height: min(62vh, 560px);
       overflow-y: auto;
+      overflow-x: hidden;
       overflow-wrap: break-word;
       font-family: 'M5x7', monospace;
       font-size: calc(19px + var(--mm-m5-nudge));
       line-height: 1.55;
       color: var(--mm-ink-mid);
-      padding-right: 6px;
+      padding: 14px 16px 16px;
+      box-sizing: border-box;
+      /* Opaque fill avoids bright flashes while scrolling (semi-transparent + compositing). */
+      background-color: rgb(36, 36, 38);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-md);
+      corner-shape: squircle;
+      scrollbar-gutter: stable;
+      scrollbar-width: thin;
+      scrollbar-color: var(--mm-border-strong) rgb(36, 36, 38);
+      overscroll-behavior: contain;
+    }
+    .mm-release-changes-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .mm-release-changes-scroll::-webkit-scrollbar-track {
+      background: rgb(36, 36, 38);
+    }
+    .mm-release-changes-scroll::-webkit-scrollbar-thumb {
+      background: var(--mm-border-strong);
+      border-radius: 4px;
+    }
+    .mm-release-changes-scroll.mm-release-changes-scroll--overflow {
+      box-shadow: inset 0 -24px 20px -18px rgba(0, 0, 0, 0.32);
+    }
+    .mm-release-scroll-fade-hint {
+      position: sticky;
+      bottom: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      margin-top: -1.5rem;
+      height: 1.45rem;
+      pointer-events: none;
+      font-family: 'BoldPixels', monospace;
+      font-size: 14px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--mm-ink-soft);
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65))
+        drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+      opacity: 1;
+      transition: opacity 0.22s ease;
+    }
+    .mm-release-scroll-fade-hint.mm-release-scroll-fade-hint--hidden {
+      opacity: 0;
+    }
+    .mm-release-scroll-fade-arr {
+      display: inline-block;
+      width: 0;
+      height: 0;
+      margin-bottom: 1px;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid var(--mm-ink-soft);
+    }
+    .mm-release-notes-modal-card .mm-modal-actions {
+      margin-top: 12px;
     }
     .mm-release-changes-scroll .mm-release-changes-empty {
       color: var(--mm-ink-soft);
@@ -514,16 +596,31 @@ function injectStyles(base: string): void {
     .mm-release-changes-md h4 { font-size: 16px; text-transform: none; }
     .mm-release-changes-md p { margin: 0 0 0.75em; text-wrap: pretty; }
     .mm-release-changes-md a {
-      color: #7eb8ff;
+      color: var(--mm-ink-soft);
       text-decoration: underline;
-      text-underline-offset: 2px;
+      text-underline-offset: 3px;
     }
-    .mm-release-changes-md a:hover { color: #b8d9ff; }
-    .mm-release-changes-md strong {
-      font-family: 'BoldPixels', monospace;
-      font-size: 0.95em;
+    .mm-release-changes-md a:hover {
       color: var(--mm-ink);
-      letter-spacing: 0.03em;
+    }
+    /* Stay on M5x7; synthetic bold reads more even than swapping to BoldPixels mid-sentence. */
+    .mm-release-changes-md strong {
+      font-family: 'M5x7', monospace;
+      font-size: inherit;
+      font-weight: 700;
+      color: var(--mm-ink);
+      letter-spacing: normal;
+    }
+    .mm-release-changes-md h1 strong,
+    .mm-release-changes-md h2 strong,
+    .mm-release-changes-md h3 strong,
+    .mm-release-changes-md h4 strong,
+    .mm-release-changes-md th strong {
+      font-family: inherit;
+      font-size: inherit;
+      letter-spacing: inherit;
+      color: inherit;
+      font-weight: 700;
     }
     .mm-release-changes-md em { font-style: italic; color: var(--mm-ink-mid); }
     .mm-release-changes-md del { opacity: 0.75; text-decoration: line-through; }
@@ -541,10 +638,10 @@ function injectStyles(base: string): void {
     .mm-release-changes-md blockquote {
       margin: 0.6em 0 0.85em;
       padding: 0.5em 0 0.5em 12px;
-      border-left: 3px solid rgba(116, 179, 255, 0.45);
-      background: rgba(0, 0, 0, 0.12);
+      border-left: 3px solid var(--mm-border-strong);
+      background: rgba(0, 0, 0, 0.1);
       border-radius: 0 6px 6px 0;
-      color: var(--mm-ink-soft);
+      color: var(--mm-ink-mid);
     }
     .mm-release-changes-md hr {
       border: none;
@@ -557,16 +654,17 @@ function injectStyles(base: string): void {
       font-size: 0.88em;
       padding: 0.12em 0.35em;
       border-radius: 4px;
-      background: rgba(0, 0, 0, 0.28);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid var(--mm-border);
     }
     .mm-release-changes-md pre {
       margin: 0.65em 0 0.9em;
       padding: 10px 12px;
       overflow-x: auto;
-      border-radius: 8px;
+      border-radius: var(--mm-radius-md);
+      corner-shape: squircle;
       border: 1px solid var(--mm-border);
-      background: rgba(0, 0, 0, 0.35);
+      background: rgba(0, 0, 0, 0.2);
       line-height: 1.45;
     }
     .mm-release-changes-md pre code {
@@ -592,11 +690,11 @@ function injectStyles(base: string): void {
       font-size: 0.82em;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(0, 0, 0, 0.12);
       color: var(--mm-ink);
     }
     .mm-release-changes-md tr:nth-child(even) td {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(0, 0, 0, 0.06);
     }
     .mm-release-changes-md img {
       max-width: 100%;
@@ -627,10 +725,11 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       border-radius: var(--mm-radius-md);
       corner-shape: squircle;
-      background: var(--mm-surface-deep);
+      background-color: rgb(36, 36, 38);
+      overscroll-behavior: contain;
     }
     .mm-worldlist::-webkit-scrollbar { width: 4px; }
-    .mm-worldlist::-webkit-scrollbar-track { background: transparent; }
+    .mm-worldlist::-webkit-scrollbar-track { background: rgb(36, 36, 38); }
     .mm-worldlist::-webkit-scrollbar-thumb {
       background: var(--mm-border-strong);
       border-radius: 4px;
@@ -1180,9 +1279,13 @@ function injectStyles(base: string): void {
       overflow-y: auto;
       overflow-x: hidden;
       padding-right: var(--ws-1);
+      overscroll-behavior: contain;
     }
     .mm-workshop-body::-webkit-scrollbar {
       width: 4px;
+    }
+    .mm-workshop-body::-webkit-scrollbar-track {
+      background: rgb(36, 36, 38);
     }
     .mm-workshop-body::-webkit-scrollbar-thumb {
       background: var(--mm-border-strong);
@@ -2634,6 +2737,7 @@ function injectStyles(base: string): void {
       /* .mm-root is pointer-events: none; re-enable hit-testing for the overlay + card. */
       pointer-events: auto;
       animation: mm-modal-backdrop-in 0.24s ease forwards;
+      overscroll-behavior: contain;
     }
     .mm-modal-card {
       width: min(28rem, 100%);
@@ -2783,6 +2887,7 @@ function injectStyles(base: string): void {
       min-height: 0;
       overflow-y: auto;
       padding: 1rem 1.25rem 1.5rem;
+      overscroll-behavior: contain;
     }
     .mm-modal-full-footer {
       flex-shrink: 0;
@@ -2849,15 +2954,19 @@ function injectStyles(base: string): void {
       width: min(288px, 40%);
       flex-shrink: 0;
       border-right: 1px solid var(--mm-border);
-      background: var(--mm-surface-deep);
+      background-color: rgb(36, 36, 38);
       display: flex;
       flex-direction: column;
       padding: 16px;
       gap: 14px;
       overflow-y: auto;
+      overscroll-behavior: contain;
     }
     .mm-bedrock-world-sidebar::-webkit-scrollbar {
       width: 4px;
+    }
+    .mm-bedrock-world-sidebar::-webkit-scrollbar-track {
+      background: rgb(36, 36, 38);
     }
     .mm-bedrock-world-sidebar::-webkit-scrollbar-thumb {
       background: var(--mm-border-strong);
@@ -3548,15 +3657,16 @@ export class MainMenu {
     const base = import.meta.env.BASE_URL;
     injectStyles(base);
 
-    // On cold startup, let the cinematic intro have headroom before heavy menu world work.
     const prewarmedBackground = opts.prewarmedBackground;
     const canReusePrewarmed = prewarmedBackground?.isLive() === true;
     const bg = canReusePrewarmed
       ? prewarmedBackground
       : new MenuBackground({
           disableIntroSlide: opts.playStartupIntro === true,
-          deferHeavyInitMs: opts.playStartupIntro === true ? 1100 : 0,
         });
+    if (canReusePrewarmed) {
+      bg.ensureBackdropMountedFirst(mount);
+    }
     const bgPromise = canReusePrewarmed
       ? Promise.resolve()
       : bg.init(mount).catch((err: unknown) => {
@@ -3682,7 +3792,9 @@ export class MainMenu {
 
       const navMeta = document.createElement("div");
       navMeta.className = "mm-nav-meta";
-      navMeta.textContent = "Browse rooms online or host from Solo saves.";
+      const navMetaLine = document.createElement("div");
+      navMetaLine.textContent = "Browse rooms online or host from Solo saves.";
+      navMeta.appendChild(navMetaLine);
       nav.appendChild(navMeta);
 
       function setActiveTab(tab: NavTab): void {
@@ -3702,8 +3814,12 @@ export class MainMenu {
 
       // -- Modal helpers -----------------------------------------------------
       let pendingDeleteUuid: string | null = null;
+      /** Disconnects ResizeObserver / listeners for the release-notes changelog modal. */
+      let releaseNotesScrollCleanup: (() => void) | null = null;
 
       function closeModal(): void {
+        releaseNotesScrollCleanup?.();
+        releaseNotesScrollCleanup = null;
         for (const el of root.querySelectorAll(".mm-modal")) {
           el.remove();
         }
@@ -3717,24 +3833,78 @@ export class MainMenu {
         const card = document.createElement("div");
         card.className = "mm-modal-card mm-release-notes-modal-card";
 
-        const heading = document.createElement("h3");
-        heading.className = "mm-modal-title";
-        heading.textContent = "What's New";
+        const head = document.createElement("header");
+        head.className = "mm-release-notes-modal-head";
+        const headKicker = document.createElement("p");
+        headKicker.className = "mm-home-changelog-kicker";
+        headKicker.textContent = "Changelog";
+        const headTitle = document.createElement("h2");
+        headTitle.className = "mm-home-changelog-title";
+        headTitle.textContent = formatStratumReleaseTitle(
+          getStratumBuildInfo().appVersion,
+        );
+        head.appendChild(headKicker);
+        head.appendChild(headTitle);
 
         const scroll = document.createElement("div");
         scroll.className = "mm-release-changes-scroll";
+        scroll.setAttribute("tabindex", "0");
+        scroll.setAttribute("role", "region");
+        scroll.setAttribute("aria-label", "Full changelog");
         mountReleaseChangesMarkdown(scroll, __RELEASE_CHANGES_MD__);
+
+        const scrollFadeHint = document.createElement("div");
+        scrollFadeHint.className = "mm-release-scroll-fade-hint";
+        scrollFadeHint.setAttribute("aria-hidden", "true");
+        const scrollArrL = document.createElement("span");
+        scrollArrL.className = "mm-release-scroll-fade-arr";
+        const scrollArrR = document.createElement("span");
+        scrollArrR.className = "mm-release-scroll-fade-arr";
+        scrollFadeHint.appendChild(scrollArrL);
+        scrollFadeHint.appendChild(document.createTextNode(" Scroll. "));
+        scrollFadeHint.appendChild(scrollArrR);
+        scrollFadeHint.hidden = true;
+        scroll.appendChild(scrollFadeHint);
 
         const actions = document.createElement("div");
         actions.className = "mm-modal-actions";
         const closeBtn = makeBtn("Close", "mm-btn mm-btn-subtle");
-        closeBtn.addEventListener("click", closeModal);
         actions.appendChild(closeBtn);
 
-        card.appendChild(heading);
+        card.appendChild(head);
         card.appendChild(scroll);
         card.appendChild(actions);
         modal.appendChild(card);
+
+        const syncScrollOverflowClass = (): void => {
+          const overflow = scroll.scrollHeight > scroll.clientHeight + 2;
+          if (overflow) {
+            scroll.classList.add("mm-release-changes-scroll--overflow");
+            const atEnd =
+              scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 6;
+            scrollFadeHint.hidden = false;
+            scrollFadeHint.classList.toggle("mm-release-scroll-fade-hint--hidden", atEnd);
+          } else {
+            scroll.classList.remove("mm-release-changes-scroll--overflow");
+            scrollFadeHint.hidden = true;
+            scrollFadeHint.classList.remove("mm-release-scroll-fade-hint--hidden");
+          }
+        };
+        const ro = new ResizeObserver(() => {
+          syncScrollOverflowClass();
+        });
+        ro.observe(scroll);
+        scroll.addEventListener("scroll", syncScrollOverflowClass, { passive: true });
+        syncScrollOverflowClass();
+        requestAnimationFrame(() => {
+          syncScrollOverflowClass();
+        });
+
+        releaseNotesScrollCleanup = (): void => {
+          ro.disconnect();
+          scroll.removeEventListener("scroll", syncScrollOverflowClass);
+        };
+        closeBtn.addEventListener("click", closeModal);
         modal.addEventListener("click", (ev) => {
           if (ev.target === modal) closeModal();
         });
@@ -3949,7 +4119,7 @@ export class MainMenu {
 
         const wnSummary = document.createElement("p");
         wnSummary.className = "mm-whats-new-summary";
-        const sumTrim = __RELEASE_SUMMARY__.trim();
+        const sumTrim = normalizeReleaseTypography(__RELEASE_SUMMARY__).trim();
         if (sumTrim.length > 0) {
           wnSummary.textContent = sumTrim;
         } else if (import.meta.env.DEV) {

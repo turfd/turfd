@@ -19,7 +19,8 @@
       "stratum:material": "door",
       "stratum:loot_table": "stratum:birch_door_top",
       "stratum:door_half": "top",
-      "stratum:numeric_id": 59
+      "stratum:numeric_id": 59,
+      "stratum:creative_category": "construction"
     }
   }
 }

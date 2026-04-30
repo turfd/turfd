@@ -8,7 +8,8 @@
       "stratum:display_name": "Rotten Flesh",
       "stratum:texture_key": "rotten_flesh",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 143
+      "stratum:numeric_id": 143,
+      "stratum:creative_category": "food"
     }
   }
 }

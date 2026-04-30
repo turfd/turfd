@@ -10,7 +10,8 @@
       "stratum:max_stack": 64,
       "stratum:numeric_id": 92,
       "stratum:eat_restore_health": 1,
-      "stratum:inventory_tooltip": "Eat to restore half a heart."
+      "stratum:inventory_tooltip": "Eat to restore half a heart.",
+      "stratum:creative_category": "food"
     }
   }
 }

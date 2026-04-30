@@ -59,7 +59,12 @@ import {
   captureAndSavePerformanceReport,
   type PerfWorldSnapshot,
 } from "../debug/perfCapture";
-import { GpuDebugHud } from "../debug/GpuDebugHud";
+import {
+  GpuDebugHud,
+  type DebugHudSnapshot,
+  type DebugTargetedBlockInfo,
+  type DebugTargetedTile,
+} from "../debug/GpuDebugHud";
 import { withPerfSpan } from "../debug/perfSpans";
 import { getEffectiveViewDistanceChunks } from "../ui/settings/videoPrefs";
 import {
@@ -691,22 +696,6 @@ export class Game {
       onRender: (alpha) => this.render(alpha),
     });
     this._wireCoreNetworkEvents();
-    this.networkUnsubs.push(
-      this.bus.on("ui:set-world-time-phase", (e) => {
-        const st = this.adapter.state;
-        if (st.status === "connected" && st.role === "client") {
-          return;
-        }
-        const p = Math.min(1, Math.max(0, e.phase));
-        this._worldTime.setMs(p * DAY_LENGTH_MS);
-        if (st.status === "connected" && st.role === "host") {
-          this.adapter.broadcast({
-            type: MsgType.WORLD_TIME,
-            worldTimeMs: this._worldTime.ms,
-          });
-        }
-      }),
-    );
     this.networkUnsubs.push(
       this.bus.on("ui:perf-capture-start", (e) => {
         if (this._perfCaptureActive) {
@@ -3615,6 +3604,9 @@ export class Game {
       executeWeather: (issuerPeerId, rest) => {
         this._executeWeatherCommand(issuerPeerId, rest);
       },
+      executeTime: (issuerPeerId, rest) => {
+        this._executeTimeCommand(issuerPeerId, rest);
+      },
       executeSummon: (issuerPeerId, rest) => {
         this._executeSummonCommand(issuerPeerId, rest);
       },
@@ -4004,6 +3996,17 @@ export class Game {
     });
   }
 
+  private _broadcastWorldTimeToClients(): void {
+    const st = this.adapter.state;
+    if (st.status !== "connected" || st.role !== "host") {
+      return;
+    }
+    this.adapter.broadcast({
+      type: MsgType.WORLD_TIME,
+      worldTimeMs: this._worldTime.ms,
+    });
+  }
+
   private _playLightningStrikeLocal(): void {
     this._lightningAnimEndMs = performance.now() + 300;
     this.audio?.playSfx("weather_lightning", { volume: 0.9 });
@@ -4039,6 +4042,45 @@ export class Game {
     this._giveFeedbackToIssuer(
       issuerPeerId,
       "Usage: /weather set <rain|clear>",
+    );
+  }
+
+  /** Host (`issuerPeerId` set) or solo (`null`). `rest` is the command tail after `/time`. */
+  private _executeTimeCommand(issuerPeerId: string | null, rest: string): void {
+    const parts = rest.trim().toLowerCase().split(/\s+/).filter((p) => p.length > 0);
+    if (parts.length < 2 || parts[0] !== "set") {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Usage: /time set <dawn|day|dusk|night|midnight|noon|0-100>",
+      );
+      return;
+    }
+    const value = parts[1];
+    const parsedPercent = Number(value);
+    const ms =
+      value === "dawn"
+        ? 0
+        : value === "day" || value === "noon"
+          ? DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS * 0.5
+          : value === "dusk"
+            ? DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS
+            : value === "night" || value === "midnight"
+              ? DAWN_LENGTH_MS + DAYLIGHT_LENGTH_MS + DUSK_LENGTH_MS
+              : Number.isFinite(parsedPercent)
+                ? (Math.min(100, Math.max(0, parsedPercent)) / 100) * DAY_LENGTH_MS
+                : null;
+    if (ms === null) {
+      this._giveFeedbackToIssuer(
+        issuerPeerId,
+        "Usage: /time set <dawn|day|dusk|night|midnight|noon|0-100>",
+      );
+      return;
+    }
+    this._worldTime.setMs(ms);
+    this._broadcastWorldTimeToClients();
+    this._giveFeedbackToIssuer(
+      issuerPeerId,
+      `Time set to ${value}${Number.isFinite(parsedPercent) ? "%" : ""}.`,
     );
   }
 
@@ -4548,6 +4590,28 @@ export class Game {
         return;
       }
       this._executeWeatherCommand(null, rest);
+      return;
+    }
+    const timeMatch = /^\/time(\s+.*)?$/i.exec(trimmed);
+    if (timeMatch !== null && st.status !== "connected") {
+      if (!this._areCheatsEnabled()) {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Cheats are disabled for this world.",
+        } satisfies GameEvent);
+        return;
+      }
+      const rest = (timeMatch[1] ?? "").trim();
+      if (rest === "") {
+        this.bus.emit({
+          type: "ui:chat-line",
+          kind: "system",
+          text: "Usage: /time set <dawn|day|dusk|night|midnight|noon|0-100>",
+        } satisfies GameEvent);
+        return;
+      }
+      this._executeTimeCommand(null, rest);
       return;
     }
     const summonMatch = /^\/summon(\s+.*)?$/i.exec(trimmed);
@@ -7909,6 +7973,18 @@ export class Game {
       if (input.isJustPressed("toggleGpuDebug")) {
         this._gpuDebugHud?.toggle(pipeline);
       }
+      if (input.isJustPressed("toggleGpuDebugProfiler")) {
+        this._gpuDebugHud?.setGraphMode("profiler");
+      }
+      if (input.isJustPressed("toggleGpuDebugPerfGraphs")) {
+        this._gpuDebugHud?.setGraphMode("perf");
+      }
+      if (input.isJustPressed("toggleGpuDebugNetGraphs")) {
+        this._gpuDebugHud?.setGraphMode("network");
+      }
+      if (input.isJustPressed("cycleGpuDebugProfile")) {
+        this._gpuDebugHud?.cycleProfile();
+      }
 
       if (input.isJustPressed("pause")) {
         if (this._isLocalDeathBlocking()) {
@@ -8683,6 +8759,110 @@ export class Game {
     );
   }
 
+  /**
+   * Build the F3 "Targeted Block" snapshot from the world cell under the cursor.
+   * Returns null when there's no world / input / valid cell. Populates tile data
+   * for chests, furnaces, and signs by reading the corresponding tile-state maps.
+   */
+  private _buildDebugTargetedBlockInfo(): DebugTargetedBlockInfo | null {
+    const world = this.world;
+    const input = this.input;
+    const em = this.entityManager;
+    if (world === null || input === null) {
+      return null;
+    }
+    const wx = Math.floor(input.mouseWorldPos.x / BLOCK_SIZE);
+    const wy = Math.floor(-input.mouseWorldPos.y / BLOCK_SIZE);
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+      return null;
+    }
+    let inReach = false;
+    if (em !== null) {
+      const player = em.getPlayer();
+      const pcx = Math.floor(player.state.position.x / BLOCK_SIZE);
+      const pcy = Math.floor(player.state.position.y / BLOCK_SIZE);
+      inReach =
+        this._isSandboxWorld() ||
+        Math.max(Math.abs(pcx - wx), Math.abs(pcy - wy)) <= REACH_BLOCKS;
+    }
+    const fg = world.getBlock(wx, wy);
+    const bg = world.getBackgroundBlock(wx, wy);
+    const bgId = world.getBackgroundId(wx, wy);
+    let tile: DebugTargetedTile | null = null;
+    const ir = this._itemRegistry;
+    const furnace = world.getFurnaceTile(wx, wy);
+    if (furnace !== undefined) {
+      const fuelDef =
+        furnace.fuel !== null && ir !== null
+          ? ir.getById(furnace.fuel.itemId as ItemId)
+          : undefined;
+      let outputUsed = 0;
+      for (const slot of furnace.outputSlots) {
+        if (slot !== null && slot.count > 0) {
+          outputUsed += 1;
+        }
+      }
+      const head = furnace.queue[0];
+      tile = {
+        kind: "furnace",
+        fuelKey: fuelDef?.key ?? null,
+        fuelCount: furnace.fuel?.count ?? 0,
+        fuelRemainingSec: furnace.fuelRemainingSec,
+        cookProgressSec: furnace.cookProgressSec,
+        queueLength: furnace.queue.length,
+        queueHeadRecipe: head?.smeltingRecipeId ?? null,
+        queueHeadBatches: head?.batches ?? null,
+        outputUsedSlots: outputUsed,
+        outputSlotCount: furnace.outputSlots.length,
+      };
+    } else {
+      const sign = world.getSignTile(wx, wy);
+      if (sign !== undefined) {
+        tile = { kind: "sign", text: sign.text };
+      } else {
+        const anchor = world.getChestStorageAnchorForCell(wx, wy);
+        if (anchor !== null) {
+          const chest = world.getChestTileAtAnchor(anchor.ax, anchor.ay);
+          if (chest !== undefined) {
+            let used = 0;
+            for (const slot of chest.slots) {
+              if (slot !== null && slot.count > 0) {
+                used += 1;
+              }
+            }
+            tile = {
+              kind: "chest",
+              slotCount: chest.slots.length,
+              filledSlots: used,
+              lootTableId: chest.lootTableId ?? null,
+              lootRolled: chest.lootRolled ?? false,
+              anchorX: anchor.ax,
+              anchorY: anchor.ay,
+              isDouble: chest.slots.length > 18,
+            };
+          }
+        }
+      }
+    }
+    return {
+      wx,
+      wy,
+      inReach,
+      fgIdentifier: fg.identifier,
+      fgDisplayName: fg.displayName,
+      fgId: fg.id,
+      bgIdentifier: bg.identifier,
+      bgId,
+      hardness: fg.hardness,
+      lightEmission: fg.lightEmission,
+      lightAbsorption: fg.lightAbsorption,
+      blockLight: world.getBlockLight(wx, wy),
+      skyLight: world.getSkyLight(wx, wy),
+      metadata: world.getMetadata(wx, wy),
+      tile,
+    };
+  }
+
   private render(alpha: number): void {
     const now = performance.now();
     const winterAmount = 0;
@@ -9037,7 +9217,93 @@ export class Game {
       this.pipeline?.render(alpha);
     });
     perfMark("RenderPipeline.render", tRenderPipeline);
-    this._gpuDebugHud?.sync(this.pipeline, dtSec);
+    const debugHud = this._gpuDebugHud;
+    if (debugHud?.isOpen()) {
+      let mobs = 0;
+      const mm = this._mobManager;
+      if (mm !== null) {
+        for (const _ of mm.getAll()) {
+          mobs += 1;
+        }
+      }
+      let loadedChunks = 0;
+      const world = this.world;
+      if (world !== null) {
+        for (const _ of world.loadedChunkCoords()) {
+          loadedChunks += 1;
+        }
+      }
+      const remotes = world?.getRemotePlayers().size ?? 0;
+      const dropped = world?.getDroppedItems().size ?? 0;
+      const arrows = world?.getArrows().size ?? 0;
+      const em = this.entityManager;
+      const playerState = em?.getPlayer().state ?? null;
+      const playerX = playerState?.position.x ?? 0;
+      const playerY = playerState?.position.y ?? 0;
+      const playerBlockX = Math.floor(playerX / BLOCK_SIZE);
+      const playerBlockY = Math.floor(playerY / BLOCK_SIZE);
+      const playerVx = playerState?.velocity.x ?? 0;
+      const playerVy = playerState?.velocity.y ?? 0;
+      const chunkX = Math.floor(playerX / (CHUNK_SIZE * BLOCK_SIZE));
+      const chunkY = Math.floor(playerY / (CHUNK_SIZE * BLOCK_SIZE));
+      const sound = this.audio?.getDebugVoiceCounts() ?? null;
+      const perfMem = (
+        performance as Performance & {
+          memory?: { usedJSHeapSize?: number; jsHeapSizeLimit?: number };
+        }
+      ).memory;
+      const memoryUsedMiB =
+        perfMem?.usedJSHeapSize === undefined
+          ? null
+          : perfMem.usedJSHeapSize / (1024 * 1024);
+      const memoryLimitMiB =
+        perfMem?.jsHeapSizeLimit === undefined
+          ? null
+          : perfMem.jsHeapSizeLimit / (1024 * 1024);
+      const memoryPercent =
+        memoryUsedMiB === null || memoryLimitMiB === null || memoryLimitMiB <= 0
+          ? null
+          : (memoryUsedMiB / memoryLimitMiB) * 100;
+      const profiler = Object.entries(perfSpikePhaseMs)
+        .map(([name, ms]) => ({ name, ms }))
+        .sort((a, b) => b.ms - a.ms)
+        .slice(0, 5);
+      const targeted = this._buildDebugTargetedBlockInfo();
+      const snapshot: DebugHudSnapshot = {
+        versionLabel: formatStratumBuildLine(),
+        memoryUsedMiB,
+        memoryLimitMiB,
+        memoryPercent,
+        playerX,
+        playerY,
+        playerBlockX,
+        playerBlockY,
+        playerVx,
+        playerVy,
+        chunkX,
+        chunkY,
+        loadedChunks,
+        entityCount: 1 + remotes + mobs + dropped + arrows,
+        remotePlayers: remotes,
+        mobs,
+        droppedItems: dropped,
+        arrows,
+        soundsPlaying: sound?.total ?? 0,
+        soundSpatial: sound?.spatial ?? 0,
+        soundOneShots: sound?.sfxOneShots ?? 0,
+        soundPlayerLike: sound?.sfxNonSpatial ?? 0,
+        soundAmbientLoops: sound?.ambientLoops ?? 0,
+        soundRainLoops: sound?.rainLoops ?? 0,
+        soundMusic: sound?.music ?? 0,
+        txPerTick: null,
+        rxPerTick: null,
+        pingMs: null,
+        tpsMs: FIXED_TIMESTEP_MS,
+        profiler,
+        targeted,
+      };
+      debugHud.sync(this.pipeline, dtSec, snapshot);
+    }
     if (import.meta.env.DEV) {
       const frameMs = dtSec * 1000;
       const renderMs = perfSpikePhaseMs["RenderPipeline.render"] ?? 0;

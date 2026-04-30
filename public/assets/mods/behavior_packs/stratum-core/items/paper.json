@@ -8,7 +8,8 @@
       "stratum:display_name": "Paper",
       "stratum:texture_key": "paper",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 132
+      "stratum:numeric_id": 132,
+      "stratum:creative_category": "items"
     }
   }
 }

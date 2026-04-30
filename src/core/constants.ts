@@ -369,16 +369,15 @@ export const FURNACE_ACCESS_RADIUS_BLOCKS = 4;
 export const STONECUTTER_ACCESS_RADIUS_BLOCKS = 4;
 
 /**
- * Upper bound for Pixi resolution (device pixel ratio) after the 1080p-class pixel budget.
+ * Upper bound for Pixi resolution (device pixel ratio) after {@link MAX_RENDER_BACKBUFFER_PIXELS}.
  * Cuts cost on high-DPR phones without changing layout (CSS still fills the viewport).
  */
 export const MAX_RENDER_DEVICE_PIXEL_RATIO = 2;
 
 /**
- * Soft cap on main canvas pixel count (logicalW × logicalH × resolution²). ~1080p fill.
- * The game renderer picks an **integer** resolution (1, 2, …) under this cap so the WebGL
- * buffer stays a whole-number multiple of layout pixels (crisp pixel art). If the viewport
- * exceeds this budget even at 1×, it falls back to a fractional scale below 1.
+ * Soft cap on main canvas pixel count (logicalW × logicalH × resolution²). ~1080p-class budget.
+ * Larger viewports may use fractional Pixi `resolution` (below 1) for GPU cost; albedo is then
+ * **nearest-snapped** in {@link CompositePass} so upscales stay sharp, not bilinear-soft.
  */
 export const MAX_RENDER_BACKBUFFER_PIXELS = 1920 * 1080;
 
@@ -563,6 +562,8 @@ export const FIREFLY_MIN_WATER_DISTANCE_BLOCKS = 2;
 export const FIREFLY_LIGHT_MAX_EMITTERS = 5;
 /** Relative strength for firefly lights in the placed-light path. */
 export const FIREFLY_LIGHT_STRENGTH = 0.42;
+/** Added to firefly world X (px) before bloom/placed-light worldBlockX; negative = left on screen. */
+export const FIREFLY_LIGHT_BLOOM_OFFSET_SCREEN_PX = -2;
 
 /** Blocks per chunk edge (square chunks). */
 export const CHUNK_SIZE = 32;
@@ -954,25 +955,25 @@ export const TERRAIN_BASE_SURFACE_BIAS_BLOCKS = 2;
 /**
  * Lake biome: horizontal scale in blocks (simplex input `wx / this`). Larger ⇒ rarer lake regions / wider basins.
  */
-export const LAKE_BIOME_SCALE_BLOCKS = 920;
+export const LAKE_BIOME_SCALE_BLOCKS = 1100;
 
 /**
  * Lake mask (macro noise 0..1): smoothstep edges. Higher band ⇒ fewer, more separated lakes.
  */
 /** Narrower lake basins vs sea (fewer large “ocean” columns). */
-export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.95;
-export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.992;
+export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.962;
+export const LAKE_BIOME_MACRO_SMOOTH_HIGH = 0.995;
 
 /**
  * Second noise channel (0..1): multiplied with macro mask for irregular shorelines and extra rarity.
  */
-export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.65;
-export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.93;
+export const LAKE_BIOME_MICRO_SMOOTH_LOW = 0.7;
+export const LAKE_BIOME_MICRO_SMOOTH_HIGH = 0.94;
 
 /**
  * Applied to (macro × micro) so mid-strength shores shrink — fewer large lake footprints.
  */
-export const LAKE_BIOME_INFLUENCE_POW = 2.05;
+export const LAKE_BIOME_INFLUENCE_POW = 2.28;
 
 /** Approximate lake bed depth below {@link WATER_SEA_LEVEL_WY} at full lake influence (before jitter). */
 export const LAKE_BIOME_DEPTH_BLOCKS = 7;
@@ -1091,16 +1092,16 @@ export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_AMBIENT_BELOW = 0.5;
  * Floor on parallax tint brightness at night (before ambientTint). Stops the horizon going
  * nearly black when `ambient` is tiny; proportional `× BRIGHTEN` alone barely moves it.
  */
-export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_MIN_SCALE = 0.32;
+export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_MIN_SCALE = 0.22;
 
 /** Extra multiplier on scale when ambient is below {@link BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_AMBIENT_BELOW}. */
-export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_BRIGHTEN = 1.15;
+export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_BRIGHTEN = 1.02;
 
 /**
  * At full night (ambient → 0), blend this much of ambientTint toward white so cool night
  * colors do not crush the distant strip.
  */
-export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_TINT_WHITEN = 0.55;
+export const BACKGROUND_TILE_STRIP_NIGHT_PARALLAX_TINT_WHITEN = 0.38;
 
 /**
  * Distance-fog strength for the parallax terrain strip: how strongly the multiplicative

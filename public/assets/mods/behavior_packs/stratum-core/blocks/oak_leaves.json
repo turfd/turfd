@@ -19,7 +19,8 @@
       "stratum:loot_table": "stratum:oak_leaves",
       "stratum:random_flip_x": true,
       "stratum:decoration_leaves": true,
-      "stratum:numeric_id": 19
+      "stratum:numeric_id": 19,
+      "stratum:creative_category": "nature"
     }
   }
 }

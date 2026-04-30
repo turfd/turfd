@@ -18,12 +18,15 @@
       "stratum:light_absorption": 15,
       "stratum:material": "wood",
       "stratum:loot_table": "stratum:spruce_plank_stairs",
-      "stratum:tags": ["stratum:planks"],
+      "stratum:tags": [
+        "stratum:planks"
+      ],
       "stratum:fuel": {
         "burn_seconds": 4
       },
       "stratum:stair": true,
-      "stratum:numeric_id": 51
+      "stratum:numeric_id": 51,
+      "stratum:creative_category": "construction"
     }
   }
 }

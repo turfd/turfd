@@ -11,7 +11,8 @@
       "stratum:numeric_id": 141,
       "stratum:eat_restore_health": 2,
       "stratum:eat_temporary_duration_sec": 35,
-      "stratum:inventory_tooltip": "Eat: 1 temporary heart (pink) that vanishes; cook for lasting healing."
+      "stratum:inventory_tooltip": "Eat: 1 temporary heart (pink) that vanishes; cook for lasting healing.",
+      "stratum:creative_category": "food"
     }
   }
 }

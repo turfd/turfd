@@ -8,7 +8,8 @@
       "stratum:display_name": "Bucket",
       "stratum:texture_key": "bucket",
       "stratum:max_stack": 1,
-      "stratum:numeric_id": 93
+      "stratum:numeric_id": 93,
+      "stratum:creative_category": "equipment"
     }
   }
 }

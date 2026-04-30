@@ -7,7 +7,8 @@
     "components": {
       "stratum:display_name": "Diamond",
       "stratum:texture_key": "diamond",
-      "stratum:numeric_id": 99
+      "stratum:numeric_id": 99,
+      "stratum:creative_category": "items"
     }
   }
 }

@@ -2,7 +2,12 @@
  * Validates raw block JSON with Zod (strict keys) and maps to {@link BlockDefinitionBase}.
  */
 import { z } from "zod";
+import { CREATIVE_CATEGORIES, type CreativeCategory } from "../core/creativeCategory";
 import type { BlockDefinitionBase, BlockMaterial } from "../core/blockDefinition";
+
+const creativeCategoryEnum = z.enum(
+  CREATIVE_CATEGORIES as unknown as [CreativeCategory, ...CreativeCategory[]],
+);
 
 /** Block JSON after parse; runtime numeric ids are assigned by {@link BlockRegistry}. */
 export type ParsedBlockDefinition = BlockDefinitionBase;
@@ -81,6 +86,7 @@ const stratumBlockComponentsSchema = z
     "stratum:reveals_background_wall": z.boolean().optional(),
     /** Legacy field; ignored (runtime ids are host/session-local). */
     "stratum:numeric_id": z.number().int().min(0).max(65535).optional(),
+    "stratum:creative_category": creativeCategoryEnum.optional(),
   })
   .strict();
 
@@ -152,6 +158,9 @@ export function parseBlockJson(raw: unknown): ParsedBlockDefinition {
       : {}),
     ...(c["stratum:reveals_background_wall"] === true
       ? { revealsBackgroundWall: true as const }
+      : {}),
+    ...(c["stratum:creative_category"] !== undefined
+      ? { creativeCategory: c["stratum:creative_category"] }
       : {}),
   };
 }

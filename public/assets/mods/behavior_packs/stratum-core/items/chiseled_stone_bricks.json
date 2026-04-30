@@ -9,7 +9,8 @@
       "stratum:texture_key": "chiseled_stone_bricks",
       "stratum:max_stack": 64,
       "stratum:numeric_id": 148,
-      "stratum:places_block": "stratum:chiseled_stone_bricks"
+      "stratum:places_block": "stratum:chiseled_stone_bricks",
+      "stratum:creative_category": "construction"
     }
   }
 }

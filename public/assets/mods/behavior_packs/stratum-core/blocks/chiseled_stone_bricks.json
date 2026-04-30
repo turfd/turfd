@@ -6,7 +6,9 @@
     },
     "components": {
       "stratum:display_name": "Chiseled Stone Bricks",
-      "stratum:texture": { "all": "chiseled_stone_bricks" },
+      "stratum:texture": {
+        "all": "chiseled_stone_bricks"
+      },
       "stratum:solid": true,
       "stratum:transparent": false,
       "stratum:water": false,
@@ -18,7 +20,8 @@
       "stratum:material": "stone",
       "stratum:loot_table": "stratum:chiseled_stone_bricks",
       "stratum:no_block_item": true,
-      "stratum:numeric_id": 86
+      "stratum:numeric_id": 86,
+      "stratum:creative_category": "construction"
     }
   }
 }

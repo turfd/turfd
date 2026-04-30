@@ -66,12 +66,10 @@ export default defineConfig(({ mode }) => {
   if (repoHasGit(root)) {
     devPlugins.push(
       updateToolDevPlugin({
-        root,
         toolToken: env.STRATUM_UPDATE_TOOL_TOKEN,
       }),
     );
   }
-
   return {
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

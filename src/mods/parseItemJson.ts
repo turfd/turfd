@@ -2,7 +2,12 @@
  * Validates item mod JSON (strict keys) for non-block items.
  */
 import { z } from "zod";
+import { CREATIVE_CATEGORIES, type CreativeCategory } from "../core/creativeCategory";
 import { MAX_STACK_DEFAULT } from "../core/itemDefinition";
+
+const creativeCategoryEnum = z.enum(
+  CREATIVE_CATEGORIES as unknown as [CreativeCategory, ...CreativeCategory[]],
+);
 
 export type ItemModDefinition = {
   readonly identifier: string;
@@ -23,6 +28,7 @@ export type ItemModDefinition = {
    */
   readonly eatTemporaryDurationSec?: number;
   readonly inventoryTooltip?: string;
+  readonly creativeCategory?: CreativeCategory;
 };
 
 /** Alias for parsed workshop / core item JSON. */
@@ -50,6 +56,7 @@ const stratumItemComponentsSchema = z
     "stratum:eat_restore_health": z.number().int().min(1).optional(),
     "stratum:eat_temporary_duration_sec": z.number().positive().optional(),
     "stratum:inventory_tooltip": z.string().min(1).optional(),
+    "stratum:creative_category": creativeCategoryEnum.optional(),
   })
   .strict();
 
@@ -87,5 +94,6 @@ export function parseItemJson(raw: unknown): ItemModDefinition {
     eatRestoreHealth: c["stratum:eat_restore_health"],
     eatTemporaryDurationSec: c["stratum:eat_temporary_duration_sec"],
     inventoryTooltip: c["stratum:inventory_tooltip"],
+    creativeCategory: c["stratum:creative_category"],
   };
 }

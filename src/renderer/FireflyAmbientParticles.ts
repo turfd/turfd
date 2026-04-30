@@ -7,6 +7,7 @@ import {
   BLOCK_SIZE,
   CHUNK_SIZE,
   FIREFLY_GROUND_LOCATE_SAMPLES,
+  FIREFLY_LIGHT_BLOOM_OFFSET_SCREEN_PX,
   FIREFLY_LIGHT_MAX_EMITTERS,
   FIREFLY_LIGHT_STRENGTH,
   FIREFLY_MAX_ONSCREEN,
@@ -414,7 +415,8 @@ export class FireflyAmbientParticles {
       if (!p.hasEnteredTightView) {
         continue;
       }
-      const wx = p.x / BLOCK_SIZE;
+      const wx =
+        (p.x + FIREFLY_LIGHT_BLOOM_OFFSET_SCREEN_PX) / BLOCK_SIZE;
       const wy = -p.y / BLOCK_SIZE;
       const dx = wx - viewCenterWorldBlockX;
       const dy = wy - viewCenterWorldBlockY;
@@ -444,7 +446,8 @@ export class FireflyAmbientParticles {
     for (let k = 0; k < bestIdx.length; k++) {
       const p = parts[bestIdx[k]!]!;
       out.push({
-        worldBlockX: p.x / BLOCK_SIZE,
+        worldBlockX:
+          (p.x + FIREFLY_LIGHT_BLOOM_OFFSET_SCREEN_PX) / BLOCK_SIZE,
         worldBlockY: -p.y / BLOCK_SIZE,
         strength: FIREFLY_LIGHT_STRENGTH * (0.7 + p.brightness * 0.3),
         bloomTipShiftScale: 0,

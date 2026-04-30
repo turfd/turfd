@@ -20,7 +20,8 @@
       "stratum:material": "chest",
       "stratum:loot_table": "stratum:barrel",
       "stratum:no_block_item": true,
-      "stratum:numeric_id": 89
+      "stratum:numeric_id": 89,
+      "stratum:creative_category": "construction"
     }
   }
 }

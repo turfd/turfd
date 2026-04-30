@@ -19,7 +19,8 @@
       "stratum:light_absorption": 0,
       "stratum:material": "furnace",
       "stratum:loot_table": "stratum:furnace",
-      "stratum:numeric_id": 42
+      "stratum:numeric_id": 42,
+      "stratum:creative_category": "construction"
     }
   }
 }

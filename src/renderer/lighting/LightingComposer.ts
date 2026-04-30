@@ -233,12 +233,24 @@ export class LightingComposer {
           this._emitterChunkCache.delete(k);
         }
       }
+      const lightTexturesToDestroy: LightTexture[] = [];
       for (const k of this._textures.keys()) {
         if (!keepKeys.has(k)) {
-          this._textures.get(k)?.destroy();
+          const t = this._textures.get(k);
+          if (t !== undefined) {
+            lightTexturesToDestroy.push(t);
+          }
           this._textures.delete(k);
           this._dirty.delete(k);
         }
+      }
+      if (lightTexturesToDestroy.length > 0) {
+        const batch = lightTexturesToDestroy;
+        queueMicrotask(() => {
+          for (const tex of batch) {
+            tex.destroy();
+          }
+        });
       }
     });
 

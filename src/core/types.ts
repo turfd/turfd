@@ -46,8 +46,6 @@ export type GameEvent =
       dtSec: number;
       worldTimeMs: number;
     }
-  /** Normalised phase [0,1): 0 = dawn start. Host/offline only in multiplayer. */
-  | { type: "ui:set-world-time-phase"; phase: number }
   | { type: "game:render"; alpha: number }
   | { type: "player:hotbarChanged"; slot: number }
   | { type: "game:saved" }

@@ -10,7 +10,8 @@
       "stratum:max_stack": 64,
       "stratum:numeric_id": 130,
       "stratum:eat_restore_health": 5,
-      "stratum:inventory_tooltip": "Eat to restore 2.5 hearts."
+      "stratum:inventory_tooltip": "Eat to restore 2.5 hearts.",
+      "stratum:creative_category": "food"
     }
   }
 }

@@ -256,10 +256,12 @@ export class ChunkRenderer {
     }
 
     let removed = 0;
+    const chunkMeshesPendingDestroy: ChunkMeshes[] = [];
     if (added > 0 || seenCount !== this.meshes.size) {
       for (const key of this.meshes.keys()) {
         if (!seen.has(key)) {
-          const { bg, fgShadow, fg, leafDeco, fgWater } = this.meshes.get(key)!;
+          const entry = this.meshes.get(key)!;
+          const { bg, fgShadow, fg, leafDeco, fgWater } = entry;
           this._windyForegroundMeshes.delete(fg);
           this._furnaceFireForegroundMeshes.delete(fg);
           this._wateryForegroundMeshes.delete(fgWater);
@@ -268,15 +270,23 @@ export class ChunkRenderer {
           layer.removeChild(fg);
           layer.removeChild(leafDeco);
           waterLayer.removeChild(fgWater);
+          chunkMeshesPendingDestroy.push(entry);
+          this.meshes.delete(key);
+          removed += 1;
+        }
+      }
+    }
+    if (chunkMeshesPendingDestroy.length > 0) {
+      const batch = chunkMeshesPendingDestroy;
+      queueMicrotask(() => {
+        for (const { bg, fgShadow, fg, leafDeco, fgWater } of batch) {
           bg.destroy();
           fgShadow.destroy();
           fg.destroy();
           leafDeco.destroy();
           fgWater.destroy();
-          this.meshes.delete(key);
-          removed += 1;
         }
-      }
+      });
     }
 
     if (import.meta.env.DEV && (added > 0 || updated > 0 || removed > 0)) {

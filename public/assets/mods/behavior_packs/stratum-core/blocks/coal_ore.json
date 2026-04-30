@@ -19,7 +19,8 @@
       "stratum:light_absorption": 15,
       "stratum:material": "stone",
       "stratum:loot_table": "stratum:coal_ore",
-      "stratum:numeric_id": 33
+      "stratum:numeric_id": 33,
+      "stratum:creative_category": "items"
     }
   }
 }

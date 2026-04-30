@@ -1,5 +1,7 @@
 /** Shared item type definitions for the inventory system. */
 
+import type { CreativeCategory } from "./creativeCategory";
+
 declare const __itemIdBrand: unique symbol;
 
 /** Branded numeric item identifier used on the wire and in save data. */
@@ -78,6 +80,12 @@ export interface ItemDefinition {
    * (shape 0: missing top-left corner), matching in-world stair geometry.
    */
   readonly stairItemIconClip?: boolean;
+
+  /**
+   * Sandbox creative sidebar tab (`stratum:creative_category` on item or block JSON).
+   * Omitted: item only appears when the "All" tab is selected.
+   */
+  readonly creativeCategory?: CreativeCategory;
 }
 
 /** A counted quantity of one item type. */

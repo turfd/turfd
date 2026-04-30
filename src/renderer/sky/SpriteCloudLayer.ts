@@ -38,7 +38,7 @@ const DEFAULT = {
 const CLOUD_VISUAL_SCALE = 5;
 const CLOUD_ALPHA_DRIFT_AMPLITUDE = 0.055;
 const CLOUD_ALPHA_DRIFT_SPEED_HZ = 0.07;
-const CLOUD_NIGHT_OPACITY_REDUCTION = 0.5;
+const CLOUD_NIGHT_OPACITY_REDUCTION = 0.68;
 /**
  * Clock-driven cloud drift: tuned so a strip with {@link CloudStripConfig.worldScrollMul} of 1
  * scrolls ~64 world blocks (see {@link BLOCK_SIZE} px/block) per 1.5 minutes of world time.

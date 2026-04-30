@@ -22,6 +22,10 @@ export function assignMeshGeometryPreferReuse(mesh: Mesh, next: MeshGeometry): v
       return;
     }
   }
-  prev.destroy(true);
+  // Swap geometry first, then destroy the previous GPU buffers on a microtask so Pixi’s
+  // WebGPU encoder cannot still reference the old buffers in the same frame’s submit.
   mesh.geometry = next as unknown as typeof mesh.geometry;
+  queueMicrotask(() => {
+    prev.destroy(true);
+  });
 }

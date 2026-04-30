@@ -85,6 +85,10 @@ export class SpatialAudioMixer {
     return this.busOut;
   }
 
+  getActiveCount(): number {
+    return this.active.length;
+  }
+
   setMasterVolume(v: number): void {
     this.busOut.gain.value = clamp01(v);
   }

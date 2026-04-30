@@ -24,7 +24,8 @@
         "stratum:stonecutter_cut_source"
       ],
       "stratum:loot_table": "stratum:stone",
-      "stratum:numeric_id": 10
+      "stratum:numeric_id": 10,
+      "stratum:creative_category": "construction"
     }
   }
 }

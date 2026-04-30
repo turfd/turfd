@@ -8,7 +8,8 @@
       "stratum:display_name": "Feather",
       "stratum:texture_key": "feather",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 142
+      "stratum:numeric_id": 142,
+      "stratum:creative_category": "items"
     }
   }
 }

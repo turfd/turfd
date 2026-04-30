@@ -24,7 +24,8 @@
       "stratum:fuel": {
         "burn_seconds": 4
       },
-      "stratum:numeric_id": 39
+      "stratum:numeric_id": 39,
+      "stratum:creative_category": "construction"
     }
   }
 }

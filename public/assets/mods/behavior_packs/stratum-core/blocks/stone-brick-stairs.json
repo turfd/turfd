@@ -20,7 +20,8 @@
       "stratum:material": "stone",
       "stratum:loot_table": "stratum:stone_brick_stairs",
       "stratum:stair": true,
-      "stratum:numeric_id": 84
+      "stratum:numeric_id": 84,
+      "stratum:creative_category": "construction"
     }
   }
 }

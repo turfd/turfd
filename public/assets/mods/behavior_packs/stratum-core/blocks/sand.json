@@ -18,7 +18,8 @@
       "stratum:light_absorption": 15,
       "stratum:material": "sand",
       "stratum:loot_table": "stratum:sand",
-      "stratum:numeric_id": 12
+      "stratum:numeric_id": 12,
+      "stratum:creative_category": "nature"
     }
   }
 }

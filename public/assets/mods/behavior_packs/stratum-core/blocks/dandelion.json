@@ -21,7 +21,8 @@
       "stratum:loot_table": "stratum:dandelion",
       "stratum:plant_foot_offset_px": 5,
       "stratum:wind_sway_max_px": 1,
-      "stratum:numeric_id": 8
+      "stratum:numeric_id": 8,
+      "stratum:creative_category": "nature"
     }
   }
 }

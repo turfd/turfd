@@ -14,7 +14,8 @@
         "stratum:armor",
         "stratum:armor_chestplate"
       ],
-      "stratum:inventory_tooltip": "Chest armor"
+      "stratum:inventory_tooltip": "Chest armor",
+      "stratum:creative_category": "equipment"
     }
   }
 }

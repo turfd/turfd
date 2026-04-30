@@ -1,4 +1,8 @@
 {
   "ignore": ["dist/**"],
-  "entry": ["scripts/release-version.mjs", "dev/updateToolDevPlugin.ts"]
+  "entry": [
+    "vite.config.ts",
+    "scripts/release-version.mjs",
+    "dev/updateToolDevPlugin.ts"
+  ]
 }

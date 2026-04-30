@@ -282,29 +282,41 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-track {
       flex: 1;
       min-width: 0;
-      height: 10px;
-      border-radius: var(--mm-radius-sm, 10px);
-      border: 1px solid var(--mm-border-strong, rgba(255, 255, 255, 0.16));
-      background: var(--mm-surface-deep, rgba(36, 36, 38, 0.9));
+      height: 16px;
+      border-radius: 0;
+      border: 2px solid #0c0d10;
+      background: repeating-linear-gradient(
+        90deg,
+        #14161c 0px,
+        #14161c 4px,
+        #0f1116 4px,
+        #0f1116 8px
+      );
       overflow: hidden;
       box-sizing: border-box;
-      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+      box-shadow:
+        inset 0 2px 0 rgba(255, 255, 255, 0.05),
+        inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+        0 1px 0 rgba(255, 255, 255, 0.12);
+      image-rendering: pixelated;
     }
 
     .stratum-loading-fill {
       height: 100%;
       width: 0%;
-      border-radius: calc(var(--mm-radius-sm, 10px) - 1px);
+      border-radius: 0;
       transform-origin: left center;
-      background: linear-gradient(
-        180deg,
-        rgba(168, 205, 255, 0.98) 0%,
-        rgba(98, 152, 228, 0.92) 48%,
-        rgba(72, 118, 198, 0.9) 100%
+      /* Flat fill + hard-edged vertical “pixels” (no glossy vertical gradient). */
+      background-color: #4f8ec4;
+      background-image: repeating-linear-gradient(
+        90deg,
+        #8fd4ff 0px,
+        #8fd4ff 5px,
+        #5aa6dc 5px,
+        #5aa6dc 10px
       );
-      box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.28),
-        0 0 12px rgba(120, 180, 255, 0.22);
+      box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.22);
+      image-rendering: pixelated;
       transition: width 0.1s ease-out;
     }
 

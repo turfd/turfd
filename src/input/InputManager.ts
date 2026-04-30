@@ -127,8 +127,24 @@ export class InputManager {
     if (e.repeat) {
       return;
     }
+    const f3HeldBeforeEvent = this.downCodes.has("F3");
     this.downCodes.add(e.code);
     this.edgeForCode(e.code);
+    if (f3HeldBeforeEvent || e.code === "F3") {
+      if (e.code === "Digit1") {
+        this.justPressed.add("toggleGpuDebugProfiler");
+        e.preventDefault();
+      } else if (e.code === "Digit2") {
+        this.justPressed.add("toggleGpuDebugPerfGraphs");
+        e.preventDefault();
+      } else if (e.code === "Digit3") {
+        this.justPressed.add("toggleGpuDebugNetGraphs");
+        e.preventDefault();
+      } else if (e.code === "F6") {
+        this.justPressed.add("cycleGpuDebugProfile");
+        e.preventDefault();
+      }
+    }
     if (e.code === "F3" && !editableFocus) {
       e.preventDefault();
     }
@@ -288,7 +304,15 @@ export class InputManager {
   }
 
   isDown(action: InputAction): boolean {
-    if (this.chatOpen && action !== "pause" && action !== "toggleGpuDebug") {
+    if (
+      this.chatOpen &&
+      action !== "pause" &&
+      action !== "toggleGpuDebug" &&
+      action !== "toggleGpuDebugProfiler" &&
+      action !== "toggleGpuDebugPerfGraphs" &&
+      action !== "toggleGpuDebugNetGraphs" &&
+      action !== "cycleGpuDebugProfile"
+    ) {
       return false;
     }
     if (
@@ -297,7 +321,11 @@ export class InputManager {
       action !== "pause" &&
       action !== "chat" &&
       action !== "dropItem" &&
-      action !== "toggleGpuDebug"
+      action !== "toggleGpuDebug" &&
+      action !== "toggleGpuDebugProfiler" &&
+      action !== "toggleGpuDebugPerfGraphs" &&
+      action !== "toggleGpuDebugNetGraphs" &&
+      action !== "cycleGpuDebugProfile"
     ) {
       return false;
     }
@@ -309,6 +337,14 @@ export class InputManager {
     }
     if (action === "toggleGpuDebug") {
       return this.downCodes.has("F3");
+    }
+    if (
+      action === "toggleGpuDebugProfiler" ||
+      action === "toggleGpuDebugPerfGraphs" ||
+      action === "toggleGpuDebugNetGraphs" ||
+      action === "cycleGpuDebugProfile"
+    ) {
+      return false;
     }
     if (action === "place") {
       return this.mouseDown.has(MOUSE_PLACE);
@@ -332,7 +368,15 @@ export class InputManager {
   }
 
   isJustPressed(action: InputAction): boolean {
-    if (this.chatOpen && action !== "pause" && action !== "toggleGpuDebug") {
+    if (
+      this.chatOpen &&
+      action !== "pause" &&
+      action !== "toggleGpuDebug" &&
+      action !== "toggleGpuDebugProfiler" &&
+      action !== "toggleGpuDebugPerfGraphs" &&
+      action !== "toggleGpuDebugNetGraphs" &&
+      action !== "cycleGpuDebugProfile"
+    ) {
       return false;
     }
     if (
@@ -341,12 +385,28 @@ export class InputManager {
       action !== "pause" &&
       action !== "chat" &&
       action !== "dropItem" &&
-      action !== "toggleGpuDebug"
+      action !== "toggleGpuDebug" &&
+      action !== "toggleGpuDebugProfiler" &&
+      action !== "toggleGpuDebugPerfGraphs" &&
+      action !== "toggleGpuDebugNetGraphs" &&
+      action !== "cycleGpuDebugProfile"
     ) {
       return false;
     }
     if (action === "toggleGpuDebug") {
       return this.justPressed.has("toggleGpuDebug");
+    }
+    if (action === "toggleGpuDebugProfiler") {
+      return this.justPressed.has("toggleGpuDebugProfiler");
+    }
+    if (action === "toggleGpuDebugPerfGraphs") {
+      return this.justPressed.has("toggleGpuDebugPerfGraphs");
+    }
+    if (action === "toggleGpuDebugNetGraphs") {
+      return this.justPressed.has("toggleGpuDebugNetGraphs");
+    }
+    if (action === "cycleGpuDebugProfile") {
+      return this.justPressed.has("cycleGpuDebugProfile");
     }
     if (
       this.uiTypingSuppressesOverlayHotkeys() &&

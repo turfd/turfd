@@ -14,7 +14,8 @@
         "stratum:armor",
         "stratum:armor_helmet"
       ],
-      "stratum:inventory_tooltip": "Head armor"
+      "stratum:inventory_tooltip": "Head armor",
+      "stratum:creative_category": "equipment"
     }
   }
 }

@@ -53,6 +53,7 @@ export class ItemRegistry {
       eatTemporaryDurationSec: def.eatTemporaryDurationSec,
       inventoryTooltip: def.inventoryTooltip,
       stairItemIconClip: def.stairItemIconClip,
+      creativeCategory: def.creativeCategory,
     };
 
     this._byId.set(id, full);
@@ -150,6 +151,7 @@ export function registerBlockItems(
       // Stairs can burn as fuel (fuelBurnSeconds) but should not count as crafting materials.
       tags: block.isStair === true ? undefined : block.tags,
       fuelBurnSeconds: block.fuelBurnSeconds,
+      creativeCategory: block.creativeCategory,
       ...(block.isStair === true ? { stairItemIconClip: true as const } : {}),
     });
   }

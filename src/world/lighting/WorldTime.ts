@@ -392,7 +392,7 @@ export class WorldTime {
     this._ms = wrapMs(this._ms + step);
   }
 
-  /** Snap time (pause-menu slider, host commands). Wrapped to one day. */
+  /** Snap time (host/solo commands, scripted transitions). Wrapped to one day. */
   setMs(ms: number): void {
     this._ms = wrapMs(ms);
   }

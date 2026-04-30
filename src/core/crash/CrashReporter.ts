@@ -167,6 +167,7 @@ export class CrashReporter {
       }),
       bus.on("game:worldLoaded", (e) => {
         this.worldName = e.name;
+        this.lastRenderAtMs = Date.now();
         this.addBreadcrumb("world-loaded", e.name);
       }),
       bus.on("game:chat-submit", (e) => {

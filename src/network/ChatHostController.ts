@@ -82,6 +82,8 @@ export type ChatHostControllerDeps = {
   executeGive: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/weather set rain|clear`. */
   executeWeather: (issuerPeerId: string, rest: string) => void;
+  /** Host-only: `/time set ...`. */
+  executeTime: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/summon` (spawn mobs near players). */
   executeSummon: (issuerPeerId: string, rest: string) => void;
   /** Host-only: `/killall` (despawn mobs immediately). */
@@ -195,6 +197,20 @@ export class ChatHostController {
         return true;
       }
       this.d.executeWeather(fromPeerId, rest);
+      return true;
+    }
+
+    if (cmd === "time") {
+      if (!this.canUseCheatCommands(fromPeerId)) {
+        this.d.sendSystemTo(
+          fromPeerId as PeerId,
+          this.d.isCheatsEnabled()
+            ? "You do not have permission to use this command."
+            : "Cheats are disabled for this world.",
+        );
+        return true;
+      }
+      this.d.executeTime(fromPeerId, rest);
       return true;
     }
 

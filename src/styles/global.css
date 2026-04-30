@@ -12,6 +12,8 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  /* Avoid default white “rubber band” / scroll chaining past the shell. */
+  overscroll-behavior: none;
 }
 
 #app {
@@ -29,6 +31,9 @@ body {
   width: 100%;
   height: 100%;
   display: block;
+  /* Sharp browser upscale when backing-store resolution is below layout (fractional DPR path). */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 /* During startup intro, only show deterministic startup overlays/backdrop stack. */

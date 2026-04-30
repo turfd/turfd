@@ -918,7 +918,6 @@ async function main(): Promise<void> {
         worldName,
         worldUuid,
       });
-      crashReporter.attachBus(game.bus);
       const loadStartedAt = Date.now();
       const minHoldMs = randomLoadingHoldMs();
       await game.init(playerSavedState, (progress) => {
@@ -945,6 +944,9 @@ async function main(): Promise<void> {
         mount.classList.remove("stratum-game-loading");
         ost.setMode("game", 0);
         gameToStart.start();
+        // Freeze watchdog keys off `game:render`, which only runs after the loop starts — not
+        // during `game.init` (can exceed 10s on large worlds or slow hosting). Attach here.
+        crashReporter.attachBus(gameToStart.bus);
       });
 
       await game.waitForStop();

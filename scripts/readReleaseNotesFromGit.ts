@@ -1,7 +1,11 @@
 /**
- * Parse release notes from `git log -1` for embedding at Vite build time.
+ * Parse release notes from recent `git log` for embedding at Vite build time.
  *
- * Commit message shape (from `scripts/release-commit.sh`):
+ * **Silent commits:** `HEAD` is skipped when it does not contain a valid
+ * `[Summary]` … `[Changes]` block (e.g. chore fixes). The walk continues
+ * until a tagged release commit is found so player-facing notes stay stable.
+ *
+ * Commit message shape (from `scripts/release-commit.sh` / update tool):
  *   Subject: <version only>, e.g. `0.6.0-alpha.3`
  *   Body:
  *     [Summary]
@@ -15,7 +19,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-function parseCommitBody(fullMessage: string): {
+export function parseCommitBody(fullMessage: string): {
   summary: string;
   changesMd: string;
 } {
@@ -32,6 +36,18 @@ function parseCommitBody(fullMessage: string): {
   return { summary, changesMd };
 }
 
+const MAX_COMMITS_TO_SCAN = 80;
+
+function releaseNotesFromCommitMessage(
+  fullMessage: string,
+): { summary: string; changesMd: string } | null {
+  const parsed = parseCommitBody(fullMessage);
+  if (parsed.summary.trim().length === 0) {
+    return null;
+  }
+  return parsed;
+}
+
 export function readReleaseNotesFromGit(repoRoot: string): {
   summary: string;
   changesMd: string;
@@ -40,15 +56,24 @@ export function readReleaseNotesFromGit(repoRoot: string): {
   if (!existsSync(gitDir)) {
     return { summary: "", changesMd: "" };
   }
-  let msg = "";
-  try {
-    msg = execSync("git log -1 --format=%B", {
-      cwd: repoRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch {
-    return { summary: "", changesMd: "" };
+  for (let skip = 0; skip < MAX_COMMITS_TO_SCAN; skip++) {
+    let msg = "";
+    try {
+      msg = execSync(`git log -1 --skip=${skip} --format=%B`, {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      break;
+    }
+    if (msg.replace(/\r\n/g, "\n").trim().length === 0) {
+      break;
+    }
+    const hit = releaseNotesFromCommitMessage(msg);
+    if (hit !== null) {
+      return hit;
+    }
   }
-  return parseCommitBody(msg);
+  return { summary: "", changesMd: "" };
 }

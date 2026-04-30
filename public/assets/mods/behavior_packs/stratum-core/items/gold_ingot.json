@@ -7,7 +7,8 @@
     "components": {
       "stratum:display_name": "Gold Ingot",
       "stratum:texture_key": "gold_ingot",
-      "stratum:numeric_id": 104
+      "stratum:numeric_id": 104,
+      "stratum:creative_category": "items"
     }
   }
 }

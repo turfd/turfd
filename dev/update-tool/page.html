@@ -3,228 +3,1014 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stratum — local release tool</title>
+    <title>Stratum — write this update</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23152a44' width='32' height='32' rx='6'/%3E%3Cpath fill='%237eb8ff' d='M8 22V10h4l6 8V10h6v12h-4v-8l-6 8z'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%232c2c2e' width='32' height='32' rx='6'/%3E%3Cpath fill='%23f2f2f7' d='M8 22V10h4l6 8V10h6v12h-4v-8l-6 8z'/%3E%3C/svg%3E"
     />
     <style>
-      :root {
-        --bg: #0f1824;
-        --card: #152536;
-        --border: rgba(116, 179, 255, 0.35);
-        --text: #e8f4ff;
-        --muted: rgba(232, 244, 255, 0.72);
-        --accent: #7eb8ff;
-        --bad: #ff8a8a;
-        --ok: #9dffb5;
+      /* Same origin as the game (`vite.config` base `/stratum/`). Relative ../assets from
+         `/stratum/update` resolves to `/assets/...` and 404s; use the public path explicitly. */
+      @font-face {
+        font-family: "BoldPixels";
+        src: url("/stratum/assets/fonts/BoldPixels.ttf") format("truetype");
+        font-weight: normal;
+        font-style: normal;
       }
-      * {
+      @font-face {
+        font-family: "M5x7";
+        src: url("/stratum/assets/fonts/m5x7.ttf") format("truetype");
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      :root {
+        --mm-m5-nudge: 4px;
+        --mm-ink: #f2f2f7;
+        --mm-ink-mid: #aeaeb2;
+        --mm-ink-soft: #8e8e93;
+        --mm-surface: rgba(44, 44, 46, 0.92);
+        --mm-surface-deep: rgba(36, 36, 38, 0.96);
+        --mm-surface-raised: rgba(58, 58, 60, 0.96);
+        --mm-border: rgba(255, 255, 255, 0.1);
+        --mm-border-strong: rgba(255, 255, 255, 0.16);
+        --mm-danger: #ff453a;
+        --mm-warn-ink: #ffb070;
+        --mm-ok-ink: #9dffb5;
+        --mm-radius-sm: 10px;
+        --mm-radius-md: 14px;
+        --mm-type-label: 16px;
+        --mm-type-ui: 16px;
+        --mm-type-ui-strong: 17px;
+        --mm-control-h: 50px;
+        --mm-control-pad-x: 16px;
+      }
+
+      *,
+      *::before,
+      *::after {
         box-sizing: border-box;
       }
-      body {
+
+      html {
+        background-color: #0a0a0c;
+        overscroll-behavior: none;
+      }
+
+      .ut-body {
         margin: 0;
         min-height: 100vh;
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        line-height: 1.45;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-weight: normal;
+        font-synthesis: none;
+        -webkit-font-smoothing: none;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeSpeed;
+        color: var(--mm-ink);
+        line-height: 1.35;
+        background: radial-gradient(120% 80% at 50% 0%, rgba(55, 58, 62, 0.5), transparent 55%),
+          linear-gradient(180deg, #0d0d0f 0%, #121214 40%, #0a0a0c 100%);
+        padding: clamp(1.25rem, 4vw, 2.25rem);
       }
-      .wrap {
+
+      .ut-m5 {
+        font-family: "M5x7", monospace;
+        font-size: calc(19px + var(--mm-m5-nudge));
+        line-height: 1.5;
+        letter-spacing: normal;
+        font-weight: normal;
+      }
+
+      .ut-wrap {
         max-width: 52rem;
         margin: 0 auto;
-        padding: 1.5rem 1.25rem 3rem;
       }
-      h1 {
-        font-size: 1.35rem;
-        font-weight: 650;
-        letter-spacing: 0.02em;
-        margin: 0 0 0.35rem;
+
+      .ut-panel {
+        background: var(--mm-surface);
+        border: 1px solid var(--mm-border);
+        border-radius: var(--mm-radius-md);
+        corner-shape: squircle;
+        padding: 1.5rem 1.65rem 1.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
       }
-      .sub {
-        color: var(--muted);
-        font-size: 0.92rem;
-        margin-bottom: 1.25rem;
+
+      .ut-header {
+        margin: 0;
       }
-      .banner {
-        border: 1px solid var(--border);
-        background: var(--card);
-        border-radius: 10px;
-        padding: 0.75rem 1rem;
-        margin-bottom: 1.25rem;
-        font-size: 0.88rem;
-      }
-      .banner.warn {
-        border-color: rgba(255, 180, 100, 0.45);
-        color: #ffd9b0;
-      }
-      .banner.err {
-        border-color: rgba(255, 120, 120, 0.45);
-        color: var(--bad);
-      }
-      .banner.ok {
-        border-color: rgba(120, 255, 180, 0.35);
-        color: var(--ok);
-      }
-      label {
-        display: block;
-        font-size: 0.78rem;
+      .ut-kicker {
+        margin: 0 0 10px;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: 15px;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
-        margin: 0.75rem 0 0.35rem;
+        letter-spacing: 0.05em;
+        color: var(--mm-ink-soft);
       }
-      select,
-      textarea,
-      input[type="password"] {
-        width: 100%;
-        border-radius: 8px;
-        border: 1px solid var(--border);
-        background: rgba(0, 0, 0, 0.25);
-        color: var(--text);
-        padding: 0.55rem 0.65rem;
-        font: inherit;
+      .ut-title {
+        margin: 0;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: clamp(22px, 2.5vw, 28px);
+        font-weight: normal;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        line-height: 1.15;
+        color: var(--mm-ink);
       }
-      textarea {
-        min-height: 5rem;
-        resize: vertical;
+
+      .ut-banner {
+        border: 1px solid var(--mm-border);
+        background: var(--mm-surface-deep);
+        border-radius: var(--mm-radius-sm);
+        corner-shape: squircle;
+        padding: 14px 16px;
+        margin: 0;
+        font-family: "M5x7", monospace;
+        font-size: calc(17px + var(--mm-m5-nudge));
+        line-height: 1.45;
+        color: var(--mm-ink-mid);
+        letter-spacing: normal;
+        font-weight: normal;
+      }
+      .ut-banner--warn {
+        border-color: rgba(255, 180, 100, 0.35);
+        color: var(--mm-warn-ink);
+      }
+      .ut-banner--err {
+        border-color: rgba(255, 69, 58, 0.4);
+        color: #ff6b6b;
+      }
+      .ut-banner--ok {
+        border-color: rgba(120, 255, 180, 0.28);
+        color: var(--mm-ok-ink);
+      }
+
+      .ut-card {
+        background: var(--mm-surface-deep);
+        border: 1px solid var(--mm-border);
+        border-radius: var(--mm-radius-md);
+        corner-shape: squircle;
+        padding: 1.35rem 1.5rem 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+      }
+
+      .ut-token-section {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+      .ut-token-section[hidden] {
+        display: none !important;
+      }
+      .ut-token-help {
+        margin: 0;
+        color: var(--mm-ink-mid);
+      }
+      .ut-token-help code {
         font-family: ui-monospace, "Cascadia Code", monospace;
-        font-size: 0.88rem;
+        font-size: 0.88em;
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.22);
+        border: 1px solid var(--mm-border);
+        color: var(--mm-ink-mid);
       }
-      textarea.changes {
-        min-height: 14rem;
-      }
-      .row {
+
+      .ut-stack {
         display: flex;
-        flex-wrap: wrap;
-        gap: 1rem;
+        flex-direction: column;
+        gap: 0.85rem;
       }
-      .row > div {
+
+      .ut-field {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.85rem;
         flex: 1 1 12rem;
+        min-width: 0;
       }
-      .actions {
+      .ut-field label,
+      .ut-label {
+        display: block;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: var(--mm-type-label);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--mm-ink-soft);
+        margin: 0;
+      }
+
+      .ut-row {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.6rem;
-        margin-top: 1.1rem;
+        gap: 1.25rem;
+        align-items: flex-start;
       }
-      button {
-        cursor: pointer;
-        border-radius: 8px;
-        border: 1px solid var(--border);
-        background: linear-gradient(180deg, #4a7ab8, #355a8a);
-        color: #fff;
-        font: inherit;
-        font-weight: 600;
-        padding: 0.55rem 1.1rem;
+
+      .ut-input,
+      textarea.ut-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 14px 16px 16px;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid var(--mm-border);
+        border-radius: var(--mm-radius-sm);
+        corner-shape: squircle;
+        color: var(--mm-ink);
+        font-family: "M5x7", monospace;
+        font-size: calc(19px + var(--mm-m5-nudge));
+        line-height: 1.35;
+        letter-spacing: normal;
+        font-weight: normal;
+        transition: border-color 0.14s ease, background 0.14s ease;
+      }
+      /* In-game main menu custom dropdown ({@link MainMenu} `mm-create-mode-*` + `createMenuDropdown`). */
+      .mm-create-mode-dropdown {
+        position: relative;
+        width: 100%;
+      }
+      .mm-create-mode-select {
+        position: relative;
+        isolation: isolate;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        box-sizing: border-box;
+        width: 100%;
+        min-height: var(--mm-control-h);
+        padding: 12px var(--mm-control-pad-x);
+        border: 1px solid var(--mm-border);
+        border-radius: 12px;
+        corner-shape: squircle;
+        text-align: left;
+        background: var(--mm-surface-deep);
+        overflow: hidden;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.05),
+          inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+        color: var(--mm-ink);
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: var(--mm-type-ui-strong);
+        line-height: 1.08;
         letter-spacing: 0.04em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition:
+          border-color 0.14s ease,
+          background 0.14s ease,
+          box-shadow 0.14s ease,
+          transform 0.14s ease;
       }
-      button.secondary {
-        background: transparent;
-        color: var(--muted);
-        border-color: rgba(255, 255, 255, 0.2);
+      .mm-create-mode-select::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        opacity: 1;
+        background: color-mix(in srgb, var(--mm-surface-deep) 84%, rgba(255, 255, 255, 0.06) 16%);
+        pointer-events: none;
+        transition: opacity 0.14s ease, background 0.14s ease;
       }
-      button:disabled {
+      .mm-create-mode-select::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 10px;
+        bottom: 10px;
+        width: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.16);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+        pointer-events: none;
+        transition: background 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+      }
+      .mm-create-mode-select-label {
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+        flex: 1 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .mm-create-mode-caret {
+        position: relative;
+        z-index: 1;
+        flex: 0 0 auto;
+        width: 24px;
+        height: 24px;
+        margin-left: 4px;
+        border-left: 1px solid var(--mm-border);
+      }
+      .mm-create-mode-caret::before,
+      .mm-create-mode-caret::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 9px;
+        height: 2px;
+        border-radius: 1px;
+        background: var(--mm-ink-mid);
+        opacity: 0.95;
+        transform-origin: center;
+        transition: transform 0.16s ease, background-color 0.16s ease, opacity 0.16s ease;
+      }
+      .mm-create-mode-caret::before {
+        transform: translate(-72%, -50%) rotate(35deg);
+      }
+      .mm-create-mode-caret::after {
+        transform: translate(-28%, -50%) rotate(-35deg);
+      }
+      .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-select {
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+        border-color: var(--mm-border-strong);
+        background: var(--mm-surface-raised);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.05),
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+      }
+      .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-select::before {
+        opacity: 1;
+      }
+      .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-select::after {
+        transform: scaleY(1.08);
+      }
+      .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-caret::before {
+        transform: translate(-72%, -50%) rotate(-35deg);
+        background: var(--mm-ink);
+      }
+      .mm-create-mode-dropdown.mm-create-mode-dropdown-open .mm-create-mode-caret::after {
+        transform: translate(-28%, -50%) rotate(35deg);
+        background: var(--mm-ink);
+      }
+      .mm-create-mode-select:hover:not(:disabled) {
+        border-color: var(--mm-border-strong);
+        background: var(--mm-surface-raised);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.05),
+          inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+      }
+      .mm-create-mode-select:focus {
+        outline: none;
+      }
+      .mm-create-mode-select:disabled {
         opacity: 0.45;
         cursor: not-allowed;
       }
-      pre.preview {
-        margin: 1rem 0 0;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid var(--border);
-        background: rgba(0, 0, 0, 0.35);
-        overflow: auto;
-        max-height: 42vh;
-        font-size: 0.8rem;
+      .mm-create-mode-options {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 100%;
+        z-index: 3000;
+        margin: 0;
+        padding: 8px 0;
+        list-style: none;
+        border: 1px solid var(--mm-border-strong);
+        border-top: 0;
+        border-bottom-left-radius: 12px;
+        border-bottom-right-radius: 12px;
+        corner-shape: squircle;
+        background: rgba(29, 29, 31, 0.98);
+        box-shadow: 0 16px 30px rgba(0, 0, 0, 0.28);
+        overflow: hidden;
+      }
+      .mm-create-mode-option {
+        width: 100%;
+        display: block;
+        text-align: left;
+        border: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.04);
+        background: transparent;
+        color: var(--mm-ink-mid);
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: var(--mm-type-ui-strong);
+        line-height: 1.08;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: 12px var(--mm-control-pad-x);
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.12s ease, color 0.12s ease;
+      }
+      .mm-create-mode-options li:first-child .mm-create-mode-option {
+        border-top: 0;
+      }
+      .mm-create-mode-option:hover {
+        background: var(--mm-surface-raised);
+        color: var(--mm-ink);
+      }
+      .mm-create-mode-option:focus-visible {
+        outline: none;
+        background: var(--mm-surface-raised);
+        color: var(--mm-ink);
+      }
+      .mm-create-mode-option.mm-create-mode-option-selected {
+        background: rgba(255, 255, 255, 0.09);
+        color: var(--mm-ink);
+        box-shadow:
+          inset 3px 0 0 var(--mm-ink-mid),
+          inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      .ut-input:focus {
+        outline: none;
+        border-color: var(--mm-border-strong);
+        background-color: rgba(0, 0, 0, 0.28);
+      }
+      .ut-input::placeholder {
+        color: var(--mm-ink-soft);
+        opacity: 0.72;
+      }
+      textarea.ut-input {
+        min-height: 5.5rem;
+        resize: vertical;
+      }
+      textarea.ut-input.ut-textarea-changes {
+        min-height: 14rem;
+      }
+
+      .ut-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 0.25rem;
+        padding-top: 0.35rem;
+      }
+
+      .ut-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        min-height: 48px;
+        padding: 12px 18px;
+        background: var(--mm-ink);
+        border: 1px solid var(--mm-ink);
+        color: #1c1c1e;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: var(--mm-type-ui);
+        line-height: 1.05;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        text-align: center;
+        cursor: pointer;
+        border-radius: var(--mm-radius-sm);
+        corner-shape: squircle;
+        transition: opacity 120ms ease, background 120ms ease;
+      }
+      .ut-btn:hover {
+        opacity: 0.92;
+      }
+      .ut-btn:active {
+        opacity: 0.85;
+      }
+      .ut-btn:focus-visible {
+        outline: none;
+        border-color: var(--mm-border-strong);
+      }
+      .ut-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .ut-btn--subtle {
+        background: var(--mm-surface-raised);
+        border-color: var(--mm-border);
+        color: var(--mm-ink-mid);
+      }
+      .ut-btn--subtle:hover {
+        background: var(--mm-surface-raised);
+        color: var(--mm-ink);
+        opacity: 1;
+      }
+
+      .ut-block {
+        margin-top: 0;
+        padding: 14px 16px;
+        border-radius: var(--mm-radius-sm);
+        corner-shape: squircle;
+        border: 1px solid var(--mm-border);
+        background: rgba(0, 0, 0, 0.18);
+      }
+      .ut-block h3 {
+        margin: 0 0 8px;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--mm-ink-soft);
+        font-weight: normal;
+      }
+      .ut-progress-log {
+        margin: 0;
+        font-family: ui-monospace, "Cascadia Code", monospace;
+        font-size: 12px;
+        line-height: 1.45;
         white-space: pre-wrap;
         word-break: break-word;
+        color: var(--mm-ink-mid);
+        max-height: 14rem;
+        overflow: auto;
+        background: rgb(20, 20, 22);
+        overscroll-behavior: contain;
       }
-      .git-meta {
-        font-size: 0.85rem;
-        color: var(--muted);
+
+      .ut-preview {
+        margin-top: 0;
+        padding: 16px 18px;
+        border-radius: var(--mm-radius-md);
+        corner-shape: squircle;
+        border: 1px solid var(--mm-border);
+        background-color: rgb(22, 22, 24);
+        max-height: 48vh;
+        overflow: auto;
+        overscroll-behavior: contain;
       }
-      .git-meta strong {
-        color: var(--text);
+      .ut-preview-h {
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--mm-ink-soft);
+        margin: 12px 0 6px;
+        font-weight: normal;
       }
-      .token-section {
-        margin-bottom: 1rem;
+      .ut-preview-h:first-child {
+        margin-top: 0;
       }
-      .token-section[hidden] {
-        display: none !important;
+      .ut-preview-subject {
+        font-family: "M5x7", monospace;
+        font-size: calc(18px + var(--mm-m5-nudge));
+        margin: 0;
+        color: var(--mm-ink);
       }
-      .token-help {
-        font-size: 0.86rem;
-        color: var(--muted);
-        margin: 0 0 0.5rem;
-        line-height: 1.45;
+      .ut-preview-summary {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: "M5x7", monospace;
+        font-size: calc(18px + var(--mm-m5-nudge));
+        line-height: 1.5;
+        color: var(--mm-ink-mid);
+      }
+
+      .release-md {
+        font-family: "M5x7", monospace;
+        font-size: calc(17px + var(--mm-m5-nudge));
+        line-height: 1.55;
+        color: var(--mm-ink-mid);
+        letter-spacing: normal;
+        font-weight: normal;
+      }
+      .release-md > *:first-child {
+        margin-top: 0;
+      }
+      .release-md > *:last-child {
+        margin-bottom: 0;
+      }
+      .release-md h1,
+      .release-md h2,
+      .release-md h3,
+      .release-md h4 {
+        font-family: "BoldPixels", "Courier New", monospace;
+        color: var(--mm-ink);
+        letter-spacing: 0.04em;
+        line-height: 1.2;
+        margin: 1em 0 0.4em;
+        text-transform: uppercase;
+        font-weight: normal;
+      }
+      .release-md h1 {
+        font-size: clamp(20px, 2.2vw, 24px);
+      }
+      .release-md h2 {
+        font-size: clamp(17px, 2vw, 20px);
+      }
+      .release-md h3 {
+        font-size: 16px;
+        text-transform: none;
+        letter-spacing: 0.03em;
+      }
+      .release-md h4 {
+        font-size: 15px;
+        text-transform: none;
+      }
+      .release-md p {
+        margin: 0 0 0.65em;
+      }
+      .release-md a {
+        color: var(--mm-ink-soft);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .release-md a:hover {
+        color: var(--mm-ink);
+      }
+      .release-md ul,
+      .release-md ol {
+        margin: 0 0 0.65em;
+        padding-left: 1.25rem;
+      }
+      .release-md li {
+        margin-bottom: 0.3em;
+      }
+      .release-md code {
+        font-family: ui-monospace, "Cascadia Code", monospace;
+        font-size: 0.88em;
+        background: rgba(0, 0, 0, 0.22);
+        border: 1px solid var(--mm-border);
+        padding: 0.12em 0.35em;
+        border-radius: 4px;
+      }
+      .release-md pre {
+        margin: 0.65em 0;
+        padding: 10px 12px;
+        overflow: auto;
+        border-radius: var(--mm-radius-sm);
+        border: 1px solid var(--mm-border);
+        background-color: rgb(18, 18, 20);
+        overscroll-behavior: contain;
+      }
+      .release-md pre code {
+        padding: 0;
+        border: none;
+        background: none;
+      }
+      .release-md blockquote {
+        margin: 0.65em 0;
+        padding: 0.5em 0 0.5em 12px;
+        border-left: 3px solid var(--mm-border-strong);
+        background: rgba(0, 0, 0, 0.1);
+        border-radius: 0 6px 6px 0;
+        color: var(--mm-ink-mid);
+      }
+      .release-md table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 0.65em 0;
+        font-size: 0.92em;
+      }
+      .release-md th,
+      .release-md td {
+        border: 1px solid var(--mm-border);
+        padding: 6px 8px;
+      }
+      .release-md th {
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: 0.82em;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        background: rgba(0, 0, 0, 0.12);
+        color: var(--mm-ink);
+      }
+      .release-md tr:nth-child(even) td {
+        background: rgba(0, 0, 0, 0.06);
+      }
+
+      .ut-md-empty {
+        color: var(--mm-ink-soft);
+        font-style: italic;
+        margin: 0;
       }
     </style>
   </head>
-  <body>
-    <div class="wrap">
-      <h1>Stratum local release</h1>
-      <p class="sub">
-        Dev server only. Bumps <code>package.json</code>, writes a commit with subject = version and body
-        <code>[Summary]</code> / <code>[Changes]</code> (same as <code>release-commit.sh</code>). Uses
-        <strong>your</strong> local Git identity and repo — nothing is pushed from here.
-      </p>
-      <div id="banner" class="banner" hidden></div>
-      <div id="gitMeta" class="git-meta"></div>
+  <body class="ut-body">
+    <div class="ut-wrap">
+      <article class="ut-panel">
+        <header class="ut-header">
+          <p class="ut-kicker">What players see next</p>
+          <h1 class="ut-title">Write this update</h1>
+        </header>
+        <div id="banner" class="ut-banner" hidden></div>
 
-      <div id="tokenSection" class="token-section" hidden>
-        <p class="token-help">
-          Your dev server was started with <code>STRATUM_UPDATE_TOOL_TOKEN</code> in <code>.env.local</code> (repo
-          root). Paste the <strong>same secret</strong> here so preview/commit requests are allowed. This blocks
-          random websites from POSTing to your machine while this tab is open — it is <strong>not</strong> your Git
-          password and nothing is sent off-device.
-        </p>
-        <label for="token">Update tool token</label>
-        <input id="token" type="password" autocomplete="off" placeholder="Same value as STRATUM_UPDATE_TOOL_TOKEN" />
-      </div>
+        <div class="ut-card">
+          <div id="tokenSection" class="ut-token-section" hidden>
+            <p class="ut-token-help ut-m5">
+              Your machine is set to ask for a <strong>local passphrase</strong> before saving. Paste the one your
+              project uses (it is only checked on this computer and is <strong>not</strong> your game password or
+              email).
+            </p>
+            <div class="ut-stack">
+              <label class="ut-label" for="token">Passphrase (only if this box appears)</label>
+              <input
+                id="token"
+                class="ut-input"
+                type="password"
+                autocomplete="off"
+                placeholder="Ask whoever runs the dev server for the word to type here"
+              />
+            </div>
+          </div>
 
-      <div class="row">
-        <div>
-          <label for="bump">Bump</label>
-          <select id="bump">
-            <option value="prerelease">Prerelease (same X.Y.Z line)</option>
-            <option value="patch">Patch</option>
-            <option value="minor">Minor</option>
-            <option value="major">Major</option>
-          </select>
+          <div class="ut-row">
+            <div class="ut-field">
+              <label class="ut-label" id="bumpLabel">How much changes</label>
+              <div id="bumpMount"></div>
+            </div>
+            <div class="ut-field">
+              <label class="ut-label" id="laneLabel">Who it is for</label>
+              <div id="laneMount"></div>
+            </div>
+          </div>
+
+          <div class="ut-stack">
+            <label class="ut-label" for="summary">Teaser on the home screen</label>
+            <textarea
+              id="summary"
+              class="ut-input"
+              placeholder="A short, friendly line or two—what should someone notice first? No special formatting here."
+            ></textarea>
+          </div>
+
+          <div class="ut-stack">
+            <label class="ut-label" for="changes">Full notes ("Read more")</label>
+            <textarea
+              id="changes"
+              class="ut-input ut-textarea-changes"
+              placeholder="The longer story: fixes, new things, tips. You can use headings, bullet lists, and links so it reads like a real letter to players."
+            ></textarea>
+          </div>
+
+          <div class="ut-actions">
+            <button type="button" id="btnPreview" class="ut-btn">Preview</button>
+            <button type="button" id="btnCommit" class="ut-btn">Commit &amp; Push</button>
+            <button type="button" id="btnReload" class="ut-btn ut-btn--subtle">Refresh</button>
+          </div>
         </div>
-        <div>
-          <label for="lane">Lane</label>
-          <select id="lane">
-            <option value="alpha">Alpha</option>
-            <option value="beta">Beta</option>
-            <option value="release">Release (stable)</option>
-          </select>
+
+        <div id="progressPanel" class="ut-block" hidden>
+          <h3>What just ran</h3>
+          <pre id="progressLog" class="ut-progress-log"></pre>
         </div>
-      </div>
-
-      <label for="summary">Step 1 — Summary (plain text; main menu card)</label>
-      <textarea id="summary" placeholder="Short player-facing blurb, no Markdown."></textarea>
-
-      <label for="changes">Step 2 — Full changelog (Markdown; Read more modal)</label>
-      <textarea id="changes" class="changes" placeholder="Headings, lists, tables, links… See changelogs/REFERENCE_WEBGPU_PERFORMANCE_UPDATE.md"></textarea>
-
-      <div class="actions">
-        <button type="button" id="btnPreview">Preview message</button>
-        <button type="button" id="btnCommit">Bump version &amp; commit</button>
-        <button type="button" class="secondary" id="btnReload">Reload git state</button>
-      </div>
-      <pre id="preview" class="preview" hidden></pre>
+        <div id="previewPanel" class="ut-preview" hidden>
+          <div class="ut-preview-h">Version title</div>
+          <p id="previewSubject" class="ut-preview-subject"></p>
+          <div class="ut-preview-h">Home teaser</div>
+          <p id="previewSummary" class="ut-preview-summary"></p>
+          <div class="ut-preview-h">Full notes preview</div>
+          <div id="previewChanges" class="release-md"></div>
+        </div>
+      </article>
     </div>
     <script type="module">
       const api = (path) => "/stratum/__update-tool/api" + path;
       const banner = document.getElementById("banner");
-      const gitMeta = document.getElementById("gitMeta");
-      const preview = document.getElementById("preview");
+      const previewPanel = document.getElementById("previewPanel");
+      const previewSubject = document.getElementById("previewSubject");
+      const previewSummary = document.getElementById("previewSummary");
+      const previewChanges = document.getElementById("previewChanges");
+      const progressPanel = document.getElementById("progressPanel");
+      const progressLog = document.getElementById("progressLog");
+
+      /**
+       * Same behavior as {@link MainMenu} `createMenuDropdown` — custom list, not OS `<select>`.
+       * @param {HTMLElement} mountEl
+       * @param {{ value: string, label: string }[]} options
+       * @param {string} initialValue
+       * @param {string} [labelledById]
+       */
+      function mountStratumMenuDropdown(mountEl, options, initialValue, labelledById) {
+        const fallback = options[0]?.value ?? "";
+        let currentValue = options.some((o) => o.value === initialValue) ? initialValue : fallback;
+        const changeListeners = [];
+        const root = document.createElement("div");
+        root.className = "mm-create-mode-dropdown";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "mm-create-mode-select";
+        button.setAttribute("aria-haspopup", "listbox");
+        button.setAttribute("aria-expanded", "false");
+        if (labelledById) button.setAttribute("aria-labelledby", labelledById);
+        const buttonLabel = document.createElement("span");
+        buttonLabel.className = "mm-create-mode-select-label";
+        const buttonCaret = document.createElement("span");
+        buttonCaret.className = "mm-create-mode-caret";
+        buttonCaret.setAttribute("aria-hidden", "true");
+        const list = document.createElement("ul");
+        list.className = "mm-create-mode-options";
+        list.setAttribute("role", "listbox");
+        list.hidden = true;
+        /** @type {HTMLButtonElement[]} */
+        let optionButtons = [];
+
+        const closeMenu = () => {
+          root.classList.remove("mm-create-mode-dropdown-open");
+          list.hidden = true;
+          button.setAttribute("aria-expanded", "false");
+        };
+        const openMenu = () => {
+          root.classList.add("mm-create-mode-dropdown-open");
+          list.hidden = false;
+          button.setAttribute("aria-expanded", "true");
+        };
+        const emitChange = () => {
+          for (const listener of changeListeners) listener(currentValue);
+        };
+
+        const render = () => {
+          const activeIndex = options.findIndex((o) => o.value === currentValue);
+          const active = (activeIndex >= 0 ? options[activeIndex] : undefined) ?? options[0];
+          const tone = String((((activeIndex >= 0 ? activeIndex : 0) % 4) + 4) % 4);
+          buttonLabel.textContent = active?.label ?? "";
+          button.dataset.value = active?.value ?? "";
+          button.dataset.tone = tone;
+          root.dataset.value = active?.value ?? "";
+          root.dataset.tone = tone;
+          for (const b of optionButtons) {
+            const isSelected = b.dataset.value === currentValue;
+            b.classList.toggle("mm-create-mode-option-selected", isSelected);
+            b.setAttribute("aria-selected", isSelected ? "true" : "false");
+          }
+        };
+
+        list.replaceChildren();
+        optionButtons = options.map((opt) => {
+          const item = document.createElement("li");
+          const optBtn = document.createElement("button");
+          optBtn.type = "button";
+          optBtn.className = "mm-create-mode-option";
+          optBtn.dataset.value = opt.value;
+          optBtn.setAttribute("role", "option");
+          optBtn.textContent = opt.label;
+          optBtn.addEventListener("click", () => {
+            if (currentValue === opt.value) {
+              closeMenu();
+              button.focus();
+              return;
+            }
+            currentValue = opt.value;
+            render();
+            emitChange();
+            closeMenu();
+            button.focus();
+          });
+          item.appendChild(optBtn);
+          list.appendChild(item);
+          return optBtn;
+        });
+
+        button.addEventListener("click", () => {
+          if (button.disabled) return;
+          if (list.hidden) openMenu();
+          else closeMenu();
+        });
+        button.addEventListener("keydown", (ev) => {
+          if (button.disabled) return;
+          if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+            ev.preventDefault();
+            const idx = options.findIndex((o) => o.value === currentValue);
+            const dir = ev.key === "ArrowDown" ? 1 : -1;
+            const next = options[(idx + dir + options.length) % options.length];
+            if (next !== undefined && next.value !== currentValue) {
+              currentValue = next.value;
+              render();
+              emitChange();
+            }
+            return;
+          }
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            if (list.hidden) openMenu();
+            else closeMenu();
+            return;
+          }
+          if (ev.key === "Escape") closeMenu();
+        });
+
+        document.addEventListener("pointerdown", (ev) => {
+          const target = ev.target;
+          if (!(target instanceof Node)) return;
+          if (!root.contains(target)) closeMenu();
+        });
+
+        button.appendChild(buttonLabel);
+        button.appendChild(buttonCaret);
+        root.appendChild(button);
+        root.appendChild(list);
+        mountEl.replaceChildren(root);
+        render();
+
+        return {
+          getValue: () => currentValue,
+          setValue: (next) => {
+            if (!options.some((o) => o.value === next)) return;
+            if (currentValue === next) return;
+            currentValue = next;
+            render();
+            emitChange();
+          },
+          onChange: (listener) => {
+            changeListeners.push(listener);
+          },
+          setDisabled: (disabled) => {
+            button.disabled = disabled;
+            if (disabled) closeMenu();
+          },
+        };
+      }
+
+      const bumpDd = mountStratumMenuDropdown(
+        document.getElementById("bumpMount"),
+        [
+          { value: "prerelease", label: "Prerelease — small follow-up, same headline number" },
+          { value: "patch", label: "Patch — fixes & polish" },
+          { value: "minor", label: "Minor — new features" },
+          { value: "major", label: "Major — big milestone" },
+        ],
+        "prerelease",
+        "bumpLabel",
+      );
+      const laneDd = mountStratumMenuDropdown(
+        document.getElementById("laneMount"),
+        [
+          { value: "alpha", label: "Alpha — early testers" },
+          { value: "beta", label: "Beta — wider testing" },
+          { value: "release", label: "Release — everyone (stable)" },
+        ],
+        "alpha",
+        "laneLabel",
+      );
+
+      let mdLibPromise = null;
+      function loadMarkdownLibs() {
+        if (!mdLibPromise) {
+          mdLibPromise = Promise.all([
+            import("https://esm.sh/marked@18.0.2"),
+            import("https://esm.sh/dompurify@3.4.1"),
+          ]).then(([markedMod, dpMod]) => {
+            const { marked } = markedMod;
+            const DOMPurify = dpMod.default ?? dpMod;
+            marked.setOptions({ gfm: true, breaks: true });
+            return { marked, DOMPurify };
+          });
+        }
+        return mdLibPromise;
+      }
+
+      function renderChangesMarkdown(container, md, { marked, DOMPurify }) {
+        container.replaceChildren();
+        const trimmed = String(md ?? "").trim();
+        if (trimmed.length === 0) {
+          const p = document.createElement("p");
+          p.className = "ut-md-empty";
+          p.textContent = "No detail text yet—add something under Full notes.";
+          container.appendChild(p);
+          return;
+        }
+        const raw = marked.parse(trimmed, { async: false });
+        const clean = DOMPurify.sanitize(raw, {
+          USE_PROFILES: { html: true },
+          ADD_TAGS: ["input"],
+          ADD_ATTR: ["type", "checked", "disabled", "class"],
+        });
+        container.innerHTML = clean;
+        for (const el of container.querySelectorAll("a[href]")) {
+          const href = el.getAttribute("href");
+          if (href !== null && /^https?:\/\//i.test(href)) {
+            el.target = "_blank";
+            el.rel = "noopener noreferrer";
+          }
+        }
+      }
+
+      function setBusy(busy) {
+        for (const id of ["btnPreview", "btnCommit", "btnReload"]) {
+          const el = document.getElementById(id);
+          if (el) el.disabled = busy;
+        }
+        bumpDd.setDisabled(busy);
+        laneDd.setDisabled(busy);
+        for (const id of ["summary", "changes", "token"]) {
+          const el = document.getElementById(id);
+          if (el) el.disabled = busy;
+        }
+      }
+
+      function appendProgress(line) {
+        progressPanel.hidden = false;
+        const cur = progressLog.textContent;
+        progressLog.textContent = cur ? cur + "\n" + line : line;
+        progressLog.scrollTop = progressLog.scrollHeight;
+      }
+
+      function clearProgress() {
+        progressLog.textContent = "";
+        progressPanel.hidden = true;
+      }
 
       function showBanner(kind, text) {
         banner.hidden = false;
-        banner.className = "banner" + (kind === "err" ? " err" : kind === "warn" ? " warn" : kind === "ok" ? " ok" : "");
+        const mod =
+          kind === "err" ? " ut-banner--err" : kind === "warn" ? " ut-banner--warn" : kind === "ok" ? " ut-banner--ok" : "";
+        banner.className = "ut-banner" + mod;
         banner.textContent = text;
       }
       function hideBanner() {
@@ -244,38 +1030,16 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           showBanner("err", data.error ?? res.statusText);
-          gitMeta.textContent = "";
           return;
         }
         const tokenSection = document.getElementById("tokenSection");
         if (tokenSection) tokenSection.hidden = !data.tokenRequired;
-        gitMeta.innerHTML =
-          "<strong>Version</strong> " +
-          escapeHtml(data.version) +
-          " · <strong>Branch</strong> " +
-          escapeHtml(data.branch) +
-          " · <strong>Git user</strong> " +
-          escapeHtml(data.userName) +
-          " &lt;" +
-          escapeHtml(data.userEmail) +
-          "&gt;" +
-          (data.dirty
-            ? " · <strong style='color:#ffb070'>Uncommitted changes</strong> (will be included in <code>git add -A</code>)"
-            : " · working tree clean");
-      }
-
-      function escapeHtml(s) {
-        return String(s)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;");
       }
 
       function payload() {
         return {
-          bump: document.getElementById("bump").value,
-          lane: document.getElementById("lane").value,
+          bump: bumpDd.getValue(),
+          lane: laneDd.getValue(),
           summary: document.getElementById("summary").value,
           changes: document.getElementById("changes").value,
         };
@@ -284,62 +1048,134 @@
       document.getElementById("btnReload").addEventListener("click", () => void loadState());
 
       document.getElementById("btnPreview").addEventListener("click", async () => {
-        preview.hidden = true;
+        previewPanel.hidden = true;
         hideBanner();
+        clearProgress();
         const p = payload();
         if (p.summary.trim().length === 0) {
-          showBanner("err", "Add a Step 1 summary first (plain text). Preview needs it to build the commit body.");
+          showBanner("err", "Write the home-screen teaser first so we know how to open the update.");
           return;
         }
-        const res = await fetch(api("/preview"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify(p),
-        });
-        const raw = await res.text();
+        setBusy(true);
+        appendProgress("Preparing preview…");
+        let md;
+        try {
+          md = await loadMarkdownLibs();
+        } catch (e) {
+          setBusy(false);
+          clearProgress();
+          showBanner(
+            "err",
+            "Couldn’t load the preview helper. Check your internet connection, then try Preview again. (" +
+              (e && e.message ? e.message : String(e)) +
+              ")",
+          );
+          return;
+        }
+        appendProgress("Asking your local Stratum page for a sample…");
+        let res;
+        let raw;
+        try {
+          res = await fetch(api("/preview"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify(p),
+          });
+          raw = await res.text();
+        } catch (e) {
+          setBusy(false);
+          clearProgress();
+          showBanner(
+            "err",
+            "Preview didn’t reach the page. Is the dev server still running? (" +
+              (e && e.message ? e.message : String(e)) +
+              ")",
+          );
+          return;
+        }
         let data = {};
         try {
-          data = JSON.parse(raw) as { error?: string; message?: string; nextVersion?: string };
+          data = JSON.parse(raw);
         } catch {
+          setBusy(false);
+          clearProgress();
           showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
           return;
         }
+        setBusy(false);
+        clearProgress();
         if (!res.ok) {
           showBanner("err", data.error ?? res.statusText);
           return;
         }
-        preview.hidden = false;
-        preview.textContent = data.message ?? "";
-        showBanner("ok", "Next version: " + data.nextVersion);
+        previewSubject.textContent = data.commitSubject ?? data.nextVersion ?? "";
+        previewSummary.textContent = data.summaryPlain ?? "";
+        renderChangesMarkdown(previewChanges, data.changesMarkdown ?? "", md);
+        previewPanel.hidden = false;
+        showBanner("ok", "Players would see version " + data.nextVersion + " on this build.");
       });
 
       document.getElementById("btnCommit").addEventListener("click", async () => {
-        if (!confirm("Run npm version, git add -A, and git commit with the assembled message?")) return;
-        preview.hidden = true;
+        if (
+          !confirm(
+            "This records the new version and your notes on this computer, then tries to upload them the usual way your project shares updates. Continue?",
+          )
+        )
+          return;
+        previewPanel.hidden = true;
         hideBanner();
+        clearProgress();
         const p = payload();
         if (p.summary.trim().length === 0) {
-          showBanner("err", "Add a Step 1 summary before committing.");
+          showBanner("err", "Add the home-screen teaser before saving the release.");
           return;
         }
-        const res = await fetch(api("/commit"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify(p),
-        });
-        const raw = await res.text();
+        setBusy(true);
+        appendProgress("Saving version and notes on this machine, then uploading if possible…");
+        let res;
+        let raw;
+        try {
+          res = await fetch(api("/commit"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify(p),
+          });
+          raw = await res.text();
+        } catch (e) {
+          setBusy(false);
+          appendProgress("Request failed: " + (e && e.message ? e.message : String(e)));
+          showBanner("err", "Couldn’t reach the local save step. Check the dev server, then try again.");
+          return;
+        }
         let data = {};
         try {
-          data = JSON.parse(raw) as { error?: string; message?: string };
+          data = JSON.parse(raw);
         } catch {
-          showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
+          setBusy(false);
+          appendProgress("Unexpected reply from server:\n" + (raw ? raw.slice(0, 400) : "(empty)"));
+          showBanner("err", res.status + " " + res.statusText);
           return;
         }
+        setBusy(false);
         if (!res.ok) {
+          appendProgress("- failed -\n" + (data.error ?? res.statusText));
           showBanner("err", data.error ?? res.statusText);
           return;
         }
-        showBanner("ok", data.message ?? "Committed.");
+        if (Array.isArray(data.steps) && data.steps.length > 0) {
+          progressLog.textContent = data.steps.join("\n");
+          progressPanel.hidden = false;
+          progressLog.scrollTop = progressLog.scrollHeight;
+        }
+        const pushOk = data.pushOk !== false;
+        const okMsg =
+          (data.message ? data.message + " " : "") +
+          (data.oneline ? "Saved as: " + data.oneline + "." : "");
+        showBanner(
+          pushOk ? "ok" : "warn",
+          okMsg.trim() ||
+            (pushOk ? "Saved." : "Saved on this computer; upload to the shared project didn’t finish—ask your team."),
+        );
         await loadState();
       });
 

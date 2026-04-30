@@ -19,7 +19,8 @@
       "stratum:light_absorption": 0,
       "stratum:material": "stone",
       "stratum:loot_table": "stratum:stonecutter",
-      "stratum:numeric_id": 85
+      "stratum:numeric_id": 85,
+      "stratum:creative_category": "construction"
     }
   }
 }

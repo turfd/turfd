@@ -8,7 +8,8 @@
       "stratum:display_name": "Flint",
       "stratum:texture_key": "flint",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 139
+      "stratum:numeric_id": 139,
+      "stratum:creative_category": "items"
     }
   }
 }

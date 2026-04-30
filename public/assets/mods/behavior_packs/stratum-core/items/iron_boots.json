@@ -14,7 +14,8 @@
         "stratum:armor",
         "stratum:armor_boots"
       ],
-      "stratum:inventory_tooltip": "Foot armor"
+      "stratum:inventory_tooltip": "Foot armor",
+      "stratum:creative_category": "equipment"
     }
   }
 }

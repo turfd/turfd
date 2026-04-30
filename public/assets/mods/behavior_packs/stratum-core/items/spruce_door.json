@@ -8,7 +8,8 @@
       "stratum:display_name": "Spruce Door",
       "stratum:texture_key": "spruce_door",
       "stratum:places_block": "stratum:spruce_door",
-      "stratum:numeric_id": 91
+      "stratum:numeric_id": 91,
+      "stratum:creative_category": "construction"
     }
   }
 }

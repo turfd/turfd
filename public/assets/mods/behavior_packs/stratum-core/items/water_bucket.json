@@ -9,7 +9,8 @@
       "stratum:texture_key": "water_bucket",
       "stratum:max_stack": 1,
       "stratum:places_block": "stratum:water",
-      "stratum:numeric_id": 94
+      "stratum:numeric_id": 94,
+      "stratum:creative_category": "equipment"
     }
   }
 }

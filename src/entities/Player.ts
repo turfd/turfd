@@ -129,8 +129,8 @@ const SPRINT_JUMP_HORIZONTAL_BLOCKS_PER_SEC = 7.127;
 const WALK_SPEED = PLAYER_WALK_SPEED_PX;
 const SPRINT_SPEED = PLAYER_SPRINT_SPEED_PX;
 const CREATIVE_FLY_SPEED = SPRINT_SPEED;
-const CREATIVE_FLY_SPRINT_MULT = 1.35;
-const CREATIVE_FLY_CTRL_MULT = 1.7;
+/** Shift while flying: horizontal + vertical move faster. */
+const CREATIVE_FLY_FAST_MULT = 1.35;
 const CREATIVE_FLY_TOGGLE_TAP_WINDOW_SEC = 0.3;
 const CREATIVE_FLY_ACCEL = 1600;
 const CREATIVE_FLY_DECEL = 520;
@@ -1093,15 +1093,15 @@ export class Player {
       moveInput += 1;
     }
     if (this._gameMode === "sandbox" && this._sandboxFlightEnabled) {
-      const descendHeld = input.isDown("sprint");
-      const flyFastHeld =
-        input.isKeyCodeDown("ControlLeft") || input.isKeyCodeDown("ControlRight");
+      const flyFastHeld = input.isDown("sprint");
+      const flyDownHeld =
+        input.isKeyCodeDown("ControlLeft") ||
+        input.isKeyCodeDown("ControlRight") ||
+        input.isKeyCodeDown("KeyS");
       const flyInput =
-        (input.isDown("jump") ? -1 : 0) + (descendHeld ? 1 : 0);
+        (input.isDown("jump") ? -1 : 0) + (flyDownHeld ? 1 : 0);
       const speed =
-        CREATIVE_FLY_SPEED *
-        (descendHeld ? CREATIVE_FLY_SPRINT_MULT : 1) *
-        (flyFastHeld ? CREATIVE_FLY_CTRL_MULT : 1);
+        CREATIVE_FLY_SPEED * (flyFastHeld ? CREATIVE_FLY_FAST_MULT : 1);
       const targetVx = moveInput * speed;
       const targetVy = flyInput * speed;
       state.velocity.x = approach(

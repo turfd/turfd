@@ -20,7 +20,8 @@
       "stratum:loot_table": "stratum:painting",
       "stratum:no_block_item": true,
       "stratum:is_painting": true,
-      "stratum:numeric_id": 87
+      "stratum:numeric_id": 87,
+      "stratum:creative_category": "construction"
     }
   }
 }

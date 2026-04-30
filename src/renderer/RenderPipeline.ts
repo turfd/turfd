@@ -68,10 +68,10 @@ function clamp01(t: number): number {
 }
 
 /**
- * Pixi `resolution`: integer 1 / 2 / … while logicalW×logicalH×res² ≤ 1080p-class budget, so the
- * canvas backing store stays a **whole-number multiple** of layout pixels (sharp pixel art).
+ * Pixi `resolution`: integer 1 / 2 / … while logicalW×logicalH×res² ≤ {@link MAX_RENDER_BACKBUFFER_PIXELS}.
  * Capped by device DPR and {@link MAX_RENDER_DEVICE_PIXEL_RATIO}. If the viewport exceeds the
- * budget even at 1×, returns sqrt(budget / area) below 1 (last resort; slightly soft).
+ * budget even at 1×, returns sqrt(budget / area) (below 1): cheaper GPU fill; {@link CompositePass}
+ * snaps albedo UVs so the upscale reads **sharp**, not bilinear-blurry.
  */
 function effectiveRenderResolution(
   logicalWidth: number,
@@ -406,6 +406,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     skyCanvas.style.width = "100%";
     skyCanvas.style.height = "100%";
     skyCanvas.style.pointerEvents = "none";
+    skyCanvas.style.imageRendering = "pixelated";
     this._skyCssCanvas = skyCanvas;
     this._skyCssCtx = skyCanvas.getContext("2d");
     this.mount.appendChild(skyCanvas);

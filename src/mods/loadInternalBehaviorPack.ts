@@ -183,6 +183,7 @@ export function registerParsedItems(
       eatRestoreHealth: def.eatRestoreHealth,
       eatTemporaryDurationSec: def.eatTemporaryDurationSec,
       inventoryTooltip: def.inventoryTooltip,
+      creativeCategory: def.creativeCategory,
     });
   }
 }

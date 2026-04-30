@@ -8,7 +8,8 @@
       "stratum:display_name": "Wheat Seeds",
       "stratum:texture_key": "wheat_seeds",
       "stratum:max_stack": 64,
-      "stratum:numeric_id": 96
+      "stratum:numeric_id": 96,
+      "stratum:creative_category": "nature"
     }
   }
 }
