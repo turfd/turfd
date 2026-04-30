@@ -359,8 +359,13 @@ export class World {
   private readonly _doorBottomKeys = new Set<string>();
   /** Screen-space player samples for door proximity (set before and after local physics each tick). */
   private readonly _doorPlayerSamples: DoorPlayerSample[] = [];
-  /** Last door render signature per bottom key — drives chunk mesh dirty when open state or swing hinge changes. */
-  private readonly _doorRenderSig = new Map<string, string>();
+  /**
+   * Last door render signature per bottom key — drives chunk mesh dirty when
+   * open state or swing hinge changes. Stored as a packed int (bit 0 =
+   * effective-open, bit 1 = hinge-right) instead of a `${a}:${b}` string to
+   * avoid per-tick string allocation across every tracked door.
+   */
+  private readonly _doorRenderSig = new Map<string, number>();
   /** Previous effective-open + latch for {@link refreshDoorProximityMeshDirty} proximity SFX (no double-play with click). */
   private readonly _doorProximitySfxState = new Map<
     string,
@@ -735,11 +740,27 @@ export class World {
   /**
    * Player / remote samples for door proximity opening. Call each tick before and after
    * local movement (see {@link refreshDoorProximityMeshDirty} after physics).
+   *
+   * The internal buffer is sized to match `samples` and entries are reused
+   * field-wise so steady-state ticks do not allocate.
    */
   setDoorPlayerCollidersForProximity(samples: readonly DoorPlayerSample[]): void {
-    this._doorPlayerSamples.length = 0;
-    for (const s of samples) {
-      this._doorPlayerSamples.push(s);
+    const buf = this._doorPlayerSamples;
+    const n = samples.length;
+    while (buf.length < n) {
+      buf.push({ aabb: { x: 0, y: 0, width: 0, height: 0 }, vx: 0 });
+    }
+    buf.length = n;
+    for (let i = 0; i < n; i += 1) {
+      const src = samples[i]!;
+      const dst = buf[i]!;
+      const sa = src.aabb;
+      const da = dst.aabb;
+      da.x = sa.x;
+      da.y = sa.y;
+      da.width = sa.width;
+      da.height = sa.height;
+      dst.vx = src.vx;
     }
   }
 
@@ -796,8 +817,18 @@ export class World {
 
   /**
    * Marks foreground chunks dirty when door effective-open or swing hinge changes, so meshes rebuild.
+   *
+   * Hot path — runs every fixedUpdate (60 Hz). The body is structured to do
+   * zero allocation in the common "no state change" case:
+   *  - Early-out when no doors are tracked.
+   *  - Render signature is a packed int (bit 0 = effective, bit 1 = hinge-right)
+   *    instead of a string.
+   *  - Sfx state objects are mutated in place rather than re-allocated each tick.
    */
   refreshDoorProximityMeshDirty(): void {
+    if (this._doorBottomKeys.size === 0) {
+      return;
+    }
     for (const key of this._doorBottomKeys) {
       const comma = key.indexOf(",");
       const wx = Number(key.slice(0, comma));
@@ -806,10 +837,11 @@ export class World {
       const latched = doorLatchedOpenFromMeta(meta);
       const effective = this.isDoorEffectivelyOpen(wx, bottomWy);
       const hingeR = this.getDoorRenderHingeRight(wx, bottomWy);
-      const sig = `${effective ? 1 : 0}:${hingeR ? 1 : 0}`;
-      const prevSig = this._doorProximitySfxState.get(key);
-      if (prevSig !== undefined) {
-        const { effective: prevEff, latched: prevLatch } = prevSig;
+      const sig = (effective ? 1 : 0) | (hingeR ? 2 : 0);
+      const prevSfx = this._doorProximitySfxState.get(key);
+      if (prevSfx !== undefined) {
+        const prevEff = prevSfx.effective;
+        const prevLatch = prevSfx.latched;
         if (effective && !prevEff && !latched) {
           this.bus?.emit({
             type: "door:proximity-swing",
@@ -825,16 +857,19 @@ export class World {
             opening: false,
           } satisfies GameEvent);
         }
+        prevSfx.effective = effective;
+        prevSfx.latched = latched;
+      } else {
+        this._doorProximitySfxState.set(key, { effective, latched });
       }
-      this._doorProximitySfxState.set(key, { effective, latched });
       const prev = this._doorRenderSig.get(key);
-      if (prev !== undefined) {
-        const prevEff = prev.charAt(0) === "1";
-        if (prevEff !== effective) {
-          this._queueLightRecomputeForDoorProximityChange(wx, bottomWy);
-        }
-      }
       if (prev !== sig) {
+        if (prev !== undefined) {
+          const prevEff = (prev & 1) === 1;
+          if (prevEff !== effective) {
+            this._queueLightRecomputeForDoorProximityChange(wx, bottomWy);
+          }
+        }
         this._doorRenderSig.set(key, sig);
         this.markForegroundChunkDirtyAtWorldCell(wx, bottomWy);
         this.markForegroundChunkDirtyAtWorldCell(wx, bottomWy + 1);
@@ -2115,6 +2150,11 @@ export class World {
     for (const chunk of this.chunks.getLoadedChunks()) {
       yield [chunk.coord.cx, chunk.coord.cy];
     }
+  }
+
+  /** Cheap loaded-chunk total — O(rowCount), no iterator allocation. */
+  getLoadedChunkCount(): number {
+    return this.chunks.getLoadedCount();
   }
 
   /**

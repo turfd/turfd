@@ -9219,20 +9219,10 @@ export class Game {
     perfMark("RenderPipeline.render", tRenderPipeline);
     const debugHud = this._gpuDebugHud;
     if (debugHud?.isOpen()) {
-      let mobs = 0;
       const mm = this._mobManager;
-      if (mm !== null) {
-        for (const _ of mm.getAll()) {
-          mobs += 1;
-        }
-      }
-      let loadedChunks = 0;
+      const mobs = mm !== null ? mm.getCount() : 0;
       const world = this.world;
-      if (world !== null) {
-        for (const _ of world.loadedChunkCoords()) {
-          loadedChunks += 1;
-        }
-      }
+      const loadedChunks = world !== null ? world.getLoadedChunkCount() : 0;
       const remotes = world?.getRemotePlayers().size ?? 0;
       const dropped = world?.getDroppedItems().size ?? 0;
       const arrows = world?.getArrows().size ?? 0;

@@ -642,6 +642,18 @@ export const CHUNK_SYNC_MAX_PER_FRAME = 8;
 export const CHUNK_SYNC_DEFER_DIRTY_THRESHOLD = 28;
 /** Per-frame dirty mesh cap when {@link CHUNK_SYNC_DEFER_DIRTY_THRESHOLD} is exceeded. */
 export const CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD = 5;
+/**
+ * Soft per-frame wall-clock budget for chunk mesh rebuilds (ms). Once the
+ * dirty loop has consumed this much time it stops scheduling additional
+ * rebuilds for this frame, even if the count cap hasn't been hit yet — the
+ * remaining items keep their `renderDirty` flag and roll to the next frame.
+ *
+ * Sized so a single heavy chunk (e.g. a built structure with chests, doors,
+ * signs and glass) can still rebuild on a frame where it's first in line, but
+ * a burst of dirty chunks (door state changes near a cabin, bulk edits) can't
+ * stack into one ~30 ms vsync-locked frame.
+ */
+export const CHUNK_SYNC_BUDGET_MS = 4;
 
 /** Min interval between render-path `InputManager.updateMouseWorldPos` calls (~60 Hz). */
 export const POINTER_MOVE_THROTTLE_MS = 16;

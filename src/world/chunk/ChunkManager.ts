@@ -53,6 +53,19 @@ export class ChunkManager {
     }
   }
 
+  /**
+   * O(rowCount) loaded chunk count — sums per-column map sizes without
+   * walking every chunk. Used by the F3 HUD instead of a full iterator
+   * walk so debug instrumentation doesn't allocate generators every frame.
+   */
+  getLoadedCount(): number {
+    let n = 0;
+    for (const row of this.loaded.values()) {
+      n += row.size;
+    }
+    return n;
+  }
+
   /** All loaded chunks (for mesh sync, save, iteration). */
   getLoadedChunks(): Iterable<Chunk> {
     const loaded = this.loaded;

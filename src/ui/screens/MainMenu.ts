@@ -549,8 +549,6 @@ function injectStyles(base: string): void {
       letter-spacing: 0.05em;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
-      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65))
-        drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
       opacity: 1;
       transition: opacity 0.22s ease;
     }
@@ -3864,6 +3862,9 @@ export class MainMenu {
         scrollFadeHint.appendChild(document.createTextNode(" Scroll. "));
         scrollFadeHint.appendChild(scrollArrR);
         scrollFadeHint.hidden = true;
+        const scrollEndSentinel = document.createElement("div");
+        scrollEndSentinel.style.cssText = "width:1px;height:1px;";
+        scroll.appendChild(scrollEndSentinel);
         scroll.appendChild(scrollFadeHint);
 
         const actions = document.createElement("div");
@@ -3880,29 +3881,33 @@ export class MainMenu {
           const overflow = scroll.scrollHeight > scroll.clientHeight + 2;
           if (overflow) {
             scroll.classList.add("mm-release-changes-scroll--overflow");
-            const atEnd =
-              scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 6;
             scrollFadeHint.hidden = false;
-            scrollFadeHint.classList.toggle("mm-release-scroll-fade-hint--hidden", atEnd);
           } else {
             scroll.classList.remove("mm-release-changes-scroll--overflow");
             scrollFadeHint.hidden = true;
             scrollFadeHint.classList.remove("mm-release-scroll-fade-hint--hidden");
           }
         };
+        const hintEndObserver = new IntersectionObserver(
+          (entries) => {
+            const endVisible = entries.some((entry) => entry.isIntersecting);
+            scrollFadeHint.classList.toggle("mm-release-scroll-fade-hint--hidden", endVisible);
+          },
+          { root: scroll, threshold: 0.95 },
+        );
+        hintEndObserver.observe(scrollEndSentinel);
         const ro = new ResizeObserver(() => {
           syncScrollOverflowClass();
         });
         ro.observe(scroll);
-        scroll.addEventListener("scroll", syncScrollOverflowClass, { passive: true });
         syncScrollOverflowClass();
         requestAnimationFrame(() => {
           syncScrollOverflowClass();
         });
 
         releaseNotesScrollCleanup = (): void => {
+          hintEndObserver.disconnect();
           ro.disconnect();
-          scroll.removeEventListener("scroll", syncScrollOverflowClass);
         };
         closeBtn.addEventListener("click", closeModal);
         modal.addEventListener("click", (ev) => {

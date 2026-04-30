@@ -511,6 +511,11 @@ export class MobManager {
     return this.mobs.values();
   }
 
+  /** O(1) live mob count (used by F3 HUD; avoids iterator allocation). */
+  getCount(): number {
+    return this.mobs.size;
+  }
+
   getPublicViews(): MobPublicView[] {
     const out: MobPublicView[] = [];
     for (const m of this.mobs.values()) {

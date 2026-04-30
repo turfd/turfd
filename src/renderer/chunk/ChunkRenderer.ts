@@ -9,6 +9,7 @@ import type { ChunkCoord } from "../../world/chunk/ChunkCoord";
 import {
   BLOCK_SIZE,
   CHUNK_SIZE,
+  CHUNK_SYNC_BUDGET_MS,
   CHUNK_SYNC_DEFER_DIRTY_THRESHOLD,
   CHUNK_SYNC_MAX_PER_FRAME,
   CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD,
@@ -221,7 +222,19 @@ export class ChunkRenderer {
       }
     }
 
+    // Soft wall-clock budget across all rebuilds this frame. Always rebuild
+    // at least one (so the queue can't starve on a slow chunk), then bail to
+    // the next frame once we've eaten the budget — anything not rebuilt
+    // keeps its `renderDirty` flag and rolls forward, while the user keeps
+    // seeing the previous mesh in the meantime.
+    const tBudgetStart = performance.now();
     for (const item of nearestDirty) {
+      if (
+        updatesThisFrame > 0 &&
+        performance.now() - tBudgetStart >= CHUNK_SYNC_BUDGET_MS
+      ) {
+        break;
+      }
       updatesThisFrame += 1;
       withPerfSpan("ChunkRenderer.updateDirtyChunk", () => {
         updateBackgroundMesh(item.meshes.bg, item.chunk, this.registry, this.atlas);

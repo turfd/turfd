@@ -187,31 +187,52 @@ const PLAYER_IMPACT_PULSE_SQUASH_MAX = 0.22;
 /** Upper bound for temporary body tilt amount (radians). */
 const PLAYER_IMPACT_PULSE_ROT_MAX_RAD = 0.2;
 
-function feetCollisionAABBForDoors(pos: { x: number; y: number }): AABB {
-  const x = pos.x - PLAYER_WIDTH * 0.5;
-  const y = -(pos.y + PLAYER_HEIGHT);
-  return createAABB(x, y, PLAYER_WIDTH, PLAYER_HEIGHT);
+function writeFeetCollisionAABBForDoors(
+  out: AABB,
+  pos: { x: number; y: number },
+): void {
+  out.x = pos.x - PLAYER_WIDTH * 0.5;
+  out.y = -(pos.y + PLAYER_HEIGHT);
+  out.width = PLAYER_WIDTH;
+  out.height = PLAYER_HEIGHT;
 }
 
-function doorSamplesForWorld(
+/**
+ * Fill `scratch` in place with one `DoorPlayerSample` per local + remote player,
+ * pooling AABB allocations across ticks. Returns the `scratch` array (its
+ * `length` is set to the number of valid samples) so callers can pass it
+ * directly to {@link World.setDoorPlayerCollidersForProximity}.
+ *
+ * Avoids per-fixed-tick array + object + AABB allocations that previously
+ * showed up as `EntityManager.update` self-time inflation in profiles taken
+ * near built structures with multiple doors.
+ */
+function fillDoorSamplesForWorldInto(
+  scratch: DoorPlayerSample[],
   player: Player,
   world: World,
 ): DoorPlayerSample[] {
-  const s = player.state;
-  const out: DoorPlayerSample[] = [
-    {
-      aabb: feetCollisionAABBForDoors(s.position),
-      vx: s.velocity.x,
-    },
-  ];
-  for (const rp of world.getRemotePlayers().values()) {
-    const f = rp.getAuthorityFeet();
-    out.push({
-      aabb: feetCollisionAABBForDoors({ x: f.x, y: f.y }),
-      vx: rp.velocityX,
-    });
+  const remotes = world.getRemotePlayers();
+  const needed = 1 + remotes.size;
+  while (scratch.length < needed) {
+    scratch.push({ aabb: createAABB(0, 0, 0, 0), vx: 0 });
   }
-  return out;
+  scratch.length = needed;
+
+  const localSample = scratch[0]!;
+  const ps = player.state;
+  writeFeetCollisionAABBForDoors(localSample.aabb, ps.position);
+  localSample.vx = ps.velocity.x;
+
+  let i = 1;
+  for (const rp of remotes.values()) {
+    const sample = scratch[i]!;
+    const f = rp.getAuthorityFeet();
+    writeFeetCollisionAABBForDoors(sample.aabb, { x: f.x, y: f.y });
+    sample.vx = rp.velocityX;
+    i += 1;
+  }
+  return scratch;
 }
 import { z } from "zod";
 
@@ -1342,6 +1363,12 @@ export class EntityManager {
   private readonly deathBitsSpawned = new Set<string>();
   private readonly deathBitSolidScratch: AABB[] = [];
   private readonly upStepVisualSmoothing = new Map<string, UpStepVisualSmoothingState>();
+  /**
+   * Pooled buffer for door proximity samples — reused every fixedUpdate
+   * (60 Hz) to avoid array + object + AABB allocations that drove GC pressure
+   * in profiles with multiple doors near the player.
+   */
+  private readonly doorSampleScratch: DoorPlayerSample[] = [];
   /** Local-only additive visual feedback; rendered, never replicated. */
   private localImpactPulseSquash = 0;
   private localImpactPulseRotRad = 0;
@@ -1742,12 +1769,24 @@ export class EntityManager {
   }
 
   update(dt: number): void {
+    // Pre-physics samples: ensure doors near the player resolve to "open"
+    // during the player's collision sweep (so they don't push the player back).
     this.world.setDoorPlayerCollidersForProximity(
-      doorSamplesForWorld(this.player, this.world),
+      fillDoorSamplesForWorldInto(
+        this.doorSampleScratch,
+        this.player,
+        this.world,
+      ),
     );
     this.player.update(dt, this.input, this.world);
+    // Post-physics samples + mesh dirty refresh use the player's settled
+    // position so render-side hinge/swing state matches what the user sees.
     this.world.setDoorPlayerCollidersForProximity(
-      doorSamplesForWorld(this.player, this.world),
+      fillDoorSamplesForWorldInto(
+        this.doorSampleScratch,
+        this.player,
+        this.world,
+      ),
     );
     this.world.refreshDoorProximityMeshDirty();
   }
