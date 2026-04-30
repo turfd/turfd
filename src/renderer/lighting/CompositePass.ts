@@ -2,12 +2,14 @@
 import {
   Filter,
   GlProgram,
+  GpuProgram,
   RenderTexture,
   Sprite,
   Texture,
   UniformGroup,
   type TextureSource,
 } from "pixi.js";
+import { COMPOSITE_FILTER_WGSL } from "./compositeShader.wgsl";
 import { COMPOSITE_FRAGMENT_GLSL } from "./compositeFragmentSource";
 import { OcclusionTexture } from "./OcclusionTexture";
 import { MAX_PLACED_TORCHES } from "../../core/constants";
@@ -53,6 +55,8 @@ type CompositeUniformStruct = {
   uUvBaseOffset: { value: Float32Array; type: "vec2<f32>" };
   uUvScale: { value: Float32Array; type: "vec2<f32>" };
   uUvSubpixelOffset: { value: Float32Array; type: "vec2<f32>" };
+  /** 0 = low, 1 = balanced, 2 = high — see {@link CompositeUniforms.lightingQuality}. */
+  uLightingQuality: { value: number; type: "i32" };
 };
 
 const FILTER_VERT_SRC = `in vec2 aPosition;
@@ -130,6 +134,8 @@ export type CompositeUniforms = {
   playerBloomUvMin: [number, number];
   /** Max corner (U,V) in full albedo texture UV space. */
   playerBloomUvMax: [number, number];
+  /** 0 = low GPU cost, 1 = balanced, 2 = high (default). */
+  lightingQuality: 0 | 1 | 2;
 };
 
 export class CompositePass {
@@ -190,6 +196,7 @@ export class CompositePass {
       uUvBaseOffset: { value: new Float32Array(2), type: "vec2<f32>" },
       uUvScale: { value: new Float32Array([1, 1]), type: "vec2<f32>" },
       uUvSubpixelOffset: { value: new Float32Array(2), type: "vec2<f32>" },
+      uLightingQuality: { value: 1, type: "i32" },
     });
 
     const fragmentSrc = assertCompositeFragmentSource(COMPOSITE_FRAGMENT_GLSL);
@@ -198,14 +205,31 @@ export class CompositePass {
       fragment: fragmentSrc,
       name: "stratum-composite",
     });
+    const gpuProgram = GpuProgram.from({
+      vertex: {
+        source: COMPOSITE_FILTER_WGSL,
+        entryPoint: "mainVertex",
+      },
+      fragment: {
+        source: COMPOSITE_FILTER_WGSL,
+        entryPoint: "mainFragment",
+      },
+      name: "stratum-composite",
+    });
 
+    const occSrc = occlusion.texture.source;
+    const indSrc = indirect.texture.source;
     this._filter = new Filter({
+      gpuProgram,
       glProgram,
       resources: {
         compositeUniforms: this._uniformGroup,
-        uOcclusion: occlusion.texture.source,
-        uIndirectLight: indirect.texture.source,
+        uOcclusion: occSrc,
+        uOcclusionSampler: occSrc.style,
+        uIndirectLight: indSrc,
+        uIndirectLightSampler: indSrc.style,
         uPlayerBloomMask: playerBloomMaskSource,
+        uPlayerBloomMaskSampler: playerBloomMaskSource.style,
       },
       clipToViewport: false,
     });
@@ -415,6 +439,10 @@ export class CompositePass {
     ) {
       u.uUvSubpixelOffset[0] = p.uvSubpixelOffset[0];
       u.uUvSubpixelOffset[1] = p.uvSubpixelOffset[1];
+      dirty = true;
+    }
+    if (u.uLightingQuality !== p.lightingQuality) {
+      u.uLightingQuality = p.lightingQuality;
       dirty = true;
     }
     if (dirty) {

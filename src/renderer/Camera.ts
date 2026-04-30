@@ -31,10 +31,6 @@ export class Camera {
   private posX = 0;
   private posY = 0;
   private zoomLevel: number;
-  private rawScreenX = 0;
-  private rawScreenY = 0;
-  private snappedScreenX = 0;
-  private snappedScreenY = 0;
 
   constructor(options: Partial<CameraOptions> = {}) {
     this.options = { ...defaultCameraOptions, ...options };
@@ -63,14 +59,6 @@ export class Camera {
 
   getPosition(): { x: number; y: number } {
     return { x: this.posX, y: this.posY };
-  }
-
-  /** Fractional camera translation in internal render pixels (raw - snapped). */
-  getSubpixelOffsetPx(): { x: number; y: number } {
-    return {
-      x: this.rawScreenX - this.snappedScreenX,
-      y: this.rawScreenY - this.snappedScreenY,
-    };
   }
 
   setPositionImmediate(x: number, y: number): void {
@@ -120,24 +108,15 @@ export class Camera {
 
   private applyTransform(): void {
     if (this.screenW <= 0 || this.screenH <= 0) {
-      this.rawScreenX = 0;
-      this.rawScreenY = 0;
-      this.snappedScreenX = 0;
-      this.snappedScreenY = 0;
       return;
     }
     const z = this.getEffectiveZoom();
     this.worldRoot.scale.set(z);
-    this.rawScreenX = this.screenW * 0.5 - this.posX * z;
-    this.rawScreenY = this.screenH * 0.5 - this.posY * z;
-    this.snappedScreenX = Math.round(this.rawScreenX);
-    this.snappedScreenY = Math.round(this.rawScreenY);
+    const rawX = this.screenW * 0.5 - this.posX * z;
+    const rawY = this.screenH * 0.5 - this.posY * z;
     // Integer pixel translation + block-aligned zoom avoids 1px seams between tiles
     // (fractional screen coords + nearest-neighbor sampling shows gaps at certain camera positions).
-    this.worldRoot.position.set(
-      this.snappedScreenX,
-      this.snappedScreenY,
-    );
+    this.worldRoot.position.set(Math.round(rawX), Math.round(rawY));
   }
 
   private getEffectiveZoom(): number {

@@ -35,6 +35,9 @@ import { MenuBackground } from "./MenuBackground";
 import { runMainMenuStartupIntro } from "./mainMenuStartupIntro";
 import { WorkshopScreen } from "./WorkshopScreen";
 import { parseJsoncText } from "../../core/jsonc";
+import { formatStratumReleaseTitle } from "../../releaseDisplay";
+import { getStratumBuildInfo } from "../../versionInfo";
+import { mountReleaseChangesMarkdown } from "../releaseChangesMarkdown";
 
 export type MainMenuResult =
   | {
@@ -172,36 +175,6 @@ function injectStyles(base: string): void {
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
     }
-
-    /* -- Top bar ---------------------------------------------------------- */
-    .mm-topbar {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      padding: 0.75rem 1.25rem 0;
-      pointer-events: none;
-    }
-    .mm-discord {
-      pointer-events: auto;
-      padding: 0.55rem 1.05rem;
-      background: var(--mm-surface-deep);
-      border: 1px solid var(--mm-border);
-      color: var(--mm-ink-mid);
-      font-family: 'BoldPixels', monospace;
-      font-size: 15px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      cursor: pointer;
-      border-radius: var(--mm-radius-sm);
-      corner-shape: squircle;
-      transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
-    }
-    .mm-discord:hover {
-      background: var(--mm-surface-raised);
-      border-color: var(--mm-border-strong);
-      color: var(--mm-ink);
-    }
-    .mm-discord:active { opacity: 0.92; }
 
     /* -- Body: nav + main column (tabs use full remaining width/height) -- */
     .mm-body {
@@ -459,21 +432,13 @@ function injectStyles(base: string): void {
       color: var(--mm-ink);
       text-wrap: balance;
     }
-    .mm-home-changelog-cta {
-      align-self: flex-start;
-      margin-top: 4px;
-      padding: 10px 16px;
-      font-size: 15px;
-      letter-spacing: 0.06em;
-      min-height: 0;
-    }
     .mm-whats-new::-webkit-scrollbar { width: 4px; }
     .mm-whats-new::-webkit-scrollbar-track { background: transparent; }
     .mm-whats-new::-webkit-scrollbar-thumb {
       background: var(--mm-border-strong);
       border-radius: 4px;
     }
-    .mm-whats-new-body {
+    .mm-whats-new-summary {
       font-family: 'M5x7', monospace;
       font-size: calc(19px + var(--mm-m5-nudge));
       line-height: 1.5;
@@ -486,17 +451,164 @@ function injectStyles(base: string): void {
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
-    .mm-whats-new-body strong {
+    .mm-whats-new-readmore {
+      cursor: pointer;
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
-      color: var(--mm-ink);
-      display: block;
-      margin-top: 12px;
-      margin-bottom: 4px;
-      text-transform: uppercase;
+      font-size: 14px;
       letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--mm-ink-soft);
+      background: transparent;
+      border: none;
+      padding: 4px 0 0;
+      margin: 0;
+      align-self: flex-start;
+      text-decoration: underline;
+      text-underline-offset: 3px;
     }
-    .mm-whats-new-body strong:first-child { margin-top: 0; }
+    .mm-whats-new-readmore:hover {
+      color: var(--mm-ink);
+    }
+    .mm-modal-card.mm-release-notes-modal-card {
+      width: min(52rem, 100%);
+      max-height: min(85vh, 640px);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .mm-release-changes-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-wrap: break-word;
+      font-family: 'M5x7', monospace;
+      font-size: calc(19px + var(--mm-m5-nudge));
+      line-height: 1.55;
+      color: var(--mm-ink-mid);
+      padding-right: 6px;
+    }
+    .mm-release-changes-scroll .mm-release-changes-empty {
+      color: var(--mm-ink-soft);
+      margin: 0;
+    }
+    /* Full Markdown body (marked + dompurify) */
+    .mm-release-changes-md {
+      max-width: 100%;
+    }
+    .mm-release-changes-md > *:first-child { margin-top: 0; }
+    .mm-release-changes-md > *:last-child { margin-bottom: 0; }
+    .mm-release-changes-md h1,
+    .mm-release-changes-md h2,
+    .mm-release-changes-md h3,
+    .mm-release-changes-md h4 {
+      font-family: 'BoldPixels', monospace;
+      color: var(--mm-ink);
+      letter-spacing: 0.04em;
+      line-height: 1.2;
+      margin: 1.1em 0 0.45em;
+      text-transform: uppercase;
+    }
+    .mm-release-changes-md h1 { font-size: clamp(22px, 2.4vw, 26px); }
+    .mm-release-changes-md h2 { font-size: clamp(19px, 2.1vw, 22px); }
+    .mm-release-changes-md h3 { font-size: 17px; text-transform: none; letter-spacing: 0.03em; }
+    .mm-release-changes-md h4 { font-size: 16px; text-transform: none; }
+    .mm-release-changes-md p { margin: 0 0 0.75em; text-wrap: pretty; }
+    .mm-release-changes-md a {
+      color: #7eb8ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .mm-release-changes-md a:hover { color: #b8d9ff; }
+    .mm-release-changes-md strong {
+      font-family: 'BoldPixels', monospace;
+      font-size: 0.95em;
+      color: var(--mm-ink);
+      letter-spacing: 0.03em;
+    }
+    .mm-release-changes-md em { font-style: italic; color: var(--mm-ink-mid); }
+    .mm-release-changes-md del { opacity: 0.75; text-decoration: line-through; }
+    .mm-release-changes-md ul,
+    .mm-release-changes-md ol {
+      margin: 0 0 0.85em 1.25rem;
+      padding: 0;
+    }
+    .mm-release-changes-md li { margin-bottom: 0.35em; }
+    .mm-release-changes-md li > ul,
+    .mm-release-changes-md li > ol { margin-bottom: 0.25em; }
+    .mm-release-changes-md ul { list-style-type: disc; }
+    .mm-release-changes-md ul ul { list-style-type: circle; }
+    .mm-release-changes-md ol { list-style-type: decimal; }
+    .mm-release-changes-md blockquote {
+      margin: 0.6em 0 0.85em;
+      padding: 0.5em 0 0.5em 12px;
+      border-left: 3px solid rgba(116, 179, 255, 0.45);
+      background: rgba(0, 0, 0, 0.12);
+      border-radius: 0 6px 6px 0;
+      color: var(--mm-ink-soft);
+    }
+    .mm-release-changes-md hr {
+      border: none;
+      height: 1px;
+      margin: 1rem 0;
+      background: linear-gradient(90deg, transparent, var(--mm-border-strong), transparent);
+    }
+    .mm-release-changes-md code {
+      font-family: ui-monospace, 'Cascadia Code', 'Courier New', monospace;
+      font-size: 0.88em;
+      padding: 0.12em 0.35em;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.28);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .mm-release-changes-md pre {
+      margin: 0.65em 0 0.9em;
+      padding: 10px 12px;
+      overflow-x: auto;
+      border-radius: 8px;
+      border: 1px solid var(--mm-border);
+      background: rgba(0, 0, 0, 0.35);
+      line-height: 1.45;
+    }
+    .mm-release-changes-md pre code {
+      padding: 0;
+      border: none;
+      background: transparent;
+      font-size: 0.85em;
+    }
+    .mm-release-changes-md table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.65em 0 0.9em;
+      font-size: 0.92em;
+    }
+    .mm-release-changes-md th,
+    .mm-release-changes-md td {
+      border: 1px solid var(--mm-border);
+      padding: 6px 8px;
+      text-align: left;
+    }
+    .mm-release-changes-md th {
+      font-family: 'BoldPixels', monospace;
+      font-size: 0.82em;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: rgba(0, 0, 0, 0.2);
+      color: var(--mm-ink);
+    }
+    .mm-release-changes-md tr:nth-child(even) td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .mm-release-changes-md img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 6px;
+      margin: 0.5em 0;
+    }
+    .mm-release-changes-md input[type="checkbox"] {
+      margin-right: 6px;
+      vertical-align: middle;
+      pointer-events: none;
+    }
 
     /* ── World list (SOLO view) ────────────────────── */
     .mm-solo-panel {
@@ -3288,7 +3400,13 @@ function injectStyles(base: string): void {
     .mm-modal-feedback,
     .mm-bedrock-panel-desc,
     .mm-bedrock-world-meta,
-    .mm-whats-new-body,
+    .mm-whats-new-summary,
+    .mm-release-changes-md,
+    .mm-release-changes-md p,
+    .mm-release-changes-md li,
+    .mm-release-changes-md td,
+    .mm-release-changes-md code,
+    .mm-release-changes-md pre,
     .mm-bedrock-pack-row-label,
     .mm-pack-built-in-sub,
     .mm-pack-active-empty.mm-note,
@@ -3348,7 +3466,7 @@ function injectStyles(base: string): void {
       margin-bottom: 0;
     }
     @media (prefers-reduced-motion: reduce) {
-      .mm-nav-btn, .mm-btn, .mm-discord, .mm-world-row { transition: none; }
+      .mm-nav-btn, .mm-btn, .mm-world-row { transition: none; }
       .mm-content.mm-content-exit,
       .mm-content.mm-content-enter {
         animation: none !important;
@@ -3408,15 +3526,6 @@ function injectStyles(base: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// What's New content
-// ---------------------------------------------------------------------------
-
-const WHATS_NEW_HTML = `
-  A performance-focused patch with smoother frame pacing, reduced stutter in heavy scenes, and better overall responsiveness.
-  Ambient effects, chunk processing.
-`.trim();
-
-// ---------------------------------------------------------------------------
 // MainMenu
 // ---------------------------------------------------------------------------
 
@@ -3465,19 +3574,6 @@ export class MainMenu {
           onlinePollTimer = null;
         }
       }
-
-      // -- Top bar (Discord button) ------------------------------------------
-      const topbar = document.createElement("div");
-      topbar.className = "mm-topbar";
-      const discordBtn = document.createElement("button");
-      discordBtn.className = "mm-discord";
-      discordBtn.type = "button";
-      discordBtn.textContent = "Discord";
-      discordBtn.addEventListener("click", () => {
-        window.open("https://discord.gg/wBDA9c7DKk", "_blank", "noopener");
-      });
-      topbar.appendChild(discordBtn);
-      root.appendChild(topbar);
 
       // -- Body --------------------------------------------------------------
       const body = document.createElement("div");
@@ -3612,6 +3708,38 @@ export class MainMenu {
           el.remove();
         }
         pendingDeleteUuid = null;
+      }
+
+      function openWhatsNewChangesModal(): void {
+        closeModal();
+        const modal = document.createElement("div");
+        modal.className = "mm-modal";
+        const card = document.createElement("div");
+        card.className = "mm-modal-card mm-release-notes-modal-card";
+
+        const heading = document.createElement("h3");
+        heading.className = "mm-modal-title";
+        heading.textContent = "What's New";
+
+        const scroll = document.createElement("div");
+        scroll.className = "mm-release-changes-scroll";
+        mountReleaseChangesMarkdown(scroll, __RELEASE_CHANGES_MD__);
+
+        const actions = document.createElement("div");
+        actions.className = "mm-modal-actions";
+        const closeBtn = makeBtn("Close", "mm-btn mm-btn-subtle");
+        closeBtn.addEventListener("click", closeModal);
+        actions.appendChild(closeBtn);
+
+        card.appendChild(heading);
+        card.appendChild(scroll);
+        card.appendChild(actions);
+        modal.appendChild(card);
+        modal.addEventListener("click", (ev) => {
+          if (ev.target === modal) closeModal();
+        });
+        root.appendChild(modal);
+        closeBtn.focus();
       }
 
       function openCreateModal(): void {
@@ -3814,20 +3942,35 @@ export class MainMenu {
 
         const wnHeading = document.createElement("p");
         wnHeading.className = "mm-home-changelog-title";
-        wnHeading.textContent = "Stratum · Alpha 0.5.1";
+        wnHeading.textContent = formatStratumReleaseTitle(
+          getStratumBuildInfo().appVersion,
+        );
         wnCopy.appendChild(wnHeading);
 
-        const wnBody = document.createElement("div");
-        wnBody.className = "mm-whats-new-body";
-        wnBody.innerHTML = WHATS_NEW_HTML;
-        wnCopy.appendChild(wnBody);
+        const wnSummary = document.createElement("p");
+        wnSummary.className = "mm-whats-new-summary";
+        const sumTrim = __RELEASE_SUMMARY__.trim();
+        if (sumTrim.length > 0) {
+          wnSummary.textContent = sumTrim;
+        } else if (import.meta.env.DEV) {
+          wnSummary.textContent =
+            "Development build — release notes come from git [Summary]/[Changes] on production builds.";
+        } else {
+          wnSummary.textContent = "No release summary for this build.";
+        }
+        wnCopy.appendChild(wnSummary);
 
-        const readMoreBtn = makeBtn("Read More", "mm-btn mm-btn-subtle mm-home-changelog-cta");
-        readMoreBtn.addEventListener("click", () => {
-          // Placeholder CTA until changelog route/details view is implemented.
-          window.open("https://discord.gg/wBDA9c7DKk", "_blank", "noopener");
-        });
-        wnCopy.appendChild(readMoreBtn);
+        const changesTrim = __RELEASE_CHANGES_MD__.trim();
+        if (changesTrim.length > 0) {
+          const readMore = document.createElement("button");
+          readMore.type = "button";
+          readMore.className = "mm-whats-new-readmore";
+          readMore.textContent = "Read more";
+          readMore.addEventListener("click", () => {
+            openWhatsNewChangesModal();
+          });
+          wnCopy.appendChild(readMore);
+        }
 
         wnCard.appendChild(wnCopy);
         wnPanel.appendChild(wnCard);

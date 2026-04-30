@@ -369,15 +369,20 @@ export const FURNACE_ACCESS_RADIUS_BLOCKS = 4;
 export const STONECUTTER_ACCESS_RADIUS_BLOCKS = 4;
 
 /**
- * Upper bound for Pixi resolution and CSS sky canvas backing store. Cuts GPU/CPU cost on
- * high-DPR phones and 4K displays without changing layout (CSS still fills the viewport).
+ * Upper bound for Pixi resolution (device pixel ratio) after the 1080p-class pixel budget.
+ * Cuts cost on high-DPR phones without changing layout (CSS still fills the viewport).
  */
 export const MAX_RENDER_DEVICE_PIXEL_RATIO = 2;
 
 /**
- * Sub-pixel correction scale for camera nudge. The current renderer runs at native backbuffer
- * resolution, so one nudge unit maps to one screen pixel.
+ * Soft cap on main canvas pixel count (logicalW × logicalH × resolution²). ~1080p fill.
+ * The game renderer picks an **integer** resolution (1, 2, …) under this cap so the WebGL
+ * buffer stays a whole-number multiple of layout pixels (crisp pixel art). If the viewport
+ * exceeds this budget even at 1×, it falls back to a fractional scale below 1.
  */
+export const MAX_RENDER_BACKBUFFER_PIXELS = 1920 * 1080;
+
+/** Reserved; world/camera use integer pixel snapping at native backbuffer resolution. */
 export const PIXEL_SCALE = 1;
 
 /** Base seconds per hardness unit for breaking. */
@@ -563,7 +568,7 @@ export const FIREFLY_LIGHT_STRENGTH = 0.42;
 export const CHUNK_SIZE = 32;
 
 /** Chunks within this Chebyshev distance of the stream centre get rendered (meshes). */
-export const VIEW_DISTANCE_CHUNKS = 8;
+export const VIEW_DISTANCE_CHUNKS = 5;
 
 /**
  * Chunks within this Chebyshev distance of the stream centre stay loaded for simulation

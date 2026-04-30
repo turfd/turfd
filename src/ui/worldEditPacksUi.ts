@@ -249,9 +249,6 @@ export function createWorldPackEditorController(opts: {
     const installedRaw = opts.getInstalled();
     const all = installedRaw.filter(matchesKind);
     const idle = all.filter((c) => !activeKeys.has(refKey(cachedToRef(c))));
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H3",location:"worldEditPacksUi.ts:renderInstalledSection",message:"available packs filter result",data:{kind,totalInstalled:installedRaw.length,matchedType:all.length,idleCount:idle.length,types:installedRaw.map((m)=>m.manifest.mod_type),mods:installedRaw.map((m)=>m.modId)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (idle.length === 0) {
       const p = el("p", "mm-note");
       p.textContent =

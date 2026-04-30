@@ -8,10 +8,15 @@ import {
   TilingSprite,
   type Texture,
 } from "pixi.js";
+import {
+  createApplicationWithGraphicsPreference,
+  type PixiGraphicsBackend,
+} from "../ui/settings/pixiGraphicsInit";
 import type { EventBus } from "../core/EventBus";
 import {
   BACKGROUND_PARALLAX_X,
   DAY_LENGTH_MS,
+  MAX_RENDER_BACKBUFFER_PIXELS,
   MAX_RENDER_DEVICE_PIXEL_RATIO,
 } from "../core/constants";
 import { chunkPerfLog, chunkPerfNow } from "../debug/chunkPerf";
@@ -28,7 +33,7 @@ import { TonemapFilter } from "./lighting/TonemapFilter";
 import { WeatherRainParticles } from "./WeatherRainParticles";
 import { WeatherSnowParticles } from "./WeatherSnowParticles";
 import { SpriteCloudLayer } from "./sky/SpriteCloudLayer";
-import { getVideoPrefs } from "../ui/settings/videoPrefs";
+import { getVideoPrefs, type VideoPrefs } from "../ui/settings/videoPrefs";
 
 /**
  * Named world layers (instances are created by {@link RenderPipeline}).
@@ -62,9 +67,30 @@ function clamp01(t: number): number {
   return Math.min(1, Math.max(0, t));
 }
 
-function effectiveDevicePixelRatio(): number {
+/**
+ * Pixi `resolution`: integer 1 / 2 / … while logicalW×logicalH×res² ≤ 1080p-class budget, so the
+ * canvas backing store stays a **whole-number multiple** of layout pixels (sharp pixel art).
+ * Capped by device DPR and {@link MAX_RENDER_DEVICE_PIXEL_RATIO}. If the viewport exceeds the
+ * budget even at 1×, returns sqrt(budget / area) below 1 (last resort; slightly soft).
+ */
+function effectiveRenderResolution(
+  logicalWidth: number,
+  logicalHeight: number,
+): number {
   const dpr = window.devicePixelRatio >= 1 ? window.devicePixelRatio : 1;
-  return Math.min(dpr, MAX_RENDER_DEVICE_PIXEL_RATIO);
+  const hwCap = Math.min(dpr, MAX_RENDER_DEVICE_PIXEL_RATIO);
+  const maxInteger = Math.max(1, Math.floor(hwCap + 1e-6));
+  const lw = Math.max(1, logicalWidth);
+  const lh = Math.max(1, logicalHeight);
+  const area = lw * lh;
+  const budget = MAX_RENDER_BACKBUFFER_PIXELS;
+
+  for (let r = maxInteger; r >= 1; r--) {
+    if (area * r * r <= budget) {
+      return r;
+    }
+  }
+  return Math.sqrt(budget / area);
 }
 
 /** 0 outside [edge0, edge1], smooth Hermite inside. */
@@ -97,15 +123,15 @@ type SkyStarPixel = {
 /**
  * Pixi application, camera, and ordered world layers. Drives `app.render()` from the game loop.
  *
- * Sky is drawn on a separate 2D canvas inserted **before** the WebGL canvas in the mount so it
+ * Sky is drawn on a separate 2D canvas inserted **before** the Pixi (WebGL/WebGPU) canvas in the mount so it
  * sits underneath Pixi while tiles/entities/lighting still composite in the usual Pixi order.
  * This avoids GPU texture-upload flicker from putting the gradient in the Pixi scene graph.
  */
 export class RenderPipeline implements RenderPipelineLayers {
   private readonly mount: HTMLElement;
   private app: Application | null = null;
+  private _graphicsBackend: PixiGraphicsBackend | null = null;
   private readonly camera: Camera;
-  private readonly subPixelNudge: Container;
   private _lastSkyLighting: WorldLightingParams | null = null;
   /** Last `worldTimeMs` passed to {@link updateSky}; drives sky CSS invalidation. */
   private _skyClockMs = 0;
@@ -203,8 +229,6 @@ export class RenderPipeline implements RenderPipelineLayers {
   constructor(options: RenderPipelineOptions) {
     this.mount = options.mount;
     this.camera = new Camera();
-    this.subPixelNudge = new Container({ label: "subPixelNudge" });
-    this.subPixelNudge.addChild(this.camera.worldRoot);
 
     this.layerSky = new Container({ label: "layerSky" });
     this.layerTilesBack = new Container({ label: "layerTilesBack" });
@@ -224,7 +248,6 @@ export class RenderPipeline implements RenderPipelineLayers {
     // pointer→world translation happens manually via {@link Input.updateMouseWorldPos} —
     // so opting every world-tree container out of event propagation cuts a large chunk
     // of per-move CPU (visible as `_onPointerMove` / `Hit test` in profile captures).
-    this.subPixelNudge.eventMode = "none";
     this.camera.worldRoot.eventMode = "none";
     this.layerSky.eventMode = "none";
     this.layerTilesBack.eventMode = "none";
@@ -281,7 +304,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     const bgRenderer = new BackgroundLayerRenderer(this.app, this.camera);
     bgRenderer.setWorldAndAtlas(world, blockAtlas);
     this._backgroundLayer = bgRenderer;
-    const worldRootIndex = this.app.stage.getChildIndex(this.subPixelNudge);
+    const worldRootIndex = this.app.stage.getChildIndex(this.camera.worldRoot);
     this.app.stage.addChildAt(bgRenderer.displayRoot, worldRootIndex);
 
     const bgTone = new TonemapFilter();
@@ -335,26 +358,48 @@ export class RenderPipeline implements RenderPipelineLayers {
     return this.app.canvas;
   }
 
+  /**
+   * Pixi WebGL context when using the WebGL renderer; `null` for Canvas2D / WebGPU builds.
+   * Used by the F3 GPU debug HUD (draw-call hooks + `WEBGL_debug_renderer_info`).
+   */
+  getWebGLContext(): WebGLRenderingContext | WebGL2RenderingContext | null {
+    const app = this.app;
+    if (app === null) {
+      return null;
+    }
+    const gl = (app.renderer as unknown as { gl?: WebGLRenderingContext | WebGL2RenderingContext | null })
+      .gl;
+    return gl ?? null;
+  }
+
+  /** `"webgpu"` or `"webgl"` after {@link init}; `null` before init. */
+  getGraphicsBackend(): PixiGraphicsBackend | null {
+    return this._graphicsBackend;
+  }
+
   async init(): Promise<void> {
     if (this.app) {
       return;
     }
 
-    const application = new Application();
-    await application.init({
+    const mountRect = this.mount.getBoundingClientRect();
+    const initW = Math.max(1, Math.round(mountRect.width));
+    const initH = Math.max(1, Math.round(mountRect.height));
+    const { app: application, backend } = await createApplicationWithGraphicsPreference({
       autoStart: false,
       resizeTo: this.mount,
       antialias: false,
-      preference: "webgl",
       powerPreference: "high-performance",
       backgroundAlpha: 0,
-      resolution: effectiveDevicePixelRatio(),
+      resolution: effectiveRenderResolution(initW, initH),
       autoDensity: true,
     });
 
     this.app = application;
+    this._graphicsBackend = backend;
 
     const skyCanvas = document.createElement("canvas");
+    skyCanvas.dataset.stratumCanvas = "game-sky-2d";
     skyCanvas.style.position = "absolute";
     skyCanvas.style.left = "0";
     skyCanvas.style.top = "0";
@@ -366,6 +411,8 @@ export class RenderPipeline implements RenderPipelineLayers {
     this.mount.appendChild(skyCanvas);
 
     const canvas = application.canvas;
+    canvas.dataset.stratumCanvas =
+      backend === "webgpu" ? "game-pixi-webgpu" : "game-pixi-webgl";
     canvas.style.position = "absolute";
     canvas.style.left = "0";
     canvas.style.top = "0";
@@ -408,7 +455,7 @@ export class RenderPipeline implements RenderPipelineLayers {
 
     // Entire pixi stage opts out of event propagation — see constructor note.
     application.stage.eventMode = "none";
-    application.stage.addChild(this.subPixelNudge);
+    application.stage.addChild(this.camera.worldRoot);
 
     const cloud = new SpriteCloudLayer();
     void cloud.init().then(() => {
@@ -600,14 +647,16 @@ export class RenderPipeline implements RenderPipelineLayers {
     }
 
     const snowParticleTexture =
-      (await loadNearestTexture("weather/snow.png")) ?? null;
+      (await loadNearestTexture("weather/snow.png")) ?? rainTexture ?? null;
     if (snowParticleTexture !== null) {
       this._snowParticles = new WeatherSnowParticles(
         this.layerParticles,
         snowParticleTexture,
       );
     } else {
-      console.warn("[RenderPipeline] Snow particle texture failed to load.");
+      console.warn(
+        "[RenderPipeline] Snow particle texture failed to load (no weather/snow.png and no rain texture fallback).",
+      );
     }
   }
 
@@ -937,10 +986,8 @@ export class RenderPipeline implements RenderPipelineLayers {
       return;
     }
 
-    this.syncSizeFromRenderer();
-    // Keep the world root fully pixel-snapped during camera pans so packed-tile
-    // mesh edges cannot drift onto fractional screen pixels and reveal seams.
-    this.subPixelNudge.position.set(0, 0);
+    const videoPrefs = getVideoPrefs();
+    this.syncSizeFromRenderer(videoPrefs);
     this._spriteCloud?.updateTime(performance.now(), this._skyClockMs);
     this._backgroundLayer?.updateParallax(
       this.camera.getPosition().x,
@@ -949,8 +996,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     this.maybePaintSkyCss();
 
     if (this._bgToneFilter !== null) {
-      const vp = getVideoPrefs();
-      const tm = vp.tonemapper;
+      const tm = videoPrefs.tonemapper;
       this._bgToneFilter.setTonemapper(
         tm === "aces" ? 1 : tm === "agx" ? 2 : tm === "reinhard" ? 3 : 0,
       );
@@ -997,9 +1043,10 @@ export class RenderPipeline implements RenderPipelineLayers {
       const bloomModulo = bloomCameraStill ? 3 : 2;
       const bloomPlayerChanged = this.shouldRefreshBloomMaskForPlayerMotion();
       if (
-        this._skyLightningAlpha > 0.001 ||
-        bloomPlayerChanged ||
-        this._bloomMaskFrameCounter % bloomModulo === 0
+        videoPrefs.bloomEnabled &&
+        (this._skyLightningAlpha > 0.001 ||
+          bloomPlayerChanged ||
+          this._bloomMaskFrameCounter % bloomModulo === 0)
       ) {
         withPerfSpan("RenderPipeline.renderBloomMask", () => {
           this.renderBloomMask();
@@ -1010,7 +1057,9 @@ export class RenderPipeline implements RenderPipelineLayers {
       try {
         this.camera.worldRoot.visible = false;
         withPerfSpan("RenderPipeline.compositeRender", () => {
-          this.renderAppWithNullChildRecovery();
+          withPerfSpan("RenderPipeline.compositeRender.appRender", () => {
+            this.renderAppWithNullChildRecovery();
+          });
         });
       } finally {
         this.camera.worldRoot.visible = true;
@@ -1190,14 +1239,18 @@ export class RenderPipeline implements RenderPipelineLayers {
     }
   }
 
-  private syncSizeFromRenderer(): void {
+  private syncSizeFromRenderer(videoPrefs?: VideoPrefs): void {
     if (!this.app) {
       return;
     }
     const w = Math.max(1, Math.round(this.app.renderer.width));
     const h = Math.max(1, Math.round(this.app.renderer.height));
+    const desiredRes = effectiveRenderResolution(w, h);
+    if (Math.abs(this.app.renderer.resolution - desiredRes) > 0.0005) {
+      this.app.renderer.resize(w, h, desiredRes);
+    }
     const res = this.app.renderer.resolution;
-    const videoRenderScale = getVideoPrefs().renderScale;
+    const videoRenderScale = (videoPrefs ?? getVideoPrefs()).renderScale;
     const rtResolution = res * videoRenderScale;
     const videoScaleChanged = videoRenderScale !== this._lastVideoRenderScale;
     if (videoScaleChanged) {
@@ -1260,7 +1313,7 @@ export class RenderPipeline implements RenderPipelineLayers {
     if (this.app === null) {
       return;
     }
-    const root = this.subPixelNudge;
+    const root = this.camera.worldRoot;
     const baseX = root.x;
     const baseY = root.y;
     root.position.set(baseX + this._overscanPadPx, baseY + this._overscanPadPx);

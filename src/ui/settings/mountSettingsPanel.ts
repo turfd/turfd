@@ -21,12 +21,10 @@ import type { IndexedDBStore } from "../../persistence/IndexedDBStore";
 import { openGlobalTexturePacksModal } from "../globalTexturePacksUi";
 import { injectSettingsSharedStyles } from "./settingsSharedStyles";
 import { getSkipIntro, setSkipIntro } from "./uiPrefs";
-import { SIMULATION_DISTANCE_CHUNKS } from "../../core/constants";
 import {
   getVideoPrefs,
   setVideoPrefs,
   VIDEO_RENDER_SCALE_MIN,
-  VIDEO_VIEW_DISTANCE_MIN,
   type Tonemapper,
 } from "./videoPrefs";
 
@@ -487,33 +485,6 @@ export async function mountSettingsPanel(
     panelVideo.appendChild(row);
   }
 
-  // Chunk mesh sync radius (smaller = fewer chunk meshes).
-  {
-    const row = document.createElement("div");
-    row.className = "st-settings-row";
-    const lbl = document.createElement("label");
-    lbl.textContent = "View distance (chunks)";
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.min = String(VIDEO_VIEW_DISTANCE_MIN);
-    slider.max = String(SIMULATION_DISTANCE_CHUNKS);
-    slider.step = "1";
-    const vd0 = getVideoPrefs().viewDistanceChunks;
-    slider.value = String(vd0);
-    const val = document.createElement("span");
-    val.className = "st-settings-val";
-    val.textContent = String(vd0);
-    slider.addEventListener("input", () => {
-      const n = Number(slider.value);
-      val.textContent = String(n);
-      setVideoPrefs({ viewDistanceChunks: n });
-    });
-    row.appendChild(lbl);
-    row.appendChild(slider);
-    row.appendChild(val);
-    panelVideo.appendChild(row);
-  }
-
   {
     const row = document.createElement("div");
     row.className = "st-settings-toggle-row";
@@ -539,7 +510,7 @@ export async function mountSettingsPanel(
   const debugHint = document.createElement("p");
   debugHint.className = "st-settings-hint";
   debugHint.textContent =
-    "Capture a 30-second performance report with bottom-up timings for bug reports. For comparable numbers to shipped builds, run `npm run perf:preview` and capture from that session; JSON includes `meta.productionBundle` and a GPU-track hint. Compare spans such as RenderPipeline.renderWorldToAlbedo, RenderPipeline.compositeRender, LightingComposer.update.*, ChunkRenderer.syncChunks, and ChunkRenderer.updateDirtyChunk.";
+    "Capture a 30-second performance report with bottom-up timings for bug reports. For comparable numbers to shipped builds, run `npm run perf:preview` and capture from that session; JSON includes `meta.productionBundle` and a GPU-track hint. Compare spans such as RenderPipeline.renderWorldToAlbedo, RenderPipeline.compositeRender.appRender, LightingComposer.update.occlusion.* / indirect.* / torchSelection / compositeUniforms, ChunkRenderer.syncChunks, and ChunkRenderer.updateDirtyChunk.";
   panelDebug.appendChild(debugHint);
   const startProfilerBtn = makeBtn("Start Profiler", "mm-btn", "mm-btn-secondary");
   const profilerStatus = document.createElement("div");

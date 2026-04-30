@@ -86,6 +86,7 @@ export class LightingComposer {
     uvBaseOffset: [0, 0],
     uvScale: [1, 1],
     uvSubpixelOffset: [0, 0],
+    lightingQuality: 1,
   };
 
   private _playerBloomUvBoundsActive = false;
@@ -190,13 +191,17 @@ export class LightingComposer {
     const chunkWorldSize = BLOCK_SIZE * CHUNK_SIZE;
     const centerChunkX = Math.floor(pos.x / chunkWorldSize);
     const centerChunkY = Math.floor(-pos.y / chunkWorldSize);
-    withPerfSpan("LightingComposer.update.occlusionIndirect", () => {
-      if (occ.rebuild(centerChunkX, centerChunkY, this._world)) {
-        occ.upload();
-      }
-      if (indirect.rebuild(centerChunkX, centerChunkY, this._world)) {
-        indirect.upload();
-      }
+    withPerfSpan("LightingComposer.update.occlusion.rebuild", () => {
+      occ.rebuild(centerChunkX, centerChunkY, this._world);
+    });
+    withPerfSpan("LightingComposer.update.occlusion.upload", () => {
+      occ.upload();
+    });
+    withPerfSpan("LightingComposer.update.indirect.rebuild", () => {
+      indirect.rebuild(centerChunkX, centerChunkY, this._world);
+    });
+    withPerfSpan("LightingComposer.update.indirect.upload", () => {
+      indirect.upload();
     });
 
     const tl = cam.screenToWorld(0, 0);
@@ -216,7 +221,7 @@ export class LightingComposer {
     const camCx = centerChunkX;
     const camCy = centerChunkY;
 
-    withPerfSpan("LightingComposer.update.uniforms", () => {
+    withPerfSpan("LightingComposer.update.regionCache", () => {
       const keepKeys = new Set<string>();
       for (let dy = -halfRegion; dy <= halfRegion; dy++) {
         for (let dx = -halfRegion; dx <= halfRegion; dx++) {
@@ -235,7 +240,9 @@ export class LightingComposer {
           this._dirty.delete(k);
         }
       }
+    });
 
+    withPerfSpan("LightingComposer.update.torchSelection", () => {
       this._torchHeapReset();
       if (dynamicEmitters !== undefined) {
         for (const e of dynamicEmitters) {
@@ -264,7 +271,9 @@ export class LightingComposer {
           }
         }
       }
+    });
 
+    withPerfSpan("LightingComposer.update.compositeUniforms", () => {
       const u = this._compositeU;
       u.ambient = lighting.ambient;
       u.ambientTint[0] = lighting.ambientTint[0];
@@ -297,8 +306,7 @@ export class LightingComposer {
               ? 3
               : 0;
       u.bloomEnabled = vp.bloomEnabled;
-      // Sub-pixel correction is now applied via RenderPipeline's `subPixelNudge` container.
-      // Keep composite UV sampling stable to avoid double-applying the same offset.
+      u.lightingQuality = 1;
       u.uvSubpixelOffset[0] = 0;
       u.uvSubpixelOffset[1] = 0;
       u.playerBloomUvBoundsActive = this._playerBloomUvBoundsActive;

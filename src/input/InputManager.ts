@@ -129,6 +129,9 @@ export class InputManager {
     }
     this.downCodes.add(e.code);
     this.edgeForCode(e.code);
+    if (e.code === "F3" && !editableFocus) {
+      e.preventDefault();
+    }
   };
 
   private readonly onKeyUp = (e: KeyboardEvent): void => {
@@ -285,7 +288,7 @@ export class InputManager {
   }
 
   isDown(action: InputAction): boolean {
-    if (this.chatOpen && action !== "pause") {
+    if (this.chatOpen && action !== "pause" && action !== "toggleGpuDebug") {
       return false;
     }
     if (
@@ -293,7 +296,8 @@ export class InputManager {
       action !== "inventory" &&
       action !== "pause" &&
       action !== "chat" &&
-      action !== "dropItem"
+      action !== "dropItem" &&
+      action !== "toggleGpuDebug"
     ) {
       return false;
     }
@@ -302,6 +306,9 @@ export class InputManager {
       (action === "inventory" || action === "chat")
     ) {
       return false;
+    }
+    if (action === "toggleGpuDebug") {
+      return this.downCodes.has("F3");
     }
     if (action === "place") {
       return this.mouseDown.has(MOUSE_PLACE);
@@ -325,7 +332,7 @@ export class InputManager {
   }
 
   isJustPressed(action: InputAction): boolean {
-    if (this.chatOpen && action !== "pause") {
+    if (this.chatOpen && action !== "pause" && action !== "toggleGpuDebug") {
       return false;
     }
     if (
@@ -333,9 +340,13 @@ export class InputManager {
       action !== "inventory" &&
       action !== "pause" &&
       action !== "chat" &&
-      action !== "dropItem"
+      action !== "dropItem" &&
+      action !== "toggleGpuDebug"
     ) {
       return false;
+    }
+    if (action === "toggleGpuDebug") {
+      return this.justPressed.has("toggleGpuDebug");
     }
     if (
       this.uiTypingSuppressesOverlayHotkeys() &&
@@ -431,6 +442,9 @@ export class InputManager {
       if (keys.includes(code)) {
         this.justPressed.add(action as InputAction);
       }
+    }
+    if (code === "F3") {
+      this.justPressed.add("toggleGpuDebug");
     }
   }
 }

@@ -1,9 +1,6 @@
 /** localStorage-backed video/graphics preferences with synchronous in-memory cache. */
 
-import {
-  SIMULATION_DISTANCE_CHUNKS,
-  VIEW_DISTANCE_CHUNKS,
-} from "../../core/constants";
+import { VIEW_DISTANCE_CHUNKS } from "../../core/constants";
 
 export type Tonemapper = "none" | "aces" | "agx" | "reinhard";
 
@@ -11,8 +8,6 @@ export type VideoPrefs = {
   tonemapper: Tonemapper;
   /** 1 = full internal albedo RT resolution; lower = fewer RT pixels (GPU fill). */
   renderScale: number;
-  /** Chebyshev chunk radius for terrain mesh sync (clamped). */
-  viewDistanceChunks: number;
   /** Torch HDR bloom in the lighting composite pass. */
   bloomEnabled: boolean;
 };
@@ -21,7 +16,6 @@ const PREF_KEY = "stratum_video_prefs";
 
 export const VIDEO_RENDER_SCALE_MIN = 0.5;
 export const VIDEO_RENDER_SCALE_MAX = 1;
-export const VIDEO_VIEW_DISTANCE_MIN = 4;
 
 function normalizeStoredTonemapper(tm: Tonemapper): Tonemapper {
   return tm === "aces" || tm === "agx" ? "reinhard" : tm;
@@ -37,21 +31,9 @@ function clampRenderScale(n: number): number {
   );
 }
 
-function clampViewDistanceChunks(n: number): number {
-  if (!Number.isFinite(n)) {
-    return VIEW_DISTANCE_CHUNKS;
-  }
-  const floored = Math.floor(n);
-  return Math.min(
-    SIMULATION_DISTANCE_CHUNKS,
-    Math.max(VIDEO_VIEW_DISTANCE_MIN, floored),
-  );
-}
-
 const DEFAULTS: VideoPrefs = {
   tonemapper: "reinhard",
   renderScale: 1,
-  viewDistanceChunks: VIEW_DISTANCE_CHUNKS,
   bloomEnabled: true,
 };
 
@@ -76,10 +58,6 @@ function mergeVideoPrefsFromStorage(
     typeof parsed.renderScale === "number"
       ? clampRenderScale(parsed.renderScale)
       : DEFAULTS.renderScale;
-  const vd =
-    typeof parsed.viewDistanceChunks === "number"
-      ? clampViewDistanceChunks(parsed.viewDistanceChunks)
-      : DEFAULTS.viewDistanceChunks;
   const bloom =
     typeof parsed.bloomEnabled === "boolean"
       ? parsed.bloomEnabled
@@ -87,31 +65,12 @@ function mergeVideoPrefsFromStorage(
   return {
     tonemapper: normalizeStoredTonemapper(rawTm),
     renderScale: rs,
-    viewDistanceChunks: vd,
     bloomEnabled: bloom,
   };
 }
 
 export function getVideoPrefs(): VideoPrefs {
   if (_cache !== null) {
-    const merged: VideoPrefs = { ...DEFAULTS, ..._cache };
-    const tm = normalizeStoredTonemapper(merged.tonemapper);
-    const rs = clampRenderScale(merged.renderScale);
-    const vd = clampViewDistanceChunks(merged.viewDistanceChunks);
-    const bloom = merged.bloomEnabled;
-    if (
-      tm !== merged.tonemapper ||
-      rs !== merged.renderScale ||
-      vd !== merged.viewDistanceChunks ||
-      bloom !== merged.bloomEnabled
-    ) {
-      _cache = { tonemapper: tm, renderScale: rs, viewDistanceChunks: vd, bloomEnabled: bloom };
-      try {
-        localStorage.setItem(PREF_KEY, JSON.stringify(_cache));
-      } catch {
-        // ignore
-      }
-    }
     return _cache;
   }
   try {
@@ -141,10 +100,6 @@ export function setVideoPrefs(prefs: Partial<VideoPrefs>): void {
       prefs.renderScale !== undefined
         ? clampRenderScale(prefs.renderScale)
         : current.renderScale,
-    viewDistanceChunks:
-      prefs.viewDistanceChunks !== undefined
-        ? clampViewDistanceChunks(prefs.viewDistanceChunks)
-        : current.viewDistanceChunks,
     bloomEnabled:
       prefs.bloomEnabled !== undefined ? prefs.bloomEnabled : current.bloomEnabled,
   };
@@ -156,7 +111,7 @@ export function setVideoPrefs(prefs: Partial<VideoPrefs>): void {
   }
 }
 
-/** Chunk mesh sync radius (Chebyshev); respects video prefs + clamps. */
+/** Chebyshev chunk radius for terrain mesh sync (fixed; see {@link VIEW_DISTANCE_CHUNKS}). */
 export function getEffectiveViewDistanceChunks(): number {
-  return clampViewDistanceChunks(getVideoPrefs().viewDistanceChunks);
+  return VIEW_DISTANCE_CHUNKS;
 }

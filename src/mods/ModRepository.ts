@@ -136,9 +136,6 @@ export class ModRepository implements IModRepository {
 
   async setDevFolder(handle: FileSystemDirectoryHandle | null): Promise<void> {
     this.devDir = handle;
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H1",location:"ModRepository.ts:setDevFolder",message:"setDevFolder called",data:{hasHandle:handle!==null,handleName:handle?.name??null},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     await this.syncDevFolderPacks();
     try {
       await this.store.saveDevPackDirectoryHandle(handle);
@@ -176,9 +173,6 @@ export class ModRepository implements IModRepository {
       const base = f.rel.split("/").pop() ?? "";
       return base === "manifest.json" || base === "Manifest.json";
     });
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H2",location:"ModRepository.ts:importDevFolderFiles:start",message:"importDevFolderFiles start",data:{inputCount:files.length,normalizedCount:normalized.length,manifestCount:manifests.length,manifestPaths:manifests.map((m)=>m.rel)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     for (const m of manifests) {
       const parts = m.rel.split("/");
       const packRoot = parts.slice(0, -1).join("/");
@@ -201,17 +195,11 @@ export class ModRepository implements IModRepository {
       const key = workshopModCacheKey(cached.modId, cached.version);
       await this.store.putModCache(key, cached);
       this.cacheByKey.set(key, cached);
-      // #region agent log
-      fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H2",location:"ModRepository.ts:importDevFolderFiles:cached",message:"cached pack from folder files",data:{packRoot:packRoot||".",modId:cached.modId,type:cached.manifest.mod_type,fileCount:Object.keys(packFiles).length},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
     }
   }
 
   async syncDevFolderPacks(): Promise<void> {
     const dir = this.devDir;
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H1",location:"ModRepository.ts:syncDevFolderPacks:start",message:"syncDevFolderPacks start",data:{hasDir:dir!==null,dirName:dir?.name??null,currentCacheSize:this.cacheByKey.size},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (dir == null) {
       return;
     }
@@ -246,9 +234,6 @@ export class ModRepository implements IModRepository {
         await this.store.putModCache(key, cached);
         this.cacheByKey.set(key, cached);
         found.push({ filename: ".", cached, cacheKey: key });
-        // #region agent log
-        fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H2",location:"ModRepository.ts:syncDevFolderPacks:root",message:"detected root pack",data:{modId:cached.modId,version:cached.version,manifestType:cached.manifest.mod_type,fileCount:Object.keys(rootFiles).length},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
       }
     } catch {
       // Ignore root parse errors here; child entries may still contain valid packs.
@@ -284,14 +269,8 @@ export class ModRepository implements IModRepository {
         await this.store.putModCache(key, cached);
         this.cacheByKey.set(key, cached);
         found.push({ filename: name, cached, cacheKey: key });
-        // #region agent log
-        fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H2",location:"ModRepository.ts:syncDevFolderPacks:childDir",message:"detected child folder pack",data:{folder:name,modId:cached.modId,version:cached.version,manifestType:cached.manifest.mod_type,fileCount:Object.keys(files).length},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
       }
     }
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H4",location:"ModRepository.ts:syncDevFolderPacks:end",message:"syncDevFolderPacks complete",data:{foundCount:found.length,cacheSize:this.cacheByKey.size,found:found.map((f)=>({filename:f.filename,modId:f.cached.modId,type:f.cached.manifest.mod_type}))},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
   }
 
   private parseDevZipToCached(
@@ -626,9 +605,6 @@ export class ModRepository implements IModRepository {
 
   getInstalled(): readonly CachedMod[] {
     const installed = [...this.cacheByKey.values()];
-    // #region agent log
-    fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run1",hypothesisId:"H4",location:"ModRepository.ts:getInstalled",message:"getInstalled called",data:{count:installed.length,mods:installed.map((m)=>({modId:m.modId,type:m.manifest.mod_type,version:m.version}))},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     return installed;
   }
 

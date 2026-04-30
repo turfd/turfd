@@ -55,6 +55,7 @@ import {
 } from "./menuSkyPaint";
 import { SpriteCloudLayer } from "../../renderer/sky/SpriteCloudLayer";
 import { TonemapFilter } from "../../renderer/lighting/TonemapFilter";
+import { createApplicationWithGraphicsPreference } from "../settings/pixiGraphicsInit";
 import { getVideoPrefs } from "../settings/videoPrefs";
 
 // ---------------------------------------------------------------------------
@@ -420,6 +421,9 @@ export class MenuBackground {
     if (existingBackdrop !== null && existingCanvas !== null) {
       backdropRoot = existingBackdrop;
       skyCanvas = existingCanvas;
+      if (!skyCanvas.dataset.stratumCanvas) {
+        skyCanvas.dataset.stratumCanvas = "menu-sky-2d";
+      }
     } else {
       backdropRoot = document.createElement("div");
       backdropRoot.className = "stratum-menu-backdrop";
@@ -433,6 +437,7 @@ export class MenuBackground {
       }
 
       skyCanvas = document.createElement("canvas");
+      skyCanvas.dataset.stratumCanvas = "menu-sky-2d";
       skyCanvas.style.cssText =
         "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
       backdropRoot.appendChild(skyCanvas);
@@ -444,16 +449,17 @@ export class MenuBackground {
     paintMenuSkyToFit(skyCanvas, mount);
 
     // -- PixiJS init --------------------------------------------------------
-    const app = new Application();
-    await app.init({
-      autoStart: false,
-      resizeTo: mount,
-      antialias: false,
-      preference: "webgl",
-      backgroundAlpha: 0,  // transparent — sky canvas shows through air pixels
-      resolution: window.devicePixelRatio >= 1 ? window.devicePixelRatio : 1,
-      autoDensity: true,
-    });
+    const { app, backend } = await createApplicationWithGraphicsPreference(
+      {
+        autoStart: false,
+        resizeTo: mount,
+        antialias: false,
+        backgroundAlpha: 0,
+        resolution: window.devicePixelRatio >= 1 ? window.devicePixelRatio : 1,
+        autoDensity: true,
+      },
+      { forceWebGl: true },
+    );
 
     if (this.destroyed) {
       this.tearDownPartialInit(app);
@@ -461,6 +467,8 @@ export class MenuBackground {
     }
 
     const pixiCanvas = app.canvas;
+    pixiCanvas.dataset.stratumCanvas =
+      backend === "webgpu" ? "menu-pixi-webgpu" : "menu-pixi-webgl";
     pixiCanvas.style.cssText =
       "position:absolute;inset:0;width:100%;height:100%;" +
       "image-rendering:pixelated;z-index:1;pointer-events:none;";
@@ -872,6 +880,7 @@ export class MenuBackground {
         occlusionSize:   OcclusionTexture.REGION_BLOCKS,
         tonemapper:      tm,
         bloomEnabled:    getVideoPrefs().bloomEnabled,
+        lightingQuality: 1,
         bloomMaskActive: false,
         playerBloomUvBoundsActive: false,
         playerBloomUvMin: [0, 0],

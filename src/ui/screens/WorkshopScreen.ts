@@ -2192,23 +2192,14 @@ export class WorkshopScreen {
         this.devFolderError = null;
         this.renderTemplates();
       }
-      // #region agent log
-      fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:folderFallbackInput:change",message:"folder fallback changed",data:{selectedCount:selectedFiles.length},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       folderFallbackInput.value = "";
       if (selectedFiles.length === 0) {
-        // #region agent log
-        fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run4",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:emptyAfterSnapshot",message:"no files in snapshot",data:{},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         return;
       }
       void (async () => {
         try {
           err.textContent = "";
           const out: Array<{ name: string; relativePath: string; bytes: Uint8Array }> = [];
-          // #region agent log
-          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run3",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:read:start",message:"starting fallback file reads",data:{selectedCount:selectedFiles.length},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           for (let i = 0; i < selectedFiles.length; i++) {
             const f = selectedFiles[i]!;
             const rel =
@@ -2219,27 +2210,15 @@ export class WorkshopScreen {
               bytes: new Uint8Array(await f.arrayBuffer()),
             });
             if (i === 0 || i === selectedFiles.length - 1 || (i + 1) % 50 === 0) {
-              // #region agent log
-              fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run3",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:read:progress",message:"fallback read progress",data:{readCount:i+1,total:selectedFiles.length,lastPath:rel},timestamp:Date.now()})}).catch(()=>{});
-              // #endregion
             }
           }
-          // #region agent log
-          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run3",hypothesisId:"H6",location:"WorkshopScreen.ts:folderFallbackInput:read:done",message:"finished fallback file reads",data:{outCount:out.length},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           this.deps.bus.emit({
             type: "workshop:dev-folder-files-picked",
             files: out,
           } satisfies GameEvent);
-          // #region agent log
-          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:emit:dev-folder-files-picked",message:"emitted folder files event",data:{fileCount:out.length,sample:out.slice(0,3).map((f)=>f.relativePath)},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           this.showWorkshopActionFeedback("Folder selected. Loading dev packs…");
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          // #region agent log
-          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:folderFallbackInput:error",message:"folder fallback read failed",data:{error:msg},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           err.textContent = msg;
         }
       })();
@@ -2248,9 +2227,6 @@ export class WorkshopScreen {
       void (async () => {
         try {
           err.textContent = "";
-          // #region agent log
-          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:pick:click",message:"choose folder clicked",data:{hasShowDirectoryPicker:typeof (window as any).showDirectoryPicker==="function"},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           if (typeof (window as any).showDirectoryPicker !== "function") {
             folderFallbackInput.click();
             return;
@@ -2265,15 +2241,9 @@ export class WorkshopScreen {
             type: "workshop:dev-folder-picked",
             handle: h,
           } satisfies GameEvent);
-          // #region agent log
-          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:emit:dev-folder-picked",message:"emitted folder handle event",data:{handleName:h?.name??null},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           this.showWorkshopActionFeedback("Folder selected. Reloading dev packs…");
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          // #region agent log
-          fetch("http://127.0.0.1:7275/ingest/727e9e1b-a01c-4093-b975-7544742cff29",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"a009aa"},body:JSON.stringify({sessionId:"a009aa",runId:"run2",hypothesisId:"H5",location:"WorkshopScreen.ts:pick:error",message:"choose folder flow failed",data:{error:msg},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           err.textContent = msg;
         }
       })();

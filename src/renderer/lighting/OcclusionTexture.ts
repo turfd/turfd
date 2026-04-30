@@ -1,4 +1,9 @@
-/** CPU R8 occlusion grid (solid vs air) for a fixed chunk region, uploaded for ray-march sampling. */
+/**
+ * CPU R8 occlusion grid (solid vs air) for a fixed chunk region, uploaded for ray-march sampling.
+ * Rebuilds incrementally per dirty chunk; full region when the centre moves or dirty coverage
+ * spans the whole window. If profiling shows rebuild spikes (mass edits), consider time-slicing
+ * or coalescing `markDirty` bursts — keep correctness with {@link IndirectLightTexture} cardinal widening.
+ */
 import { BufferImageSource, Texture } from "pixi.js";
 import { CHUNK_SIZE } from "../../core/constants";
 import { getBlock } from "../../world/chunk/Chunk";

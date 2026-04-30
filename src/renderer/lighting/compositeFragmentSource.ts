@@ -51,6 +51,8 @@ uniform vec2 uPlayerBloomUvMax;
 uniform vec2 uUvBaseOffset;
 uniform vec2 uUvScale;
 uniform vec2 uUvSubpixelOffset;
+/** 0 = low, 1 = balanced, 2 = high — fewer indirect sky samples and cheaper torch shadows when lower. */
+uniform int uLightingQuality;
 
 const float SHADOW_FLOOR_DAY = 0.20;
 const float SHADOW_FLOOR_NIGHT = 0.34;
@@ -151,6 +153,17 @@ float sampleIndirectSky(vec2 worldPosBlocks) {
 }
 
 float softSolidSkyExposure(vec2 worldPosBlocks) {
+  if (uLightingQuality <= 0) {
+    return sampleIndirectSky(worldPosBlocks);
+  }
+  if (uLightingQuality == 1) {
+    float sUp = sampleIndirectSky(worldPosBlocks + vec2(0.0, 1.0));
+    float s0 = sampleIndirectSky(worldPosBlocks);
+    float sD1 = sampleIndirectSky(worldPosBlocks + vec2(0.0, -0.65));
+    float avg = sUp * 0.18 + s0 * 0.46 + sD1 * 0.36;
+    float darker = min(s0, sD1);
+    return mix(avg, darker, 0.34);
+  }
   float sUp = sampleIndirectSky(worldPosBlocks + vec2(0.0, 1.0));
   float s0 = sampleIndirectSky(worldPosBlocks);
   float sD1 = sampleIndirectSky(worldPosBlocks + vec2(0.0, -0.65));
@@ -171,12 +184,19 @@ float placedTorchShadow(vec2 from, vec2 to) {
   vec2 dir  = delta / dist;
   vec2 perp = vec2(-dir.y, dir.x);
   float totalVis = 0.0;
+  float rayWeight = (uLightingQuality <= 0) ? 1.0 : 3.0;
   for (int r = 0; r < 3; r++) {
-    // Keep a narrow cone so torch-cast shadows stay crisp.
+    if (uLightingQuality <= 0 && r != 1) {
+      continue;
+    }
     vec2 rayOffset = perp * (float(r - 1) * 0.18);
     float vis = 1.0;
+    float steps = (uLightingQuality >= 2) ? 8.0 : 4.0;
     for (int s = 0; s < 8; s++) {
-      float t = dist * (float(s) + 0.5) / 8.0;
+      if (uLightingQuality < 2 && s >= 4) {
+        break;
+      }
+      float t = dist * (float(s) + 0.5) / steps;
       vec2 sp = from + dir * t + rayOffset;
       vec2 uv = smoothOcclusionUV(sp);
       if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
@@ -186,8 +206,7 @@ float placedTorchShadow(vec2 from, vec2 to) {
     }
     totalVis += vis;
   }
-  // Slightly bias toward full light/full shadow to reduce fuzzy transition.
-  return pow(totalVis / 3.0, 1.18);
+  return pow(totalVis / rayWeight, 1.18);
 }
 
 // Bloom: elliptical falloff in 16px-tile space; center shifted slightly below flame tip on screen.
@@ -233,19 +252,31 @@ void main() {
 
   float R = mix(1.5, 2.15, nightPenumbra);
   vec2 blurCenter = worldPos + vec2(0.0, -.2);
-  float s00 = sampleIndirectSky(blurCenter + vec2(-R, -R));
-  float s10 = sampleIndirectSky(blurCenter + vec2(0.0, -R));
-  float s20 = sampleIndirectSky(blurCenter + vec2( R, -R));
-  float s01 = sampleIndirectSky(blurCenter + vec2(-R, 0.0));
-  float s11 = sampleIndirectSky(blurCenter);
-  float s21 = sampleIndirectSky(blurCenter + vec2( R, 0.0));
-  float s02 = sampleIndirectSky(blurCenter + vec2(-R,  R));
-  float s12 = sampleIndirectSky(blurCenter + vec2(0.0, R));
-  float s22 = sampleIndirectSky(blurCenter + vec2( R,  R));
-  float smoothedSky =
-    (s00 + s20 + s02 + s22) * (1.0 / 16.0) +
-    (s10 + s01 + s21 + s12) * (2.0 / 16.0) +
-    s11 * (4.0 / 16.0);
+  float smoothedSky;
+  if (uLightingQuality <= 0) {
+    smoothedSky = sampleIndirectSky(blurCenter);
+  } else if (uLightingQuality == 1) {
+    float s01 = sampleIndirectSky(blurCenter + vec2(-R, 0.0));
+    float s11 = sampleIndirectSky(blurCenter);
+    float s21 = sampleIndirectSky(blurCenter + vec2( R, 0.0));
+    float s10 = sampleIndirectSky(blurCenter + vec2(0.0, -R));
+    float s12 = sampleIndirectSky(blurCenter + vec2(0.0, R));
+    smoothedSky = (s01 + s21 + s10 + s12) * 0.15 + s11 * 0.4;
+  } else {
+    float s00 = sampleIndirectSky(blurCenter + vec2(-R, -R));
+    float s10 = sampleIndirectSky(blurCenter + vec2(0.0, -R));
+    float s20 = sampleIndirectSky(blurCenter + vec2( R, -R));
+    float s01 = sampleIndirectSky(blurCenter + vec2(-R, 0.0));
+    float s11 = sampleIndirectSky(blurCenter);
+    float s21 = sampleIndirectSky(blurCenter + vec2( R, 0.0));
+    float s02 = sampleIndirectSky(blurCenter + vec2(-R,  R));
+    float s12 = sampleIndirectSky(blurCenter + vec2(0.0, R));
+    float s22 = sampleIndirectSky(blurCenter + vec2( R,  R));
+    smoothedSky =
+      (s00 + s20 + s02 + s22) * (1.0 / 16.0) +
+      (s10 + s01 + s21 + s12) * (2.0 / 16.0) +
+      s11 * (4.0 / 16.0);
+  }
 
   float shadowFloor = mix(SHADOW_FLOOR_DAY, SHADOW_FLOOR_NIGHT, nightPenumbra);
   float skyGamma = mix(0.50, 0.36, nightPenumbra);
@@ -307,60 +338,60 @@ void main() {
   }
   light += vec3(1.0, 0.85, 0.55) * placedTorchAmt;
 
-  // Bloom: same flame tips as lighting; nudge in screen px (world: 1 block = uBlockPixels px).
-  vec2 bloomTipShift = vec2(1.0 / uBlockPixels, -13.0 / uBlockPixels);
-  vec3 bloom = vec3(0.0);
-
-  if (uTorchActive > 0.5) {
-    float g = torchBloomGain(worldPos, uTorchWorldPos + bloomTipShift);
-    float heldBloom = uTorchIntensity * 0.48 * g * heldTorchVis;
-    bloom += uTorchColor * clamp(heldBloom, 0.0, 1.0);
-  }
-
-  // Match held-torch bloom: scale by ray-marched visibility so bloom doesn't sit on top of
-  // occluders the same way lighting already does. (Entities use uPlayerBloomMask below.)
-  float placedBloomAmt = 0.0;
-  for (int i = 0; i < MAX_PLACED_TORCHES; i++) {
-    if (i >= uPlacedTorchCount) break;
-    vec4 placed = uPlacedTorchPositions[i];
-    vec2 tp = placed.xy;
-    float placedStrength = max(0.0, placed.z);
-    float bloomTipShiftScale = clamp(placed.w, 0.0, 1.0);
-    float g = torchBloomGain(worldPos, tp + bloomTipShift * bloomTipShiftScale);
-    float shadow = placedTorchShadow(worldPos, tp);
-    placedBloomAmt = max(placedBloomAmt, 0.42 * g * shadow * placedStrength);
-  }
-  bloom += vec3(1.0, 0.85, 0.50) * placedBloomAmt;
-
   // Clamp base lighting to [0, 1] so daytime brightness matches the original
   // behaviour. Only the bloom contribution is allowed to exceed 1.0, giving
   // ACES something to compress without over-brightening the base scene.
   light = clamp(light, 0.0, 1.0);
-  // Raw mask.a misses soft sprite edges (hair); smoothstep pulls mids in so torch bloom
-  // doesn't read as a screen-space disc on top of the body. Neighbor max tolerates tiny
-  // filter/texture-coordinate mismatch between uTexture and uPlayerBloomMask.
-  vec2 dUv = vec2(1.0 / max(uInputSize.x, 1.0), 1.0 / max(uInputSize.y, 1.0)) * 1.25;
-  float bloomMaskA = max(
-    max(
-      max(texture(uPlayerBloomMask, sampleUv).a, texture(uPlayerBloomMask, sampleUv + vec2(dUv.x, 0.0)).a),
-      texture(uPlayerBloomMask, sampleUv - vec2(dUv.x, 0.0)).a
-    ),
-    max(texture(uPlayerBloomMask, sampleUv + vec2(0.0, dUv.y)).a, texture(uPlayerBloomMask, sampleUv - vec2(0.0, dUv.y)).a)
-  );
-  float bloomPlayerOccl = mix(
-    1.0,
-    1.0 - smoothstep(0.06, 0.52, bloomMaskA),
-    uBloomMaskActive
-  );
-  if (uPlayerBloomUvBoundsActive > 0.5) {
-    float ax = smoothstep(uPlayerBloomUvMin.x - 0.0014, uPlayerBloomUvMin.x + 0.0014, sampleUv.x);
-    float bx = 1.0 - smoothstep(uPlayerBloomUvMax.x - 0.0014, uPlayerBloomUvMax.x + 0.0014, sampleUv.x);
-    float ay = smoothstep(uPlayerBloomUvMin.y - 0.0014, uPlayerBloomUvMin.y + 0.0014, sampleUv.y);
-    float by = 1.0 - smoothstep(uPlayerBloomUvMax.y - 0.0014, uPlayerBloomUvMax.y + 0.0014, sampleUv.y);
-    float insideUv = ax * bx * ay * by;
-    bloomPlayerOccl *= (1.0 - 0.998 * insideUv);
+
+  // HDR bloom + player silhouette mask: skip entirely when bloom is off — avoids duplicate
+  // torch ray-marches and five uPlayerBloomMask taps per pixel on the hot fullscreen pass.
+  vec3 bloom = vec3(0.0);
+  float bloomPlayerOccl = 1.0;
+  if (uBloomEnabled > 0.5) {
+    vec2 bloomTipShift = vec2(1.0 / uBlockPixels, -13.0 / uBlockPixels);
+
+    if (uTorchActive > 0.5) {
+      float g = torchBloomGain(worldPos, uTorchWorldPos + bloomTipShift);
+      float heldBloom = uTorchIntensity * 0.48 * g * heldTorchVis;
+      bloom += uTorchColor * clamp(heldBloom, 0.0, 1.0);
+    }
+
+    float placedBloomAmt = 0.0;
+    for (int i = 0; i < MAX_PLACED_TORCHES; i++) {
+      if (i >= uPlacedTorchCount) break;
+      vec4 placed = uPlacedTorchPositions[i];
+      vec2 tp = placed.xy;
+      float placedStrength = max(0.0, placed.z);
+      float bloomTipShiftScale = clamp(placed.w, 0.0, 1.0);
+      float g = torchBloomGain(worldPos, tp + bloomTipShift * bloomTipShiftScale);
+      float shadow = placedTorchShadow(worldPos, tp);
+      placedBloomAmt = max(placedBloomAmt, 0.42 * g * shadow * placedStrength);
+    }
+    bloom += vec3(1.0, 0.85, 0.50) * placedBloomAmt;
+
+    vec2 dUv = vec2(1.0 / max(uInputSize.x, 1.0), 1.0 / max(uInputSize.y, 1.0)) * 1.25;
+    float bloomMaskA = max(
+      max(
+        max(texture(uPlayerBloomMask, sampleUv).a, texture(uPlayerBloomMask, sampleUv + vec2(dUv.x, 0.0)).a),
+        texture(uPlayerBloomMask, sampleUv - vec2(dUv.x, 0.0)).a
+      ),
+      max(texture(uPlayerBloomMask, sampleUv + vec2(0.0, dUv.y)).a, texture(uPlayerBloomMask, sampleUv - vec2(0.0, dUv.y)).a)
+    );
+    bloomPlayerOccl = mix(
+      1.0,
+      1.0 - smoothstep(0.06, 0.52, bloomMaskA),
+      uBloomMaskActive
+    );
+    if (uPlayerBloomUvBoundsActive > 0.5) {
+      float ax = smoothstep(uPlayerBloomUvMin.x - 0.0014, uPlayerBloomUvMin.x + 0.0014, sampleUv.x);
+      float bx = 1.0 - smoothstep(uPlayerBloomUvMax.x - 0.0014, uPlayerBloomUvMax.x + 0.0014, sampleUv.x);
+      float ay = smoothstep(uPlayerBloomUvMin.y - 0.0014, uPlayerBloomUvMin.y + 0.0014, sampleUv.y);
+      float by = 1.0 - smoothstep(uPlayerBloomUvMax.y - 0.0014, uPlayerBloomUvMax.y + 0.0014, sampleUv.y);
+      float insideUv = ax * bx * ay * by;
+      bloomPlayerOccl *= (1.0 - 0.998 * insideUv);
+    }
   }
-  vec3 bloomApplied = bloom * uBloomEnabled * bloomPlayerOccl;
+  vec3 bloomApplied = bloom * bloomPlayerOccl;
   vec3 hdrColor = albedo.rgb * light + bloomApplied;
 
   vec3 tonemapped;

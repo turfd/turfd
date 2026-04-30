@@ -2,11 +2,16 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import type { Plugin } from "vite";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
+import { repoHasGit, updateToolDevPlugin } from "./dev/updateToolDevPlugin";
+import { readReleaseNotesFromGit } from "./scripts/readReleaseNotesFromGit";
 
 const pkg = JSON.parse(
   readFileSync(path.resolve(__dirname, "package.json"), "utf-8"),
 ) as { version: string };
+
+const { summary: releaseSummary, changesMd: releaseChangesMd } =
+  readReleaseNotesFromGit(__dirname);
 
 /** Unique per `vite build`; compared to `build.json` fetched with cache-bypass (stale-tab / CDN HTML cache). */
 const buildId = `${pkg.version}-${Date.now()}`;
@@ -54,22 +59,42 @@ function modPackJsoncPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const root = __dirname;
+  const env = loadEnv(mode, root, "");
+  const devPlugins: Plugin[] = [];
+  if (repoHasGit(root)) {
+    devPlugins.push(
+      updateToolDevPlugin({
+        root,
+        toolToken: env.STRATUM_UPDATE_TOOL_TOKEN,
+      }),
+    );
+  }
+
+  return {
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __BUILD_ID__: JSON.stringify(buildId),
+    __RELEASE_SUMMARY__: JSON.stringify(releaseSummary),
+    __RELEASE_CHANGES_MD__: JSON.stringify(releaseChangesMd),
   },
-  plugins: [modPackJsoncPlugin(), emitBuildJsonPlugin()],
+  plugins: [...devPlugins, modPackJsoncPlugin(), emitBuildJsonPlugin()],
   base: "/stratum/",
   // Same origin every dev session so IndexedDB ("stratum" worlds) stays on one database.
   // If 5173 is in use, fail fast instead of binding 5174+ (different origin = empty saves).
   server: {
     port: 5173,
     strictPort: true,
+    // Dev-only: avoid HTTP caching of transformed modules / `.vite/deps` so a tab does not keep
+    // import URLs from before `optimizeDeps` re-ran (browser sees 504 Outdated Optimize Dep →
+    // "Failed to fetch dynamically imported module" for e.g. Pixi WebGL chunks).
+    headers: { "Cache-Control": "no-store" },
   },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
     },
   },
+};
 });

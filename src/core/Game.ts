@@ -59,6 +59,7 @@ import {
   captureAndSavePerformanceReport,
   type PerfWorldSnapshot,
 } from "../debug/perfCapture";
+import { GpuDebugHud } from "../debug/GpuDebugHud";
 import { withPerfSpan } from "../debug/perfSpans";
 import { getEffectiveViewDistanceChunks } from "../ui/settings/videoPrefs";
 import {
@@ -386,6 +387,7 @@ export class Game {
   private _nametagOverlay: NametagOverlay | null = null;
   private _signHoverOverlay: SignHoverOverlay | null = null;
   private _damageNumbersOverlay: DamageNumbersOverlay | null = null;
+  private _gpuDebugHud: GpuDebugHud | null = null;
   private _chatOpen = false;
   private _wandEnabled = true;
   private _wandStart: { wx: number; wy: number } | null = null;
@@ -1420,6 +1422,10 @@ export class Game {
     damageNumbersOverlay.init(this.mount);
     this._damageNumbersOverlay = damageNumbersOverlay;
 
+    const gpuDebugHud = new GpuDebugHud();
+    gpuDebugHud.init(this.mount);
+    this._gpuDebugHud = gpuDebugHud;
+
     this.networkUnsubs.push(
       this.bus.on("game:chat-submit", (e) => {
         this._onChatSubmit(e.text);
@@ -2127,6 +2133,8 @@ export class Game {
     this._signHoverOverlay = null;
     this._damageNumbersOverlay?.destroy();
     this._damageNumbersOverlay = null;
+    this._gpuDebugHud?.destroy();
+    this._gpuDebugHud = null;
     this._chatHost = null;
     this.uiShell?.destroy();
     this.uiShell = null;
@@ -7898,6 +7906,10 @@ export class Game {
     ) {
       input.updateMouseWorldPos(pipeline.getCamera());
 
+      if (input.isJustPressed("toggleGpuDebug")) {
+        this._gpuDebugHud?.toggle(pipeline);
+      }
+
       if (input.isJustPressed("pause")) {
         if (this._isLocalDeathBlocking()) {
           // Pause / inventory / chat are disabled until respawn or main menu.
@@ -8679,6 +8691,7 @@ export class Game {
         ? Math.min((now - this.lastRenderWallMs) / 1000, 0.1)
         : 0;
     this.lastRenderWallMs = now;
+    this._gpuDebugHud?.beginFrame();
     const perfSpikePhaseMs: Record<string, number> = {};
     const perfMark = (phase: string, t0: number): void => {
       perfSpikePhaseMs[phase] = Math.max(0, performance.now() - t0);
@@ -9024,14 +9037,27 @@ export class Game {
       this.pipeline?.render(alpha);
     });
     perfMark("RenderPipeline.render", tRenderPipeline);
+    this._gpuDebugHud?.sync(this.pipeline, dtSec);
     if (import.meta.env.DEV) {
       const frameMs = dtSec * 1000;
-      if (frameMs >= 30 && now - this._lastPerfSpikeLogMs >= 500) {
+      const renderMs = perfSpikePhaseMs["RenderPipeline.render"] ?? 0;
+      // Wall dtSec is time between RAF callbacks; it spikes when the tab is throttled,
+      // DevTools pauses, or work runs outside render() — not necessarily GPU draw cost.
+      const renderHeavy = renderMs >= 18;
+      const longWallGap = frameMs >= 120;
+      if (
+        (renderHeavy || longWallGap) &&
+        now - this._lastPerfSpikeLogMs >= 4000
+      ) {
         this._lastPerfSpikeLogMs = now;
         const entries = Object.entries(perfSpikePhaseMs).sort((a, b) => b[1] - a[1]);
         const topPhases = entries.slice(0, 5).map(([phase, ms]) => `${phase}:${ms.toFixed(2)}ms`);
-        console.warn("[Game] Render spike", {
+        const label = renderHeavy
+          ? "[Game] Render budget spike"
+          : "[Game] Long frame interval (likely outside render; check RAF throttling / main thread)";
+        console.warn(label, {
           frameMs: Number(frameMs.toFixed(2)),
+          renderMs: Number(renderMs.toFixed(2)),
           dtSec: Number(dtSec.toFixed(4)),
           pendingLight: this.world?.getPendingLightRecomputeCount() ?? 0,
           topPhases,

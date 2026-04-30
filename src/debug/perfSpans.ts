@@ -85,6 +85,9 @@ export function endPerfSpan(token: number): void {
 }
 
 export function withPerfSpan<T>(name: string, fn: () => T): T {
+  if (activeCapture === null) {
+    return fn();
+  }
   const token = beginPerfSpan(name);
   try {
     return fn();

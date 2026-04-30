@@ -22,10 +22,15 @@ export type InputAction =
   | "pause"
   | "toggleBackgroundMode"
   | "chat"
-  | "dropItem";
+  | "dropItem"
+  /** Hard-bound to F3; not user-rebindable (see {@link InputManager}). */
+  | "toggleGpuDebug";
 
 /** Keyboard-only actions (mouse handles place/break). */
-export type KeybindableAction = Exclude<InputAction, "place" | "break">;
+export type KeybindableAction = Exclude<
+  InputAction,
+  "place" | "break" | "toggleGpuDebug"
+>;
 
 export const KEYBINDABLE_ACTION_ORDER: readonly KeybindableAction[] = [
   "left",

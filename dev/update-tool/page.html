@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stratum — local release tool</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23152a44' width='32' height='32' rx='6'/%3E%3Cpath fill='%237eb8ff' d='M8 22V10h4l6 8V10h6v12h-4v-8l-6 8z'/%3E%3C/svg%3E"
+    />
+    <style>
+      :root {
+        --bg: #0f1824;
+        --card: #152536;
+        --border: rgba(116, 179, 255, 0.35);
+        --text: #e8f4ff;
+        --muted: rgba(232, 244, 255, 0.72);
+        --accent: #7eb8ff;
+        --bad: #ff8a8a;
+        --ok: #9dffb5;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.45;
+      }
+      .wrap {
+        max-width: 52rem;
+        margin: 0 auto;
+        padding: 1.5rem 1.25rem 3rem;
+      }
+      h1 {
+        font-size: 1.35rem;
+        font-weight: 650;
+        letter-spacing: 0.02em;
+        margin: 0 0 0.35rem;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 0.92rem;
+        margin-bottom: 1.25rem;
+      }
+      .banner {
+        border: 1px solid var(--border);
+        background: var(--card);
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1.25rem;
+        font-size: 0.88rem;
+      }
+      .banner.warn {
+        border-color: rgba(255, 180, 100, 0.45);
+        color: #ffd9b0;
+      }
+      .banner.err {
+        border-color: rgba(255, 120, 120, 0.45);
+        color: var(--bad);
+      }
+      .banner.ok {
+        border-color: rgba(120, 255, 180, 0.35);
+        color: var(--ok);
+      }
+      label {
+        display: block;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin: 0.75rem 0 0.35rem;
+      }
+      select,
+      textarea,
+      input[type="password"] {
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--text);
+        padding: 0.55rem 0.65rem;
+        font: inherit;
+      }
+      textarea {
+        min-height: 5rem;
+        resize: vertical;
+        font-family: ui-monospace, "Cascadia Code", monospace;
+        font-size: 0.88rem;
+      }
+      textarea.changes {
+        min-height: 14rem;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+      }
+      .row > div {
+        flex: 1 1 12rem;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-top: 1.1rem;
+      }
+      button {
+        cursor: pointer;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: linear-gradient(180deg, #4a7ab8, #355a8a);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        padding: 0.55rem 1.1rem;
+        letter-spacing: 0.04em;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--muted);
+        border-color: rgba(255, 255, 255, 0.2);
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      pre.preview {
+        margin: 1rem 0 0;
+        padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.35);
+        overflow: auto;
+        max-height: 42vh;
+        font-size: 0.8rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .git-meta {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .git-meta strong {
+        color: var(--text);
+      }
+      .token-section {
+        margin-bottom: 1rem;
+      }
+      .token-section[hidden] {
+        display: none !important;
+      }
+      .token-help {
+        font-size: 0.86rem;
+        color: var(--muted);
+        margin: 0 0 0.5rem;
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Stratum local release</h1>
+      <p class="sub">
+        Dev server only. Bumps <code>package.json</code>, writes a commit with subject = version and body
+        <code>[Summary]</code> / <code>[Changes]</code> (same as <code>release-commit.sh</code>). Uses
+        <strong>your</strong> local Git identity and repo — nothing is pushed from here.
+      </p>
+      <div id="banner" class="banner" hidden></div>
+      <div id="gitMeta" class="git-meta"></div>
+
+      <div id="tokenSection" class="token-section" hidden>
+        <p class="token-help">
+          Your dev server was started with <code>STRATUM_UPDATE_TOOL_TOKEN</code> in <code>.env.local</code> (repo
+          root). Paste the <strong>same secret</strong> here so preview/commit requests are allowed. This blocks
+          random websites from POSTing to your machine while this tab is open — it is <strong>not</strong> your Git
+          password and nothing is sent off-device.
+        </p>
+        <label for="token">Update tool token</label>
+        <input id="token" type="password" autocomplete="off" placeholder="Same value as STRATUM_UPDATE_TOOL_TOKEN" />
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="bump">Bump</label>
+          <select id="bump">
+            <option value="prerelease">Prerelease (same X.Y.Z line)</option>
+            <option value="patch">Patch</option>
+            <option value="minor">Minor</option>
+            <option value="major">Major</option>
+          </select>
+        </div>
+        <div>
+          <label for="lane">Lane</label>
+          <select id="lane">
+            <option value="alpha">Alpha</option>
+            <option value="beta">Beta</option>
+            <option value="release">Release (stable)</option>
+          </select>
+        </div>
+      </div>
+
+      <label for="summary">Step 1 — Summary (plain text; main menu card)</label>
+      <textarea id="summary" placeholder="Short player-facing blurb, no Markdown."></textarea>
+
+      <label for="changes">Step 2 — Full changelog (Markdown; Read more modal)</label>
+      <textarea id="changes" class="changes" placeholder="Headings, lists, tables, links… See changelogs/REFERENCE_WEBGPU_PERFORMANCE_UPDATE.md"></textarea>
+
+      <div class="actions">
+        <button type="button" id="btnPreview">Preview message</button>
+        <button type="button" id="btnCommit">Bump version &amp; commit</button>
+        <button type="button" class="secondary" id="btnReload">Reload git state</button>
+      </div>
+      <pre id="preview" class="preview" hidden></pre>
+    </div>
+    <script type="module">
+      const api = (path) => "/stratum/__update-tool/api" + path;
+      const banner = document.getElementById("banner");
+      const gitMeta = document.getElementById("gitMeta");
+      const preview = document.getElementById("preview");
+
+      function showBanner(kind, text) {
+        banner.hidden = false;
+        banner.className = "banner" + (kind === "err" ? " err" : kind === "warn" ? " warn" : kind === "ok" ? " ok" : "");
+        banner.textContent = text;
+      }
+      function hideBanner() {
+        banner.hidden = true;
+      }
+
+      function authHeaders() {
+        const headers = {};
+        const token = document.getElementById("token").value.trim();
+        if (token) headers["X-Stratum-Update-Token"] = token;
+        return headers;
+      }
+
+      async function loadState() {
+        hideBanner();
+        const res = await fetch(api("/state"), { headers: authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showBanner("err", data.error ?? res.statusText);
+          gitMeta.textContent = "";
+          return;
+        }
+        const tokenSection = document.getElementById("tokenSection");
+        if (tokenSection) tokenSection.hidden = !data.tokenRequired;
+        gitMeta.innerHTML =
+          "<strong>Version</strong> " +
+          escapeHtml(data.version) +
+          " · <strong>Branch</strong> " +
+          escapeHtml(data.branch) +
+          " · <strong>Git user</strong> " +
+          escapeHtml(data.userName) +
+          " &lt;" +
+          escapeHtml(data.userEmail) +
+          "&gt;" +
+          (data.dirty
+            ? " · <strong style='color:#ffb070'>Uncommitted changes</strong> (will be included in <code>git add -A</code>)"
+            : " · working tree clean");
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      function payload() {
+        return {
+          bump: document.getElementById("bump").value,
+          lane: document.getElementById("lane").value,
+          summary: document.getElementById("summary").value,
+          changes: document.getElementById("changes").value,
+        };
+      }
+
+      document.getElementById("btnReload").addEventListener("click", () => void loadState());
+
+      document.getElementById("btnPreview").addEventListener("click", async () => {
+        preview.hidden = true;
+        hideBanner();
+        const p = payload();
+        if (p.summary.trim().length === 0) {
+          showBanner("err", "Add a Step 1 summary first (plain text). Preview needs it to build the commit body.");
+          return;
+        }
+        const res = await fetch(api("/preview"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(p),
+        });
+        const raw = await res.text();
+        let data = {};
+        try {
+          data = JSON.parse(raw) as { error?: string; message?: string; nextVersion?: string };
+        } catch {
+          showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
+          return;
+        }
+        if (!res.ok) {
+          showBanner("err", data.error ?? res.statusText);
+          return;
+        }
+        preview.hidden = false;
+        preview.textContent = data.message ?? "";
+        showBanner("ok", "Next version: " + data.nextVersion);
+      });
+
+      document.getElementById("btnCommit").addEventListener("click", async () => {
+        if (!confirm("Run npm version, git add -A, and git commit with the assembled message?")) return;
+        preview.hidden = true;
+        hideBanner();
+        const p = payload();
+        if (p.summary.trim().length === 0) {
+          showBanner("err", "Add a Step 1 summary before committing.");
+          return;
+        }
+        const res = await fetch(api("/commit"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(p),
+        });
+        const raw = await res.text();
+        let data = {};
+        try {
+          data = JSON.parse(raw) as { error?: string; message?: string };
+        } catch {
+          showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
+          return;
+        }
+        if (!res.ok) {
+          showBanner("err", data.error ?? res.statusText);
+          return;
+        }
+        showBanner("ok", data.message ?? "Committed.");
+        await loadState();
+      });
+
+      await loadState();
+    </script>
+  </body>
+</html>
