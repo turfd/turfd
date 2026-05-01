@@ -13,6 +13,8 @@ import {
   CHUNK_SYNC_DEFER_DIRTY_THRESHOLD,
   CHUNK_SYNC_MAX_PER_FRAME,
   CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD,
+  CHUNK_SYNC_NEW_MESH_BUDGET_MS,
+  CHUNK_SYNC_NEW_MESH_MAX_PER_FRAME,
 } from "../../core/constants";
 import { chunkKey, chunkToWorldOrigin } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
@@ -96,6 +98,17 @@ export class ChunkRenderer {
     meshes: ChunkMeshes;
     distSq: number;
   }>();
+  /**
+   * Pending new-chunk mesh builds for the current `syncChunks` call. Drained
+   * nearest-first under {@link CHUNK_SYNC_NEW_MESH_BUDGET_MS} /
+   * {@link CHUNK_SYNC_NEW_MESH_MAX_PER_FRAME}; anything past the cap is
+   * rediscovered on the next `syncChunks` call (its mesh entry is still
+   * missing).
+   */
+  private readonly _newChunkQueue: Array<{
+    chunk: Chunk;
+    distSq: number;
+  }> = [];
 
   constructor(
     pipeline: RenderPipeline,
@@ -140,6 +153,8 @@ export class ChunkRenderer {
     dirtyQueue.length = 0;
     const nearestDirty = this._dirtyChunkNearest;
     nearestDirty.length = 0;
+    const newQueue = this._newChunkQueue;
+    newQueue.length = 0;
     const cam = this.pipeline.getCamera().getPosition();
     const cameraChunkX = Math.floor(cam.x / (CHUNK_SIZE * BLOCK_SIZE));
     const cameraChunkY = Math.floor((-cam.y) / (CHUNK_SIZE * BLOCK_SIZE));
@@ -148,45 +163,11 @@ export class ChunkRenderer {
       seenCount += 1;
       const key = chunkKey(chunk.coord);
       seen.add(key);
-      let triple = this.meshes.get(key);
+      const triple = this.meshes.get(key);
       if (triple === undefined) {
-        const bg = buildBackgroundMesh(chunk, this.registry, this.atlas);
-        const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler, this.registry);
-        const {
-          mesh: fg,
-          waterMesh: fgWater,
-          windSways,
-          furnaceFires,
-          waterSurfaces,
-        } = buildMesh(chunk, this.registry, this.atlas, meshOpts);
-        const leafDeco = buildLeafDecorationMesh(
-          chunk,
-          this.registry,
-          this.atlas,
-          { sampleBlockId },
-        );
-        this.syncWindyFg(fg, windSways);
-        this.syncFurnaceFg(fg, furnaceFires);
-        this.syncWateryFg(fgWater, waterSurfaces);
-        this.applyChunkMeshCulling(bg);
-        this.applyChunkMeshCulling(fgShadow);
-        this.applyChunkMeshCulling(fg);
-        this.applyChunkMeshCulling(leafDeco);
-        this.applyChunkMeshCulling(fgWater);
-        this.positionChunkRoot(bg, chunk.coord);
-        this.positionChunkRoot(fgShadow, chunk.coord);
-        this.positionChunkRoot(fg, chunk.coord);
-        this.positionChunkRoot(leafDeco, chunk.coord);
-        this.positionChunkRoot(fgWater, chunk.coord);
-        layer.addChild(bg);
-        layer.addChild(fgShadow);
-        layer.addChild(fg);
-        layer.addChild(leafDeco);
-        waterLayer.addChild(fgWater);
-        this.meshes.set(key, { bg, fgShadow, fg, leafDeco, fgWater });
-        chunk.dirty = false;
-        chunk.renderDirty = false;
-        added += 1;
+        const dx = chunk.coord.cx - cameraChunkX;
+        const dy = chunk.coord.cy - cameraChunkY;
+        newQueue.push({ chunk, distSq: dx * dx + dy * dy });
       } else if (chunk.renderDirty) {
         const dx = chunk.coord.cx - cameraChunkX;
         const dy = chunk.coord.cy - cameraChunkY;
@@ -268,6 +249,74 @@ export class ChunkRenderer {
       updated += 1;
     }
 
+    // New-chunk mesh creation pass — nearest-first, soft-budgeted. Always
+    // build at least one new mesh per frame (queue can't starve), then bail
+    // when both the count cap and combined budget are exhausted. Skipped
+    // chunks are picked up next frame because their `meshes` entry is still
+    // missing.
+    let newMeshDeferred = 0;
+    if (newQueue.length > 0) {
+      newQueue.sort((a, b) => a.distSq - b.distSq);
+      const tNewBudgetStart = performance.now();
+      const dirtyElapsedMs = tNewBudgetStart - tBudgetStart;
+      const remainingDirtyBudgetMs = Math.max(
+        0,
+        CHUNK_SYNC_BUDGET_MS - dirtyElapsedMs,
+      );
+      const newBudgetMs = remainingDirtyBudgetMs + CHUNK_SYNC_NEW_MESH_BUDGET_MS;
+      let builtThisFrame = 0;
+      for (let i = 0; i < newQueue.length; i++) {
+        const { chunk } = newQueue[i]!;
+        if (
+          builtThisFrame > 0 &&
+          (builtThisFrame >= CHUNK_SYNC_NEW_MESH_MAX_PER_FRAME ||
+            performance.now() - tNewBudgetStart >= newBudgetMs)
+        ) {
+          newMeshDeferred = newQueue.length - i;
+          break;
+        }
+        const key = chunkKey(chunk.coord);
+        const bg = buildBackgroundMesh(chunk, this.registry, this.atlas);
+        const fgShadow = buildFgShadowMesh(chunk, this.fgShadowSampler, this.registry);
+        const {
+          mesh: fg,
+          waterMesh: fgWater,
+          windSways,
+          furnaceFires,
+          waterSurfaces,
+        } = buildMesh(chunk, this.registry, this.atlas, meshOpts);
+        const leafDeco = buildLeafDecorationMesh(
+          chunk,
+          this.registry,
+          this.atlas,
+          { sampleBlockId },
+        );
+        this.syncWindyFg(fg, windSways);
+        this.syncFurnaceFg(fg, furnaceFires);
+        this.syncWateryFg(fgWater, waterSurfaces);
+        this.applyChunkMeshCulling(bg);
+        this.applyChunkMeshCulling(fgShadow);
+        this.applyChunkMeshCulling(fg);
+        this.applyChunkMeshCulling(leafDeco);
+        this.applyChunkMeshCulling(fgWater);
+        this.positionChunkRoot(bg, chunk.coord);
+        this.positionChunkRoot(fgShadow, chunk.coord);
+        this.positionChunkRoot(fg, chunk.coord);
+        this.positionChunkRoot(leafDeco, chunk.coord);
+        this.positionChunkRoot(fgWater, chunk.coord);
+        layer.addChild(bg);
+        layer.addChild(fgShadow);
+        layer.addChild(fg);
+        layer.addChild(leafDeco);
+        waterLayer.addChild(fgWater);
+        this.meshes.set(key, { bg, fgShadow, fg, leafDeco, fgWater });
+        chunk.dirty = false;
+        chunk.renderDirty = false;
+        added += 1;
+        builtThisFrame += 1;
+      }
+    }
+
     let removed = 0;
     const chunkMeshesPendingDestroy: ChunkMeshes[] = [];
     if (added > 0 || seenCount !== this.meshes.size) {
@@ -302,7 +351,10 @@ export class ChunkRenderer {
       });
     }
 
-    if (import.meta.env.DEV && (added > 0 || updated > 0 || removed > 0)) {
+    if (
+      import.meta.env.DEV &&
+      (added > 0 || updated > 0 || removed > 0 || newMeshDeferred > 0)
+    ) {
       chunkPerfLog("syncChunks", chunkPerfNow() - t0, {
         added,
         updated,
@@ -310,16 +362,26 @@ export class ChunkRenderer {
         seenCount,
         dirtyQueued,
         deferredDirty: Math.max(0, dirtyQueued - updatesThisFrame),
+        newMeshDeferred,
       });
     }
   }
 
-  /** Subtle pixel-snapped sway on foliage foreground tiles (see block `windSwayMaxPx`). */
+  /**
+   * Subtle pixel-snapped sway on foliage foreground tiles (see block `windSwayMaxPx`).
+   *
+   * Off-screen meshes are skipped via Pixi's culler result (`mesh.visible`),
+   * which is set by `Culler.shared.cull()` in {@link RenderPipeline.render}.
+   * The cull state lags by one frame (cull runs after this method on the next
+   * pipeline.render), but a one-frame stale wind/furnace/ripple offset on a
+   * chunk that just came on-screen is imperceptible.
+   */
   updateFoliageWind(
     timeSec: number,
     influences?: readonly FoliageWindInfluence[],
   ): void {
     for (const fg of this._windyForegroundMeshes) {
+      if (!fg.visible) continue;
       applyWindSwayToMesh(
         fg,
         this.fgWindSways.get(fg) ?? [],
@@ -332,6 +394,7 @@ export class ChunkRenderer {
   /** Lit furnace `furnace_on` strip animation (UV ping-pong). */
   updateFurnaceFire(timeSec: number): void {
     for (const fg of this._furnaceFireForegroundMeshes) {
+      if (!fg.visible) continue;
       applyFurnaceFireToMesh(
         fg,
         this.atlas,
@@ -387,6 +450,7 @@ export class ChunkRenderer {
       }
     }
     for (const fg of this._wateryForegroundMeshes) {
+      if (!fg.visible) continue;
       applyWaterRipplesToMesh(
         fg,
         this.fgWaterSurfaces.get(fg) ?? [],

@@ -17,6 +17,7 @@ import {
   LAKE_BIOME_MICRO_SMOOTH_HIGH,
   LAKE_BIOME_MICRO_SMOOTH_LOW,
   LAKE_BIOME_SCALE_BLOCKS,
+  LAND_SURFACE_MIN_CLEARANCE_ABOVE_SEA_BLOCKS,
   TERRAIN_BASE_SURFACE_BIAS_BLOCKS,
   WATER_SEA_LEVEL_WY,
   WORLD_Y_MAX,
@@ -95,12 +96,15 @@ export class TerrainNoise {
     const mountainFactor = Math.max(0, (mountainSelector - 0.45) / 0.55);
     const mountain = mountainFactor * mountainFactor * 40;
 
-    const h = Math.round(
+    let h = Math.round(
       base + detail + mountain + TERRAIN_BASE_SURFACE_BIAS_BLOCKS,
     );
     const lo = WORLD_Y_MIN + 10;
     const hi = WORLD_Y_MAX - 10;
-    return Math.min(hi, Math.max(lo, h));
+    h = Math.min(hi, Math.max(lo, h));
+    const dryFloor =
+      WATER_SEA_LEVEL_WY + LAND_SURFACE_MIN_CLEARANCE_ABOVE_SEA_BLOCKS;
+    return Math.max(h, dryFloor);
   }
 
   /**
@@ -115,9 +119,9 @@ export class TerrainNoise {
     const macro01 = macroRaw * 0.5 + 0.5;
     const patch01 = patchRaw * 0.5 + 0.5;
 
-    // Wider smoothstep so woods/plains alternate more often and more columns reach visible density.
-    const woodsBand = smoothstep(0.32, 0.72, macro01);
-    const patch = 0.55 + patch01 * 0.45;
+    // Lower/wider bounds ⇒ more macro columns contribute forest; denser woods vs open plains.
+    const woodsBand = smoothstep(0.17, 0.62, macro01);
+    const patch = 0.58 + patch01 * 0.42;
     return Math.max(0, Math.min(1, woodsBand * patch));
   }
 

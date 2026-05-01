@@ -35,6 +35,41 @@ export function createChunk(coord: ChunkCoord): Chunk {
   };
 }
 
+/**
+ * Constructs a {@link Chunk} reusing typed-array buffers transferred across a
+ * postMessage boundary (i.e. from {@link WorldGenWorkerPool}). Skips the three
+ * `Uint16Array`/`Uint8Array` allocations that {@link createChunk} would
+ * immediately discard (the worker provides `blocks`, `background`, `metadata`
+ * directly), saving ~3072 bytes of GC pressure per generated chunk on the
+ * fresh-world load path.
+ *
+ * Light arrays are still allocated up front because every existing
+ * {@link skyLight}/{@link blockLight} reader (lighting propagation, light
+ * textures, menu background renderer) assumes they're non-null typed arrays —
+ * lazy-init would require null checks on a hot path.
+ *
+ * Returns a chunk with `dirty`/`renderDirty`/`persistDirty` set so streaming
+ * and persistence pick it up the same way as the historical worker path did.
+ */
+export function createChunkFromTransferredArrays(
+  coord: ChunkCoord,
+  blocks: Uint16Array,
+  background: Uint16Array,
+  metadata: Uint8Array,
+): Chunk {
+  return {
+    coord,
+    blocks,
+    background,
+    metadata,
+    skyLight: new Uint8Array(CELL_COUNT),
+    blockLight: new Uint8Array(CELL_COUNT),
+    dirty: true,
+    renderDirty: true,
+    persistDirty: true,
+  };
+}
+
 export function getBlock(chunk: Chunk, lx: number, ly: number): number {
   return chunk.blocks[localIndex(lx, ly)]!;
 }

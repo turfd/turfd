@@ -92,6 +92,12 @@ export type DebugHudSnapshot = {
   tpsMs: number | null;
   profiler: Array<{ name: string; ms: number }>;
   targeted: DebugTargetedBlockInfo | null;
+  /**
+   * World-gen worker pool telemetry. `spawned=false` when the pool is dormant
+   * (cached-world re-entry never triggered chunk gen); `busy` is the in-flight
+   * generate-request count, capped at `size`.
+   */
+  worldGenPool: { spawned: boolean; size: number; busy: number };
 };
 
 let hook: HookState | null = null;
@@ -708,6 +714,14 @@ export class GpuDebugHud {
       if (this.partEnabled("network")) {
         lines.push(
           `Net: ${snapshot.txPerTick ?? "?"} tx  ${snapshot.rxPerTick ?? "?"} rx  Ping: ${snapshot.pingMs ?? "?"} ms`,
+        );
+      }
+      if (this.partEnabled("system")) {
+        const pool = snapshot.worldGenPool;
+        lines.push(
+          pool.spawned
+            ? `WorldGen workers: ${pool.size} live, ${pool.busy} busy`
+            : "WorldGen workers: (dormant)",
         );
       }
     } else {

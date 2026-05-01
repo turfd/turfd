@@ -44,6 +44,17 @@ export class BlockRegistry {
     return this.byId.map((b) => b.identifier);
   }
 
+  /**
+   * Snapshot of all registered definitions in numeric-id order, suitable for
+   * structured-clone postMessage to a worker that needs to reconstruct an
+   * equivalent registry. The returned array references the same underlying
+   * `BlockDefinition` objects; the worker re-registers each entry to assign
+   * matching session-local ids on the worker side.
+   */
+  snapshotDefinitions(): readonly BlockDefinition[] {
+    return this.byId;
+  }
+
   /** Unique mod namespace prefixes from registered block identifiers (e.g. `stratum`). */
   getModList(): string[] {
     return [...this.modNamespaces].sort();

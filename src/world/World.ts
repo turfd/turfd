@@ -18,6 +18,7 @@ import {
   STREAM_CHUNK_HYSTERESIS_BLOCKS,
   WATER_FLOW_EVERY_N_TICKS,
   WORLDGEN_NO_COLLIDE,
+  WORLDGEN_USE_WORKER,
   WORLD_Y_MAX,
   WORLD_Y_MIN,
   LIGHT_RECOMPUTE_BUDGET_MS,
@@ -81,6 +82,11 @@ import {
   WorldGenerator,
   type GeneratedStructureEntity,
 } from "./gen/WorldGenerator";
+import {
+  WorldGenWorkerPool,
+  isWorldGenWorkerSupported,
+  type GeneratedChunkPayload,
+} from "./gen/workers/WorldGenWorkerPool";
 import type { ParsedStructure } from "./structure/structureSchema";
 import type { StructureFeatureEntry } from "./structure/StructureRegistry";
 import { resimulateWaterFromSources, tickWaterFlow } from "./water/WaterSimulation";
@@ -243,6 +249,31 @@ export class World {
   private readonly worldGen: WorldGenerator;
   /** Stable reference for {@link ChunkManager.getOrCreateChunk} (avoids per-call `.bind`). */
   private readonly _chunkGen: ChunkGenerator;
+  /**
+   * Off-main-thread procedural generator pool. Lazily spawned on the first
+   * {@link _generateChunkAsync} miss so re-entering a fully cached world
+   * (every chunk hits {@link IndexedDBStore.loadChunkBatch}) doesn't pay the
+   * worker module-import + registry-snapshot cost. Sync edit paths still use
+   * {@link _chunkGen}; only streaming (`loadChunksAroundCentre` /
+   * `loadOrGenerateChunkAt`) routes through the pool.
+   */
+  private _chunkGenWorkerPool: WorldGenWorkerPool | null = null;
+  /**
+   * Set true once we've decided the pool is unavailable on this runtime
+   * ({@link WORLDGEN_USE_WORKER} off, no Worker support, or constructor threw).
+   * Avoids re-trying spawn on every chunk miss.
+   */
+  private _chunkGenWorkerPoolDisabled = false;
+  /**
+   * Most recent feature table from {@link setStructureFeatures}. Buffered so
+   * the lazy pool spawn replays it (features are typically configured before
+   * any chunk gen happens).
+   */
+  private _pendingStructureFeatures: ReadonlyArray<{
+    identifier: string;
+    structures: ParsedStructure[];
+    placement: StructureFeatureEntry["placement"];
+  }> | null = null;
   private readonly airId: number;
   private readonly cactusBlockId: number;
   private readonly sugarCaneBlockId: number;
@@ -423,6 +454,14 @@ export class World {
     this._lootRng = new GeneratorContext(seed);
     this.bus = bus;
     this._chunkGen = (coord) => this.worldGen.generateChunk(coord);
+    /**
+     * Worker pool is spawned lazily on first chunk miss (see
+     * {@link _ensureChunkGenWorkerPool}); a freshly-loaded fully-cached world
+     * never pays the worker boot cost.
+     */
+    if (!WORLDGEN_USE_WORKER || !isWorldGenWorkerSupported()) {
+      this._chunkGenWorkerPoolDisabled = true;
+    }
     this._blockLoadPalette =
       persistedBlockIdPalette !== undefined && persistedBlockIdPalette.length > 0
         ? [...persistedBlockIdPalette]
@@ -461,6 +500,9 @@ export class World {
     }>,
   ): void {
     this.worldGen.setStructureFeatures(features);
+    /** Buffer for the lazy pool spawn (replayed in {@link _ensureChunkGenWorkerPool}). */
+    this._pendingStructureFeatures = [...features];
+    this._chunkGenWorkerPool?.setStructureFeatures(features);
   }
 
   /** Multiplayer client: load missing chunks from host instead of {@link WorldGenerator}. */
@@ -2055,40 +2097,6 @@ export class World {
     return null;
   }
 
-  /**
-   * Materialize deterministic structure tile-entities for freshly generated chunks.
-   * This keeps worldgen barrels/chests wired to their deferred loot tables.
-   */
-  private _applyGeneratedStructureEntitiesForChunk(cx: number, cy: number): void {
-    const entities = this.worldGen.getStructureEntitiesForChunk({ cx, cy });
-    if (entities.length === 0) {
-      return;
-    }
-    for (let i = 0; i < entities.length; i++) {
-      const e: GeneratedStructureEntity = entities[i]!;
-      if (e.type === "furnace") {
-        this.setFurnaceTile(e.wx, e.wy, e.state as FurnaceTileState);
-        continue;
-      }
-      if (e.type === "spawner") {
-        this.setSpawnerTile(e.wx, e.wy, normalizeSpawnerTileStateForGeneratedPlacement(e.state));
-        continue;
-      }
-      const anchor = this.getChestStorageAnchorForCell(e.wx, e.wy) ?? {
-        ax: e.wx,
-        ay: e.wy,
-      };
-      const rawItems = e.items ?? [];
-      const items = rawItems.map((s) => this._toChestItemStackFromStructureEntity(s));
-      if (items.length === 0) {
-        items.push(...Array.from({ length: CHEST_SINGLE_SLOTS }, () => null));
-      }
-      this.setChestTileAtAnchor(anchor.ax, anchor.ay, {
-        slots: items,
-        ...(e.lootTable !== undefined ? { lootTableId: e.lootTable, lootRolled: false } : {}),
-      });
-    }
-  }
 
   getChunkAt(wx: number, wy: number): Chunk | undefined {
     return this.chunks.getChunk(worldToChunk(wx, wy));
@@ -2097,6 +2105,138 @@ export class World {
   /** Chunk at chunk grid coordinates, or undefined if not loaded. */
   getChunk(chunkX: number, chunkY: number): Chunk | undefined {
     return this.chunks.getChunkXY(chunkX, chunkY);
+  }
+
+  /**
+   * Procedural chunk gen for streaming paths. Routes through the worker pool
+   * when available so the per-chunk noise + caves + ores + structure cost runs
+   * off the main thread; falls back to inline `_chunkGen` if the pool is null
+   * or the worker rejects (e.g. transient init failure). Both branches return
+   * the same shape so callers don't need to branch on the path.
+   */
+  private async _generateChunkAsync(coord: ChunkCoord): Promise<GeneratedChunkPayload> {
+    const pool = this._ensureChunkGenWorkerPool();
+    if (pool !== null) {
+      try {
+        return await pool.generateChunk(coord);
+      } catch (err) {
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[World] Worker chunk gen failed for (${coord.cx},${coord.cy}); falling back to main-thread gen.`,
+            err,
+          );
+        }
+      }
+    }
+    /**
+     * Combined call shares the structure-placement resolver pass between block
+     * stamping and entity extraction (vs. the historical
+     * `generateChunk + getStructureEntitiesForChunk` pair, which walked the
+     * feature table twice).
+     */
+    return this.worldGen.generateChunkWithEntities(coord);
+  }
+
+  /**
+   * Spawns the worker pool on first miss; subsequent calls return the cached
+   * instance. Returns `null` when worker support has been ruled out (sync
+   * fallback only). Buffered structure features are replayed to the new pool
+   * so the lazy spawn is transparent to {@link setStructureFeatures} timing.
+   */
+  private _ensureChunkGenWorkerPool(): WorldGenWorkerPool | null {
+    if (this._chunkGenWorkerPool !== null) {
+      return this._chunkGenWorkerPool;
+    }
+    if (this._chunkGenWorkerPoolDisabled) {
+      return null;
+    }
+    try {
+      const pool = new WorldGenWorkerPool(this.seed, this.registry, this.genType);
+      if (this._pendingStructureFeatures !== null) {
+        pool.setStructureFeatures(this._pendingStructureFeatures);
+      }
+      this._chunkGenWorkerPool = pool;
+      return pool;
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          "[World] Failed to start WorldGen worker pool — falling back to main-thread chunk gen.",
+          err,
+        );
+      }
+      this._chunkGenWorkerPoolDisabled = true;
+      return null;
+    }
+  }
+
+  /**
+   * F3 HUD telemetry. `spawned=false` when the pool hasn't been needed yet
+   * (cached-world re-entry); `pending` is the in-flight `generate` request count.
+   */
+  getWorkerPoolStatus(): {
+    spawned: boolean;
+    size: number;
+    pending: number;
+  } {
+    const pool = this._chunkGenWorkerPool;
+    if (pool === null) {
+      return { spawned: false, size: 0, pending: 0 };
+    }
+    return {
+      spawned: true,
+      size: pool.size,
+      pending: pool.getPendingCount(),
+    };
+  }
+
+  /**
+   * Materialize structure tile-entities for a freshly generated chunk (worker
+   * or sync). Entries already carry their absolute world coords (`wx, wy`),
+   * so the chunk grid coords are not needed here.
+   */
+  private _applyStructureEntitiesPayload(
+    entities: readonly GeneratedStructureEntity[],
+  ): void {
+    if (entities.length === 0) {
+      return;
+    }
+    for (let i = 0; i < entities.length; i++) {
+      const e = entities[i]!;
+      if (e.type === "furnace") {
+        this.setFurnaceTile(e.wx, e.wy, e.state);
+        continue;
+      }
+      if (e.type === "spawner") {
+        /**
+         * State is already typed as {@link SpawnerTileState} (see {@link GeneratedStructureEntity});
+         * `normalizeSpawnerTileStateForGeneratedPlacement` is still called for its reset semantics
+         * (drops stale `nextSpawnAtWorldTimeMs` from exported structures), not for type validation.
+         */
+        this.setSpawnerTile(
+          e.wx,
+          e.wy,
+          normalizeSpawnerTileStateForGeneratedPlacement(e.state),
+        );
+        continue;
+      }
+      const anchor = this.getChestStorageAnchorForCell(e.wx, e.wy) ?? {
+        ax: e.wx,
+        ay: e.wy,
+      };
+      const rawItems = e.items ?? [];
+      const items = rawItems.map((s) =>
+        this._toChestItemStackFromStructureEntity(s),
+      );
+      if (items.length === 0) {
+        items.push(...Array.from({ length: CHEST_SINGLE_SLOTS }, () => null));
+      }
+      this.setChestTileAtAnchor(anchor.ax, anchor.ay, {
+        slots: items,
+        ...(e.lootTable !== undefined
+          ? { lootTableId: e.lootTable, lootRolled: false }
+          : {}),
+      });
+    }
   }
 
   /**
@@ -2137,8 +2277,9 @@ export class World {
       this.invalidateSkyTopStripForChunk(coord.cx);
       this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
     } else {
-      this.chunks.putChunk(this._chunkGen(coord));
-      this._applyGeneratedStructureEntitiesForChunk(coord.cx, coord.cy);
+      const { chunk, structureEntities } = await this._generateChunkAsync(coord);
+      this.chunks.putChunk(chunk);
+      this._applyStructureEntitiesPayload(structureEntities);
       this.invalidateSkyTopStripForChunk(coord.cx);
       this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
     }
@@ -2188,6 +2329,16 @@ export class World {
     await this.loadChunksAroundCentre(cx, cy, progressCallback);
     this.streamCentreCx = cx;
     this.streamCentreCy = cy;
+  }
+
+  /**
+   * Release worker-thread resources (terminate the WorldGen worker pool).
+   * Call this before dropping the {@link World} reference so the workers
+   * don't outlive the world (Game.shutdown / world swap).
+   */
+  destroy(): void {
+    this._chunkGenWorkerPool?.destroy();
+    this._chunkGenWorkerPool = null;
   }
 
   /** Snap the streaming centre so gameplay streaming starts from the player's actual position. */
@@ -2327,64 +2478,130 @@ export class World {
     let loaded = 0;
     const tLoad = import.meta.env.DEV ? chunkPerfNow() : 0;
     const records = await this.store.loadChunkBatch(this.worldUuid, pending);
+
+    /**
+     * Bucket pending chunks by source so the procedural-gen pass can fan out across
+     * the worker pool without the cheap DB-hit and host-fetch paths blocking it.
+     * Pending order (Chebyshev-distance sorted above) is preserved within each bucket.
+     */
+    const dbHits: Array<{ coord: ChunkCoord; record: ChunkRecord }> = [];
+    const hostFetches: ChunkCoord[] = [];
+    const toGenerate: ChunkCoord[] = [];
     for (let i = 0; i < pending.length; i++) {
       const coord = pending[i]!;
       const record = records[i];
       if (record !== undefined) {
-        const chunk = this.chunkFromRecord(record);
-        this.chunks.putChunk(chunk);
-        if (record.furnaces !== undefined && record.furnaces.length > 0) {
-          this.applyFurnaceEntitiesForChunk(
-            coord.cx,
-            coord.cy,
-            record.furnaces,
-            this._needsItemIdLayoutMigration,
-          );
-        }
-        if (record.chests !== undefined && record.chests.length > 0) {
-          this.applyChestEntitiesForChunk(
-            coord.cx,
-            coord.cy,
-            record.chests,
-            this._needsItemIdLayoutMigration,
-          );
-        }
-        if (record.spawners !== undefined && record.spawners.length > 0) {
-          this.applySpawnerEntitiesForChunk(coord.cx, coord.cy, record.spawners);
-        }
-        if (record.signs !== undefined && record.signs.length > 0) {
-          this.applySignEntitiesForChunk(coord.cx, coord.cy, record.signs);
-        }
-        this.invalidateSkyTopStripForChunk(coord.cx);
-        this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
-        loaded++;
-        progressCallback?.({
-          loaded,
-          total,
-          source: "db",
-          cx: coord.cx,
-          cy: coord.cy,
-        });
+        dbHits.push({ coord, record });
       } else if (this._authoritativeChunkFetch !== null) {
-        await this._authoritativeChunkFetch(coord.cx, coord.cy);
-        if (this.chunks.getChunk(coord) === undefined) {
-          throw new Error(
-            `Authoritative chunk fetch did not provide (${coord.cx},${coord.cy})`,
-          );
-        }
-        this.invalidateSkyTopStripForChunk(coord.cx);
-        this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
-        loaded++;
-        progressCallback?.({
-          loaded,
-          total,
-          source: "db",
-          cx: coord.cx,
-          cy: coord.cy,
-        });
+        hostFetches.push(coord);
       } else {
-        this.chunks.putChunk(this._chunkGen(coord));
-        this._applyGeneratedStructureEntitiesForChunk(coord.cx, coord.cy);
+        toGenerate.push(coord);
+      }
+    }
+
+    /** DB-hit application is sync (no await between chunks). One yield at the end is enough. */
+    for (const { coord, record } of dbHits) {
+      const chunk = this.chunkFromRecord(record);
+      this.chunks.putChunk(chunk);
+      if (record.furnaces !== undefined && record.furnaces.length > 0) {
+        this.applyFurnaceEntitiesForChunk(
+          coord.cx,
+          coord.cy,
+          record.furnaces,
+          this._needsItemIdLayoutMigration,
+        );
+      }
+      if (record.chests !== undefined && record.chests.length > 0) {
+        this.applyChestEntitiesForChunk(
+          coord.cx,
+          coord.cy,
+          record.chests,
+          this._needsItemIdLayoutMigration,
+        );
+      }
+      if (record.spawners !== undefined && record.spawners.length > 0) {
+        this.applySpawnerEntitiesForChunk(coord.cx, coord.cy, record.spawners);
+      }
+      if (record.signs !== undefined && record.signs.length > 0) {
+        this.applySignEntitiesForChunk(coord.cx, coord.cy, record.signs);
+      }
+      this.invalidateSkyTopStripForChunk(coord.cx);
+      this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
+      loaded++;
+      progressCallback?.({
+        loaded,
+        total,
+        source: "db",
+        cx: coord.cx,
+        cy: coord.cy,
+      });
+    }
+    if (dbHits.length > 0 && loaded < total) {
+      await yieldToNextFrame();
+    }
+
+    /** Host fetches are RPC-bound and must stay sequential (one in-flight per host channel). */
+    for (const coord of hostFetches) {
+      await this._authoritativeChunkFetch!(coord.cx, coord.cy);
+      if (this.chunks.getChunk(coord) === undefined) {
+        throw new Error(
+          `Authoritative chunk fetch did not provide (${coord.cx},${coord.cy})`,
+        );
+      }
+      this.invalidateSkyTopStripForChunk(coord.cx);
+      this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
+      loaded++;
+      progressCallback?.({
+        loaded,
+        total,
+        source: "db",
+        cx: coord.cx,
+        cy: coord.cy,
+      });
+      if (loaded < total) {
+        await yieldToNextFrame();
+      }
+    }
+
+    /**
+     * Procedural gen runs through a sliding-window dispatcher so the worker pool
+     * (size N) keeps up to N chunks in flight at once. When the pool is unavailable
+     * the fallback degrades to concurrency=1 (matches the previous serial behaviour).
+     */
+    if (toGenerate.length > 0) {
+      const concurrency = Math.max(1, this._chunkGenWorkerPool?.size ?? 1);
+      let nextIdx = 0;
+      /**
+       * Fire `progressCallback` once per resolved chunk (monotonic `loaded`) while
+       * still letting the browser paint between bursts — tighter than `concurrency`
+       * so the loading bar does not stair-step when many workers finish in one
+       * microtask checkpoint. Workers stay saturated because `startNext()` runs
+       * before each yield.
+       */
+      const progressYieldStride = Math.min(3, Math.max(1, concurrency));
+      let resolutionsSinceYield = 0;
+      type GenSlot = Promise<{
+        idx: number;
+        coord: ChunkCoord;
+        payload: GeneratedChunkPayload;
+      }>;
+      const inFlight = new Map<number, GenSlot>();
+      const startNext = (): void => {
+        while (nextIdx < toGenerate.length && inFlight.size < concurrency) {
+          const idx = nextIdx++;
+          const coord = toGenerate[idx]!;
+          const slot: GenSlot = this._generateChunkAsync(coord).then(
+            (payload) => ({ idx, coord, payload }),
+          );
+          inFlight.set(idx, slot);
+        }
+      };
+      startNext();
+      while (inFlight.size > 0) {
+        const { idx, coord, payload } = await Promise.race(inFlight.values());
+        inFlight.delete(idx);
+        this.chunks.putChunk(payload.chunk);
+        this._applyStructureEntitiesPayload(payload.structureEntities);
         this.invalidateSkyTopStripForChunk(coord.cx);
         this.markWaterNeighborhoodActiveAtChunk(coord.cx, coord.cy);
         loaded++;
@@ -2395,9 +2612,12 @@ export class World {
           cx: coord.cx,
           cy: coord.cy,
         });
-      }
-      if (loaded < total) {
-        await yieldToNextFrame();
+        resolutionsSinceYield += 1;
+        startNext();
+        if (resolutionsSinceYield >= progressYieldStride && loaded < total) {
+          resolutionsSinceYield = 0;
+          await yieldToNextFrame();
+        }
       }
     }
     if (import.meta.env.DEV && pending.length > 0) {

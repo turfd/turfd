@@ -19,6 +19,7 @@ import {
   type WorldGenType,
 } from "../../core/types";
 import { mountSettingsPanel } from "../settings/mountSettingsPanel";
+import { injectSettingsSharedStyles } from "../settings/settingsSharedStyles";
 import { HOST_PEER_SUFFIX_ALPHABET } from "../../network/hostPeerId";
 import {
   getMyRoomRating,
@@ -353,11 +354,17 @@ function injectStyles(base: string): void {
       }
     }
     .mm-content.mm-content-exit {
-      animation: mm-content-out 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
+      animation: mm-content-out 0.18s cubic-bezier(0.4, 0, 1, 1) both;
       pointer-events: none;
     }
     .mm-content.mm-content-enter {
-      animation: mm-content-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      animation: mm-content-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+      pointer-events: none;
+    }
+    /* While async swap runs (e.g. Settings IndexedDB), keep column hidden: removing
+       mm-content-exit drops the finished animation and would otherwise flash opacity:1. */
+    .mm-content.mm-content-swap-hidden {
+      opacity: 0;
       pointer-events: none;
     }
     .mm-root.mm-root--content-transition .mm-nav {
@@ -497,6 +504,8 @@ function injectStyles(base: string): void {
       font-weight: normal;
     }
     .mm-release-changes-scroll {
+      --mm-release-pad-x: 16px;
+      --mm-release-pad-bottom: 16px;
       position: relative;
       flex: 1 1 auto;
       min-height: min(42vh, 360px);
@@ -508,17 +517,17 @@ function injectStyles(base: string): void {
       font-size: calc(19px + var(--mm-m5-nudge));
       line-height: 1.55;
       color: var(--mm-ink-mid);
-      padding: 14px 16px 16px;
+      padding: 14px var(--mm-release-pad-x) 0;
       box-sizing: border-box;
       /* Opaque fill avoids bright flashes while scrolling (semi-transparent + compositing). */
       background-color: rgb(36, 36, 38);
       border: 1px solid var(--mm-border);
       border-radius: var(--mm-radius-md);
-      corner-shape: squircle;
       scrollbar-gutter: stable;
       scrollbar-width: thin;
       scrollbar-color: var(--mm-border-strong) rgb(36, 36, 38);
       overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
     }
     .mm-release-changes-scroll::-webkit-scrollbar {
       width: 4px;
@@ -530,19 +539,53 @@ function injectStyles(base: string): void {
       background: var(--mm-border-strong);
       border-radius: 4px;
     }
-    .mm-release-changes-scroll.mm-release-changes-scroll--overflow {
-      box-shadow: inset 0 -24px 20px -18px rgba(0, 0, 0, 0.32);
-    }
-    .mm-release-scroll-fade-hint {
+    /* One sticky footer: two separate sticky bottoms (gradient + hint) meant much
+       heavier work per scroll frame (sticky resolution + overlapping layers). */
+    /* Bleed to horizontal padding edges so the fade follows the inner rounded border. */
+    .mm-release-scroll-footer {
       position: sticky;
       bottom: 0;
       z-index: 1;
       display: flex;
+      flex-direction: column;
+      align-items: center;
+      align-self: stretch;
+      box-sizing: border-box;
+      width: calc(100% + 2 * var(--mm-release-pad-x));
+      max-width: none;
+      margin-left: calc(-1 * var(--mm-release-pad-x));
+      margin-right: calc(-1 * var(--mm-release-pad-x));
+      margin-top: -36px;
+      pointer-events: none;
+    }
+    .mm-release-scroll-bottom-shade {
+      width: 100%;
+      flex-shrink: 0;
+      height: 28px;
+      box-sizing: border-box;
+      border-bottom-left-radius: calc(var(--mm-radius-md) - 1px);
+      border-bottom-right-radius: calc(var(--mm-radius-md) - 1px);
+      corner-shape: squircle;
+      background: linear-gradient(
+        to top,
+        rgba(0, 0, 0, 0.36),
+        transparent
+      );
+      visibility: visible;
+    }
+    .mm-release-scroll-bottom-shade.mm-release-scroll-bottom-shade--hidden {
+      visibility: hidden;
+    }
+    .mm-release-scroll-fade-hint {
+      display: flex;
       align-items: center;
       justify-content: center;
       gap: 0.4rem;
-      margin-top: -1.5rem;
-      height: 1.45rem;
+      width: 100%;
+      flex-shrink: 0;
+      min-height: 1.45rem;
+      margin: 0;
+      padding-bottom: 0;
       pointer-events: none;
       font-family: 'BoldPixels', monospace;
       font-size: 14px;
@@ -550,7 +593,6 @@ function injectStyles(base: string): void {
       text-transform: uppercase;
       color: var(--mm-ink-soft);
       opacity: 1;
-      transition: opacity 0.22s ease;
     }
     .mm-release-scroll-fade-hint.mm-release-scroll-fade-hint--hidden {
       opacity: 0;
@@ -570,10 +612,12 @@ function injectStyles(base: string): void {
     .mm-release-changes-scroll .mm-release-changes-empty {
       color: var(--mm-ink-soft);
       margin: 0;
+      padding-bottom: var(--mm-release-pad-bottom);
     }
     /* Full Markdown body (marked + dompurify) */
     .mm-release-changes-md {
       max-width: 100%;
+      padding-bottom: var(--mm-release-pad-bottom);
     }
     .mm-release-changes-md > *:first-child { margin-top: 0; }
     .mm-release-changes-md > *:last-child { margin-bottom: 0; }
@@ -592,7 +636,8 @@ function injectStyles(base: string): void {
     .mm-release-changes-md h2 { font-size: clamp(19px, 2.1vw, 22px); }
     .mm-release-changes-md h3 { font-size: 17px; text-transform: none; letter-spacing: 0.03em; }
     .mm-release-changes-md h4 { font-size: 16px; text-transform: none; }
-    .mm-release-changes-md p { margin: 0 0 0.75em; text-wrap: pretty; }
+    /* "pretty" line balancing is costly on long release notes during scroll/layout. */
+    .mm-release-changes-md p { margin: 0 0 0.75em; text-wrap: wrap; }
     .mm-release-changes-md a {
       color: var(--mm-ink-soft);
       text-decoration: underline;
@@ -660,7 +705,6 @@ function injectStyles(base: string): void {
       padding: 10px 12px;
       overflow-x: auto;
       border-radius: var(--mm-radius-md);
-      corner-shape: squircle;
       border: 1px solid var(--mm-border);
       background: rgba(0, 0, 0, 0.2);
       line-height: 1.45;
@@ -3581,6 +3625,10 @@ function injectStyles(base: string): void {
         transform: none;
         pointer-events: auto;
       }
+      .mm-content.mm-content-swap-hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
       .mm-root.mm-root--content-transition .mm-nav {
         pointer-events: auto;
       }
@@ -3654,6 +3702,10 @@ export class MainMenu {
   ): Promise<MainMenuExit> {
     const base = import.meta.env.BASE_URL;
     injectStyles(base);
+    injectSettingsSharedStyles(base);
+    void store.openDB().catch((err: unknown) => {
+      console.warn("[MainMenu] IndexedDB prewarm failed:", err);
+    });
 
     const prewarmedBackground = opts.prewarmedBackground;
     const canReusePrewarmed = prewarmedBackground?.isLive() === true;
@@ -3812,7 +3864,7 @@ export class MainMenu {
 
       // -- Modal helpers -----------------------------------------------------
       let pendingDeleteUuid: string | null = null;
-      /** Disconnects ResizeObserver / listeners for the release-notes changelog modal. */
+      /** Disconnects observers / listeners for the release-notes changelog modal. */
       let releaseNotesScrollCleanup: (() => void) | null = null;
 
       function closeModal(): void {
@@ -3861,11 +3913,18 @@ export class MainMenu {
         scrollFadeHint.appendChild(scrollArrL);
         scrollFadeHint.appendChild(document.createTextNode(" Scroll. "));
         scrollFadeHint.appendChild(scrollArrR);
-        scrollFadeHint.hidden = true;
         const scrollEndSentinel = document.createElement("div");
         scrollEndSentinel.style.cssText = "width:1px;height:1px;";
+        const scrollBottomShade = document.createElement("div");
+        scrollBottomShade.className = "mm-release-scroll-bottom-shade";
+        scrollBottomShade.setAttribute("aria-hidden", "true");
+        const scrollFooter = document.createElement("div");
+        scrollFooter.className = "mm-release-scroll-footer";
+        scrollFooter.hidden = true;
+        scrollFooter.appendChild(scrollFadeHint);
+        scrollFooter.appendChild(scrollBottomShade);
         scroll.appendChild(scrollEndSentinel);
-        scroll.appendChild(scrollFadeHint);
+        scroll.appendChild(scrollFooter);
 
         const actions = document.createElement("div");
         actions.className = "mm-modal-actions";
@@ -3877,27 +3936,47 @@ export class MainMenu {
         card.appendChild(actions);
         modal.appendChild(card);
 
+        let scrollHintDismissed = false;
         const syncScrollOverflowClass = (): void => {
           const overflow = scroll.scrollHeight > scroll.clientHeight + 2;
           if (overflow) {
-            scroll.classList.add("mm-release-changes-scroll--overflow");
-            scrollFadeHint.hidden = false;
+            scrollFooter.hidden = false;
+            if (!scrollHintDismissed) {
+              scrollFadeHint.classList.remove("mm-release-scroll-fade-hint--hidden");
+            }
           } else {
-            scroll.classList.remove("mm-release-changes-scroll--overflow");
-            scrollFadeHint.hidden = true;
-            scrollFadeHint.classList.remove("mm-release-scroll-fade-hint--hidden");
+            scrollFooter.hidden = true;
+            scrollFadeHint.classList.add("mm-release-scroll-fade-hint--hidden");
+            scrollBottomShade.classList.remove("mm-release-scroll-bottom-shade--hidden");
           }
         };
-        const hintEndObserver = new IntersectionObserver(
+        const onScrollDismissHint = (): void => {
+          if (scrollHintDismissed) {
+            return;
+          }
+          scrollHintDismissed = true;
+          scrollFadeHint.classList.add("mm-release-scroll-fade-hint--hidden");
+          scroll.removeEventListener("scroll", onScrollDismissHint);
+        };
+        scroll.addEventListener("scroll", onScrollDismissHint, { passive: true });
+        const shadeEndObserver = new IntersectionObserver(
           (entries) => {
-            const endVisible = entries.some((entry) => entry.isIntersecting);
-            scrollFadeHint.classList.toggle("mm-release-scroll-fade-hint--hidden", endVisible);
+            const endVisible = entries.some((e) => e.isIntersecting);
+            scrollBottomShade.classList.toggle("mm-release-scroll-bottom-shade--hidden", endVisible);
           },
-          { root: scroll, threshold: 0.95 },
+          { root: scroll, threshold: 0 },
         );
-        hintEndObserver.observe(scrollEndSentinel);
+        shadeEndObserver.observe(scrollEndSentinel);
+        let roScheduled = false;
         const ro = new ResizeObserver(() => {
-          syncScrollOverflowClass();
+          if (roScheduled) {
+            return;
+          }
+          roScheduled = true;
+          requestAnimationFrame(() => {
+            roScheduled = false;
+            syncScrollOverflowClass();
+          });
         });
         ro.observe(scroll);
         syncScrollOverflowClass();
@@ -3906,7 +3985,8 @@ export class MainMenu {
         });
 
         releaseNotesScrollCleanup = (): void => {
-          hintEndObserver.disconnect();
+          scroll.removeEventListener("scroll", onScrollDismissHint);
+          shadeEndObserver.disconnect();
           ro.disconnect();
         };
         closeBtn.addEventListener("click", closeModal);
@@ -4008,7 +4088,11 @@ export class MainMenu {
         const endTransition = (): void => {
           if (myToken !== contentTransitionToken) return;
           setContentTransitionBusy(false);
-          content.classList.remove("mm-content-exit", "mm-content-enter");
+          content.classList.remove(
+            "mm-content-exit",
+            "mm-content-enter",
+            "mm-content-swap-hidden",
+          );
         };
 
         const onSwapError = (err: unknown): void => {
@@ -4019,11 +4103,22 @@ export class MainMenu {
         setContentTransitionBusy(true);
 
         if (reduceMotion) {
-          void Promise.resolve(runSwap()).then(endTransition, onSwapError);
+          content.classList.remove("mm-content-enter", "mm-content-exit");
+          content.classList.add("mm-content-swap-hidden");
+          void Promise.resolve(runSwap())
+            .then(() => {
+              if (myToken !== contentTransitionToken) return;
+              content.classList.remove("mm-content-swap-hidden");
+              endTransition();
+            }, onSwapError);
           return;
         }
 
-        content.classList.remove("mm-content-enter", "mm-content-exit");
+        content.classList.remove(
+          "mm-content-enter",
+          "mm-content-exit",
+          "mm-content-swap-hidden",
+        );
         void content.offsetWidth;
         content.classList.add("mm-content-exit");
 
@@ -4043,12 +4138,14 @@ export class MainMenu {
           content.removeEventListener("animationend", onOutAnimEnd);
           if (myToken !== contentTransitionToken) return;
           content.classList.remove("mm-content-exit");
+          content.classList.add("mm-content-swap-hidden");
 
           void Promise.resolve(runSwap())
             .then(
               () => {
                 if (myToken !== contentTransitionToken) return;
 
+                content.classList.remove("mm-content-swap-hidden");
                 content.classList.remove("mm-content-enter");
                 void content.offsetWidth;
                 content.classList.add("mm-content-enter");
@@ -5489,21 +5586,26 @@ export class MainMenu {
         disposeWorkshop();
         disposeSkin();
         disposeProfile();
-        content.replaceChildren();
         closeModal();
 
         const panel = document.createElement("div");
         panel.className = "mm-panel mm-settings-panel";
-        content.appendChild(panel);
 
-        settingsPanelAbort = new AbortController();
+        const ac = new AbortController();
+        settingsPanelAbort = ac;
         await mountSettingsPanel(panel, {
           store,
           getInstalled: () =>
             workshop?.modRepository.getInstalled() ?? [],
-          signal: settingsPanelAbort.signal,
+          signal: ac.signal,
           audio: sharedAudio,
         });
+        if (ac.signal.aborted) {
+          return;
+        }
+
+        content.replaceChildren();
+        content.appendChild(panel);
       }
 
       // -- Cleanup -----------------------------------------------------------

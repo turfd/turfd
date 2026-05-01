@@ -2165,6 +2165,7 @@ export class Game {
     this.itemAtlasLoader?.destroy();
     this.itemAtlasLoader = null;
     this._blockInteractions = null;
+    this.world?.destroy();
     this.world = null;
     this.bus.clear();
   }
@@ -9259,6 +9260,11 @@ export class Game {
         .sort((a, b) => b.ms - a.ms)
         .slice(0, 5);
       const targeted = this._buildDebugTargetedBlockInfo();
+      const workerPoolStatus = this.world?.getWorkerPoolStatus() ?? {
+        spawned: false,
+        size: 0,
+        pending: 0,
+      };
       const snapshot: DebugHudSnapshot = {
         versionLabel: formatStratumBuildLine(),
         memoryUsedMiB,
@@ -9291,6 +9297,11 @@ export class Game {
         tpsMs: FIXED_TIMESTEP_MS,
         profiler,
         targeted,
+        worldGenPool: {
+          spawned: workerPoolStatus.spawned,
+          size: workerPoolStatus.size,
+          busy: workerPoolStatus.pending,
+        },
       };
       debugHud.sync(this.pipeline, dtSec, snapshot);
     }

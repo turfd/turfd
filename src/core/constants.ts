@@ -586,8 +586,56 @@ export const SPAWN_CHUNK_RADIUS = 5;
 /**
  * Hard upper bound on simultaneously loaded chunks. When exceeded after normal distance
  * eviction, the farthest chunks are evicted regardless of spawn-strip status.
+ *
+ * Sized to comfortably fit the natural simulation ring
+ * `(2 * SIMULATION_DISTANCE_CHUNKS + 1)^2 = 625` plus a small spawn-strip
+ * allowance, so Pass 2 of {@link ChunkManager.updateLoadedChunks} no longer
+ * thrashes by evicting chunks that are still inside the sim ring (which on a
+ * new world forces full procedural regen on the next stream pass).
+ *
+ * Memory: each chunk's typed-array record is ~6 KB raw; mesh state pushes the
+ * effective cost to ~30–50 KB per chunk, so 950 chunks ≈ 30–50 MB — well
+ * within budget on the observed ~110 MB working set.
  */
-export const LOADED_CHUNK_HARD_CAP = 300;
+export const LOADED_CHUNK_HARD_CAP = 950;
+
+/**
+ * When true, {@link World} streaming routes procedural chunk generation
+ * (terrain noise + caves + ores + sediment + sea-level flood + surface
+ * vegetation + structure features) to a dedicated worker pool
+ * (see {@link WorldGenWorkerPool}) instead of running it on the main thread.
+ *
+ * Falls back to the synchronous main-thread path automatically when:
+ *  - the runtime does not support module workers,
+ *  - a worker fails to initialize, or
+ *  - a worker rejects a `generate` request (the per-call promise is caught and
+ *    the sync `_chunkGen` is retried inline).
+ *
+ * Synchronous edit paths (`setBlock` / `setForegroundBlock` /
+ * `setBackgroundBlock` in unloaded chunks) always use the inline `_chunkGen`
+ * regardless of this flag — those callers cannot await.
+ */
+export const WORLDGEN_USE_WORKER = true;
+
+/**
+ * Upper bound on the {@link WorldGenWorkerPool} size.
+ *
+ * The runtime negotiates a smaller value when `navigator.hardwareConcurrency` is
+ * low (the floor is 1, the heuristic is `max(1, hc - 2)`); this constant is
+ * the *cap* applied on top of that heuristic. Sized to balance:
+ *  - **throughput**: chunk gen is embarrassingly parallel and benefits roughly
+ *    linearly until the dispatcher (`World.loadChunksAroundCentre`) saturates,
+ *  - **memory**: each worker re-imports the WorldGenerator module graph and
+ *    holds its own `BlockRegistry` snapshot (~tens of KB),
+ *  - **OS contention**: leaving 2 cores free for the main thread, audio thread,
+ *    GPU thread, and other browser internals avoids preemption stalls under
+ *    load.
+ *
+ * 6 leaves room for the dispatcher to keep enough chunks in flight on
+ * 8-core+ devices while still bounding total worker memory on lower-end
+ * hardware (since the `hc - 2` floor still clamps).
+ */
+export const WORLDGEN_WORKER_POOL_MAX = 6;
 
 /**
  * Maximum number of spawn-strip chunk *columns* (|cx| <= SPAWN_CHUNK_RADIUS) that are
@@ -654,6 +702,24 @@ export const CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD = 5;
  * stack into one ~30 ms vsync-locked frame.
  */
 export const CHUNK_SYNC_BUDGET_MS = 4;
+/**
+ * Hard cap on freshly built chunk meshes per frame in {@link ChunkRenderer.syncChunks}.
+ * New chunks are always rebuilt nearest-first; chunks beyond this cap are simply
+ * skipped this frame and picked up on a subsequent frame's `syncChunks` call
+ * (their `meshes` map entry is still missing so they'll be detected again).
+ *
+ * Sized so a typical "walk into a new chunk row" (≈11 visible new chunks at
+ * view distance 5) spreads across ~3 frames instead of stacking into one
+ * 80–400 ms hitch.
+ */
+export const CHUNK_SYNC_NEW_MESH_MAX_PER_FRAME = 4;
+/**
+ * Soft per-frame wall-clock budget specifically for the new-mesh build pass
+ * (ms). Applied in addition to the dirty-rebuild budget — a frame that already
+ * exhausted {@link CHUNK_SYNC_BUDGET_MS} on dirty work still gets to build at
+ * most one new chunk so the streaming queue can't fully starve.
+ */
+export const CHUNK_SYNC_NEW_MESH_BUDGET_MS = 4;
 
 /** Min interval between render-path `InputManager.updateMouseWorldPos` calls (~60 Hz). */
 export const POINTER_MOVE_THROTTLE_MS = 16;
@@ -960,17 +1026,25 @@ export const WATER_DEPTH_TINT_REFERENCE_WY = -15;
 export const WATER_SEA_LEVEL_WY = 2;
 
 /**
+ * Dry columns ({@link TerrainNoise} base layer, before lake-biome depth blend): lowest allowed surface Y is
+ * `WATER_SEA_LEVEL_WY + this`. Larger ⇒ higher dry valleys; fewer stray ponds where noise alone dipped below sea.
+ * Standing water lakes still spawn where {@link LAKE_BIOME_SCALE_BLOCKS} mask carves terrain down.
+ */
+export const LAND_SURFACE_MIN_CLEARANCE_ABOVE_SEA_BLOCKS = 1;
+
+/**
  * Added to {@link TerrainNoise} base height before lake blending. Fewer shallow seas when land sits higher vs {@link WATER_SEA_LEVEL_WY}.
  */
 export const TERRAIN_BASE_SURFACE_BIAS_BLOCKS = 2;
 
 /**
- * Lake biome: horizontal scale in blocks (simplex input `wx / this`). Larger ⇒ rarer lake regions / wider basins.
+ * Lake biome carve: horizontal noise scale (`wx / this`). Larger ⇒ rarer/smoothed carved basins edge-to-edge.
  */
 export const LAKE_BIOME_SCALE_BLOCKS = 1100;
 
 /**
- * Lake mask (macro noise 0..1): smoothstep edges. Higher band ⇒ fewer, more separated lakes.
+ * Lake mask rarity (macro/micro combine before {@link LAKE_BIOME_INFLUENCE_POW}): raise both smoothstep lows
+ * (in 0–1 noise space) to make carved lakes scarcer without changing dry-land stray water (handled by {@link LAND_SURFACE_MIN_CLEARANCE_ABOVE_SEA_BLOCKS}).
  */
 /** Narrower lake basins vs sea (fewer large “ocean” columns). */
 export const LAKE_BIOME_MACRO_SMOOTH_LOW = 0.962;
