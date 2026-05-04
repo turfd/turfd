@@ -22,6 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `readReleaseNotesFromGit` / Discord dedupe walk `git log --skip`; depth-1 clones break that.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -59,7 +62,11 @@ jobs:
             echo "::warning::DISCORD_CHANGELOG_POST is true but DISCORD_WEBHOOK_URL_CHANGELOG is empty — skipping post."
             exit 0
           fi
+          echo "Posting Discord changelog (cache miss for this notes/version digest)."
           npx tsx scripts/postDiscordChangelog.ts "$GITHUB_WORKSPACE"
+      - name: Discord changelog skipped (dedupe)
+        if: vars.DISCORD_CHANGELOG_POST == 'true' && steps.discord_cache.outputs.cache-hit == 'true'
+        run: 'echo "::notice::Discord changelog skipped — same version+notes digest as a previous run. Bump DISCORD_CHANGELOG_DEDUPE_BUSTER repo variable to force a repost."'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

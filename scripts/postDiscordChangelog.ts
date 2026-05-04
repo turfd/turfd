@@ -1,6 +1,6 @@
 /**
  * POST the latest git release notes to Discord (CI or local).
- * Requires DISCORD_WEBHOOK_URL_CHANGELOG. Skips when [Changes] is empty after trim.
+ * Requires DISCORD_WEBHOOK_URL_CHANGELOG. Skips when git has no release-note text and `mainEmbedImageUrl` is unset.
  *
  * Usage: npx tsx scripts/postDiscordChangelog.ts [repoRoot]
  */
@@ -51,18 +51,25 @@ async function main(): Promise<void> {
   ) as { version: string };
   const { summary, changesMd } = readReleaseNotesFromGit(root);
   const changesTrim = normalizeReleaseTypography(changesMd).trim();
-  if (changesTrim.length === 0) {
-    console.log("skip: empty [Changes] from git");
+  const summaryTrim = normalizeReleaseTypography(summary).trim();
+
+  const img = DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED;
+  const mainImg = trimImageUrl(img.mainEmbedImageUrl);
+  const hasImageOnlyBody = mainImg !== undefined;
+  const hasGitText = summaryTrim.length > 0 || changesTrim.length > 0;
+  if (!hasGitText && !hasImageOnlyBody) {
+    console.log(
+      "skip: no release-note text from git (walk failed or no [Summary] block) and mainEmbedImageUrl is unset",
+    );
     process.exit(0);
   }
 
-  const img = DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED;
   const embeds = buildChangelogDiscordEmbeds({
     version: pkg.version,
     summaryPlain: summary,
     changesMd,
     headerImageUrl: trimImageUrl(img.headerImageUrl),
-    mainEmbedImageUrl: trimImageUrl(img.mainEmbedImageUrl),
+    mainEmbedImageUrl: mainImg,
     footerImageUrl: trimImageUrl(img.footerImageUrl),
     embedColor: parseDiscordEmbedColor(process.env.DISCORD_CHANGELOG_EMBED_COLOR),
   });
