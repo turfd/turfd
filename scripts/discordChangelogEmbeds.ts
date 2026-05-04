@@ -23,12 +23,16 @@ type BuildChangelogDiscordEmbedsOpts = {
   changesMd: string;
   headerImageUrl?: string;
   /**
-   * Full changelog as a single image (second embed, image-only). When set, no markdown descriptions
-   * are sent — the graphic replaces in-Discord text. `version` / summary / changes still drive the
-   * update tool and in-game copy; only the webhook payload is image-only after the banner.
+   * Second / bottom embed, image-only: a single graphic that contains the patch notes (pixels).
+   * First embed is `headerImageUrl` when set. No “middle” card — just banner then this image.
    */
   mainEmbedImageUrl?: string;
   footerImageUrl?: string;
+  /**
+   * When `mainEmbedImageUrl` is set: if `true`, also append Discord markdown from `[Summary]` /
+   * `[Changes]` after the image embeds. Default / omitted = **two image embeds only** (Discohook-style).
+   */
+  includeMarkdownWhenMainImageSet?: boolean;
   embedColor?: number | null;
 };
 
@@ -135,8 +139,52 @@ export function buildChangelogDiscordEmbeds(
   const header = opts.headerImageUrl?.trim();
   const footer = opts.footerImageUrl?.trim();
   const mainImg = opts.mainEmbedImageUrl?.trim();
+  const appendMarkdownAfterImages =
+    mainImg !== undefined &&
+    mainImg.length > 0 &&
+    opts.includeMarkdownWhenMainImageSet === true;
 
-  // Two (or three) image-only embeds: banner, full-notes graphic, optional footer.
+  function appendDescriptionEmbeds(
+    reserveTrailingFooterSlot: boolean,
+    usePlaceholderWhenEmpty: boolean,
+  ): void {
+    const summaryN = normalizeReleaseTypography(opts.summaryPlain.trim());
+    const changesN = normalizeReleaseTypography(opts.changesMd.trim());
+    let body = buildDiscordChangelogBody(summaryN, changesN);
+    if (body.trim().length === 0) {
+      if (!usePlaceholderWhenEmpty) {
+        return;
+      }
+      body = "_No release summary or detailed changes._";
+    }
+
+    const reserved =
+      embeds.length +
+      (reserveTrailingFooterSlot &&
+      footer !== undefined &&
+      footer.length > 0
+        ? 1
+        : 0);
+    const maxTextEmbeds = Math.max(1, DISCORD_WEBHOOK_EMBEDS_MAX - reserved);
+    const chunks = fitChunks(body, maxTextEmbeds);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (chunk === undefined) {
+        continue;
+      }
+      const e: DiscordWebhookEmbed = {
+        description: chunk,
+        color,
+      };
+      if (i === 0) {
+        e.title = `Stratum - ${opts.version}`;
+      }
+      embeds.push(e);
+    }
+  }
+
+  // First embed: banner. Second embed: full-notes graphic. Optional third: footer. No extra cards between.
   if (mainImg !== undefined && mainImg.length > 0) {
     if (header !== undefined && header.length > 0) {
       embeds.push({ color, image: { url: header } });
@@ -145,41 +193,20 @@ export function buildChangelogDiscordEmbeds(
     if (footer !== undefined && footer.length > 0) {
       embeds.push({ color, image: { url: footer } });
     }
+    if (appendMarkdownAfterImages) {
+      appendDescriptionEmbeds(false, false);
+    }
     if (embeds.length > DISCORD_WEBHOOK_EMBEDS_MAX) {
       return embeds.slice(0, DISCORD_WEBHOOK_EMBEDS_MAX);
     }
     return embeds;
   }
 
-  const summaryN = normalizeReleaseTypography(opts.summaryPlain.trim());
-  const changesN = normalizeReleaseTypography(opts.changesMd.trim());
-  let body = buildDiscordChangelogBody(summaryN, changesN);
-  if (body.length === 0) {
-    body = "_No release summary or detailed changes._";
-  }
-
   if (header !== undefined && header.length > 0) {
     embeds.push({ color, image: { url: header } });
   }
 
-  const reserved = embeds.length + (footer !== undefined && footer.length > 0 ? 1 : 0);
-  const maxTextEmbeds = Math.max(1, DISCORD_WEBHOOK_EMBEDS_MAX - reserved);
-  const chunks = fitChunks(body, maxTextEmbeds);
-
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    if (chunk === undefined) {
-      continue;
-    }
-    const e: DiscordWebhookEmbed = {
-      description: chunk,
-      color,
-    };
-    if (i === 0) {
-      e.title = `Stratum - ${opts.version}`;
-    }
-    embeds.push(e);
-  }
+  appendDescriptionEmbeds(true, true);
 
   if (footer !== undefined && footer.length > 0) {
     embeds.push({ color, image: { url: footer } });

@@ -74,7 +74,7 @@ Optional dev-only token for bundled update tooling (see `vite.config.ts`):
 STRATUM_UPDATE_TOOL_TOKEN=...
 ```
 
-Discord changelog **images** are defined only in **[`scripts/discordChangelogImageUrls.ts`](scripts/discordChangelogImageUrls.ts)** (HTTPS URLs in git). With **`mainEmbedImageUrl`** set, the webhook sends **image-only** embeds (banner, then full-notes graphic, optional footer) and no markdown descriptions. Clear **`mainEmbedImageUrl`** to fall back to text embeds from `[Summary]` / `[Changes]`. The **`/stratum/update`** dev preview still shows **live markdown** in the Discord column (banner/footer images apply; the full-notes PNG is webhook-only). Optional embed color for that preview: `DISCORD_CHANGELOG_EMBED_COLOR` in `.env.local` (decimal RGB, e.g. `3447003`).
+Discord changelog **images** are defined only in **[`scripts/discordChangelogImageUrls.ts`](scripts/discordChangelogImageUrls.ts)** (HTTPS URLs in git). The usual webhook layout is **two image-only embeds**: banner (`headerImageUrl`), then a bottom graphic (`mainEmbedImageUrl`) that contains the patch notes as pixels. Optional **`footerImageUrl`** adds a third image embed. Set **`includeMarkdownWhenMainImageSet`** to `true` in that file if you also want `[Summary]` / `[Changes]` as Discord markdown after the images. Clear **`mainEmbedImageUrl`** to use text-only embeds (plus banner/footer images if set). The **`/stratum/update`** dev preview still shows **live markdown** in the Discord column (banner/footer images apply; the bottom PNG is not shown in the tool). Optional embed color for that preview: `DISCORD_CHANGELOG_EMBED_COLOR` in `.env.local` (decimal RGB, e.g. `3447003`).
 
 ### Discord changelog on GitHub Actions
 

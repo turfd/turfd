@@ -2,14 +2,23 @@
  * Discord changelog embed images — source of truth in git.
  *
  * - **headerImageUrl** — first embed: image only (banner).
- * - **mainEmbedImageUrl** — second embed: image only; use a graphic that contains the full patch notes.
- *   When this is non-empty, Discord embeds omit markdown descriptions (graphic is the body).
- * - **footerImageUrl** — optional third image-only embed after the main graphic.
+ * - **mainEmbedImageUrl** — second embed (bottom): image only; PNG should contain the readable patch notes.
+ * - **includeMarkdownWhenMainImageSet** — optional; set `true` to also send `[Summary]` / `[Changes]` as
+ *   Discord markdown after the images. Default is two image embeds only.
+ * - **footerImageUrl** — optional third image-only embed after the bottom graphic (usually empty).
  *
  * CI and the `/stratum/update` preview read only this file (no env overrides).
  */
 
-export const DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED = {
+export type DiscordChangelogImageUrlsCommitted = {
+  headerImageUrl: string;
+  mainEmbedImageUrl: string;
+  footerImageUrl: string;
+  /** Opt-in: also send markdown embeds after the image stack. */
+  includeMarkdownWhenMainImageSet?: boolean;
+};
+
+export const DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED: DiscordChangelogImageUrlsCommitted = {
   headerImageUrl: "https://i.imgur.com/VIbjjom.png",
   mainEmbedImageUrl: "https://i.imgur.com/S3afxkt.png",
   footerImageUrl: "",
