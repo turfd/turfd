@@ -13,6 +13,10 @@ import {
   buildChangelogDiscordEmbeds,
   parseDiscordEmbedColor,
 } from "./discordChangelogEmbeds";
+import {
+  DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED,
+  trimImageUrl,
+} from "./discordChangelogImageUrls";
 import { readReleaseNotesFromGit } from "./readReleaseNotesFromGit";
 import { normalizeReleaseTypography } from "./releaseTypography";
 
@@ -52,13 +56,14 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  const img = DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED;
   const embeds = buildChangelogDiscordEmbeds({
     version: pkg.version,
     summaryPlain: summary,
     changesMd,
-    headerImageUrl: envStr("DISCORD_CHANGELOG_HEADER_IMAGE_URL"),
-    mainEmbedImageUrl: envStr("DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL"),
-    footerImageUrl: envStr("DISCORD_CHANGELOG_FOOTER_IMAGE_URL"),
+    headerImageUrl: trimImageUrl(img.headerImageUrl),
+    mainEmbedImageUrl: trimImageUrl(img.mainEmbedImageUrl),
+    footerImageUrl: trimImageUrl(img.footerImageUrl),
     embedColor: parseDiscordEmbedColor(process.env.DISCORD_CHANGELOG_EMBED_COLOR),
   });
 

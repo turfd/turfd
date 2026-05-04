@@ -4,6 +4,10 @@ import { parse as parseJsonc } from "jsonc-parser";
 import type { Plugin } from "vite";
 import { defineConfig, loadEnv } from "vite";
 import { repoHasGit, updateToolDevPlugin } from "./dev/updateToolDevPlugin";
+import {
+  DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED,
+  trimImageUrl,
+} from "./scripts/discordChangelogImageUrls";
 import { readReleaseNotesFromGit } from "./scripts/readReleaseNotesFromGit";
 
 const pkg = JSON.parse(
@@ -69,12 +73,13 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, root, "");
   const devPlugins: Plugin[] = [];
   if (repoHasGit(root)) {
+    const img = DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED;
     devPlugins.push(
       updateToolDevPlugin({
         toolToken: env.STRATUM_UPDATE_TOOL_TOKEN,
-        discordChangelogHeaderImageUrl: env.DISCORD_CHANGELOG_HEADER_IMAGE_URL,
-        discordChangelogMainEmbedImageUrl: env.DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL,
-        discordChangelogFooterImageUrl: env.DISCORD_CHANGELOG_FOOTER_IMAGE_URL,
+        discordChangelogHeaderImageUrl: trimImageUrl(img.headerImageUrl),
+        discordChangelogMainEmbedImageUrl: trimImageUrl(img.mainEmbedImageUrl),
+        discordChangelogFooterImageUrl: trimImageUrl(img.footerImageUrl),
         discordChangelogEmbedColor: env.DISCORD_CHANGELOG_EMBED_COLOR,
       }),
     );

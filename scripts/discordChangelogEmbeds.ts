@@ -22,7 +22,11 @@ type BuildChangelogDiscordEmbedsOpts = {
   summaryPlain: string;
   changesMd: string;
   headerImageUrl?: string;
-  /** Image on the first body embed (title + description). */
+  /**
+   * Full changelog as a single image (second embed, image-only). When set, no markdown descriptions
+   * are sent — the graphic replaces in-Discord text. `version` / summary / changes still drive the
+   * update tool and in-game copy; only the webhook payload is image-only after the banner.
+   */
   mainEmbedImageUrl?: string;
   footerImageUrl?: string;
   embedColor?: number | null;
@@ -126,6 +130,27 @@ export function parseDiscordEmbedColor(
 export function buildChangelogDiscordEmbeds(
   opts: BuildChangelogDiscordEmbedsOpts,
 ): DiscordWebhookEmbed[] {
+  const embeds: DiscordWebhookEmbed[] = [];
+  const color = opts.embedColor ?? null;
+  const header = opts.headerImageUrl?.trim();
+  const footer = opts.footerImageUrl?.trim();
+  const mainImg = opts.mainEmbedImageUrl?.trim();
+
+  // Two (or three) image-only embeds: banner, full-notes graphic, optional footer.
+  if (mainImg !== undefined && mainImg.length > 0) {
+    if (header !== undefined && header.length > 0) {
+      embeds.push({ color, image: { url: header } });
+    }
+    embeds.push({ color, image: { url: mainImg } });
+    if (footer !== undefined && footer.length > 0) {
+      embeds.push({ color, image: { url: footer } });
+    }
+    if (embeds.length > DISCORD_WEBHOOK_EMBEDS_MAX) {
+      return embeds.slice(0, DISCORD_WEBHOOK_EMBEDS_MAX);
+    }
+    return embeds;
+  }
+
   const summaryN = normalizeReleaseTypography(opts.summaryPlain.trim());
   const changesN = normalizeReleaseTypography(opts.changesMd.trim());
   let body = buildDiscordChangelogBody(summaryN, changesN);
@@ -133,20 +158,14 @@ export function buildChangelogDiscordEmbeds(
     body = "_No release summary or detailed changes._";
   }
 
-  const embeds: DiscordWebhookEmbed[] = [];
-  const color = opts.embedColor ?? null;
-
-  const header = opts.headerImageUrl?.trim();
   if (header !== undefined && header.length > 0) {
     embeds.push({ color, image: { url: header } });
   }
 
-  const footer = opts.footerImageUrl?.trim();
   const reserved = embeds.length + (footer !== undefined && footer.length > 0 ? 1 : 0);
   const maxTextEmbeds = Math.max(1, DISCORD_WEBHOOK_EMBEDS_MAX - reserved);
   const chunks = fitChunks(body, maxTextEmbeds);
 
-  const mainImg = opts.mainEmbedImageUrl?.trim();
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     if (chunk === undefined) {
@@ -158,9 +177,6 @@ export function buildChangelogDiscordEmbeds(
     };
     if (i === 0) {
       e.title = `Stratum - ${opts.version}`;
-      if (mainImg !== undefined && mainImg.length > 0) {
-        e.image = { url: mainImg };
-      }
     }
     embeds.push(e);
   }

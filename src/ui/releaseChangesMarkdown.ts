@@ -43,7 +43,11 @@ export function mountReleaseChangesMarkdown(parent: HTMLElement, md: string): vo
     return;
   }
 
-  const raw = marked.parse(trimmed, { async: false }) as string;
+  const raw = marked.parse(trimmed, {
+    async: false,
+    gfm: true,
+    breaks: true,
+  }) as string;
   const clean = DOMPurify.sanitize(raw, {
     USE_PROFILES: { html: true },
     ADD_TAGS: ["input"],

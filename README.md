@@ -74,14 +74,7 @@ Optional dev-only token for bundled update tooling (see `vite.config.ts`):
 STRATUM_UPDATE_TOOL_TOKEN=...
 ```
 
-Optional **Discord-style images** on the dev-only update page (`/stratum/update` preview column). Same keys work in CI for the webhook payload. Never use a `VITE_*` prefix (these are server-side only):
-
-```env
-DISCORD_CHANGELOG_HEADER_IMAGE_URL=https://...
-DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL=https://...
-DISCORD_CHANGELOG_FOOTER_IMAGE_URL=https://...
-DISCORD_CHANGELOG_EMBED_COLOR=3447003
-```
+Discord changelog **images** are defined only in **[`scripts/discordChangelogImageUrls.ts`](scripts/discordChangelogImageUrls.ts)** (HTTPS URLs in git). With **`mainEmbedImageUrl`** set, the webhook sends **image-only** embeds (banner, then full-notes graphic, optional footer) and no markdown descriptions. Clear **`mainEmbedImageUrl`** to fall back to text embeds from `[Summary]` / `[Changes]`. The **`/stratum/update`** dev preview still shows **live markdown** in the Discord column (banner/footer images apply; the full-notes PNG is webhook-only). Optional embed color for that preview: `DISCORD_CHANGELOG_EMBED_COLOR` in `.env.local` (decimal RGB, e.g. `3447003`).
 
 ### Discord changelog on GitHub Actions
 
@@ -89,7 +82,7 @@ After each successful **`main`** build, the **Deploy to GitHub Pages** workflow 
 
 1. Add repository **secret** `DISCORD_WEBHOOK_URL_CHANGELOG` (your Discord webhook URL).  
 2. Add repository **variable** `DISCORD_CHANGELOG_POST` and set it to `true` (only after the secret exists).  
-3. Optional **secrets**: `DISCORD_CHANGELOG_HEADER_IMAGE_URL`, `DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL`, `DISCORD_CHANGELOG_FOOTER_IMAGE_URL`, `DISCORD_CHANGELOG_EMBED_COLOR` (decimal RGB, e.g. `3447003`).  
+3. Optional **secret** `DISCORD_CHANGELOG_EMBED_COLOR` (decimal RGB, e.g. `3447003`). Banner / footer / main-embed images are set in **[`scripts/discordChangelogImageUrls.ts`](scripts/discordChangelogImageUrls.ts)** only.  
 4. Optional **variable** `DISCORD_CHANGELOG_DEDUPE_BUSTER` — change its value to invalidate the dedupe cache and allow a repost for the same notes.
 
 Posting is **deduped** with `actions/cache` so identical version + notes do not spam on every rebuild. Failures to Discord do not fail the Pages deploy (`continue-on-error`).

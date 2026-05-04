@@ -89,7 +89,7 @@
 
       .ut-layout {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) min(400px, 38vw);
+        grid-template-columns: minmax(0, 1fr) minmax(280px, min(432px, 52vw));
         gap: clamp(1rem, 2.2vw, 1.85rem);
         align-items: start;
       }
@@ -113,47 +113,92 @@
         border: 1px solid var(--mm-border);
         border-radius: var(--mm-radius-md);
         corner-shape: squircle;
-        padding: 1.1rem 1.2rem 1.35rem;
+        padding: 0.85rem 1rem 1rem;
         display: flex;
         flex-direction: column;
-        gap: 0.65rem;
+        gap: 0;
         max-height: min(92vh, 1200px);
         overflow: auto;
         overscroll-behavior: contain;
       }
 
-      .ut-discord-kicker {
-        margin: 0;
-        font-family: "BoldPixels", "Courier New", monospace;
-        font-size: 13px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--mm-ink-soft);
-      }
-
-      .ut-discord-title {
-        margin: 0 0 4px;
-        font-family: "BoldPixels", "Courier New", monospace;
-        font-size: 16px;
-        font-weight: normal;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: var(--mm-ink);
-      }
-
-      .ut-discord-hint {
-        margin: 0 0 8px;
-        font-family: "M5x7", monospace;
-        font-size: calc(14px + var(--mm-m5-nudge));
-        line-height: 1.45;
-        color: var(--mm-ink-mid);
-        letter-spacing: normal;
-      }
-
       .ut-discord-mount {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
+        margin-top: 0;
+      }
+
+      /* Discohook / Discord client column width (~432px). */
+      .dc-preview-shell {
+        max-width: 432px;
+        width: 100%;
+      }
+
+      .dc-message-surface {
+        background: #313338;
+        border-radius: 8px;
+        padding: 12px 14px 14px;
+        box-sizing: border-box;
+      }
+
+      .dc-message-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+      }
+
+      .dc-message-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        background: linear-gradient(145deg, #5865f2, #3c45a5);
+      }
+
+      .dc-message-body {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .dc-message-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px 8px;
+        margin-bottom: 2px;
+        font-family:
+          "gg sans",
+          "Noto Sans",
+          "Helvetica Neue",
+          Helvetica,
+          Arial,
+          sans-serif;
+        line-height: 1.2;
+      }
+
+      .dc-message-name {
+        color: #fff;
+        font-size: 16px;
+        font-weight: 500;
+      }
+
+      .dc-message-badge {
+        background: #5865f2;
+        color: #fff;
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 2px 5px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .dc-message-time {
+        color: #949ba4;
+        font-size: 12px;
+        font-weight: 500;
       }
 
       .ut-discord-empty {
@@ -166,18 +211,21 @@
 
       .dc-embed {
         background: #2b2d31;
-        border-radius: 6px;
+        border-radius: 4px;
         border-left: 4px solid #4e5058;
-        padding: 8px 12px 10px;
+        padding: 0;
         max-width: 100%;
         box-sizing: border-box;
+        overflow: hidden;
       }
 
+      /* Image-only embed: one full-bleed card like Discohook’s first block. */
       .dc-embed--media {
         padding: 0;
         border-left: 0;
         overflow: hidden;
-        background: #1e1f22;
+        background: #2b2d31;
+        border-radius: 4px;
       }
 
       .dc-embed--media img {
@@ -188,7 +236,7 @@
       }
 
       .dc-embed-inner {
-        padding: 8px 12px 10px;
+        padding: 10px 12px 10px;
       }
 
       .dc-embed-title {
@@ -221,6 +269,11 @@
         word-wrap: break-word;
       }
 
+      /* Single newlines → <br> (marked breaks); keep breaks visible like Discord. */
+      .dc-embed-desc br {
+        line-height: 1.45;
+      }
+
       .dc-embed-desc > *:first-child {
         margin-top: 0;
       }
@@ -228,17 +281,79 @@
         margin-bottom: 0;
       }
 
+      /* Paragraph rhythm (browser defaults are easy to lose; blank lines in MD → <p> / new blocks). */
+      .dc-embed-desc p {
+        margin: 0.65em 0;
+      }
+
+      .dc-embed-desc h1 + p,
+      .dc-embed-desc h2 + p,
+      .dc-embed-desc h3 + p,
+      .dc-embed-desc h1 + ul,
+      .dc-embed-desc h2 + ul,
+      .dc-embed-desc h3 + ul,
+      .dc-embed-desc h1 + ol,
+      .dc-embed-desc h2 + ol,
+      .dc-embed-desc h3 + ol {
+        margin-top: 1.1em;
+      }
+
+      /*
+       * # / ## / ### → h1–h3 via marked. Heading scale aligned with discordutils.com/markdown-preview
+       * chat preview (text-2xl / xl / lg ≈ 24 / 20 / 18px). Our chrome is still an embed strip (13px
+       * body), not a full message row—colors/link/code differ slightly from that page’s mock.
+       */
       .dc-embed-desc h1,
       .dc-embed-desc h2,
       .dc-embed-desc h3 {
         color: #fff;
-        font-size: 1.05em;
-        margin: 0.65em 0 0.35em;
-        font-weight: 600;
+        line-height: 1.25;
+        letter-spacing: 0.01em;
       }
 
       .dc-embed-desc h1 {
-        font-size: 1.15em;
+        font-size: 24px;
+        font-weight: 700;
+        margin: 12px 0 10px;
+      }
+
+      .dc-embed-desc h2 {
+        font-size: 20px;
+        font-weight: 600;
+        margin: 10px 0 8px;
+      }
+
+      .dc-embed-desc h3 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 10px 0 10px;
+      }
+
+      /*
+       * Bold-only lines (**Inventory**) — Discord renders these like small section titles with
+       * looser vertical rhythm than a normal paragraph + list.
+       */
+      .dc-embed-desc p:has(> strong:only-child) {
+        color: #fff;
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 1.35;
+        margin: 1.2em 0 0.4em;
+      }
+
+      .dc-embed-desc p:has(> strong:only-child) + ul,
+      .dc-embed-desc p:has(> strong:only-child) + ol {
+        margin-top: 0.25em;
+        margin-bottom: 0.9em;
+      }
+
+      .dc-embed-desc ul + p:has(> strong:only-child),
+      .dc-embed-desc ol + p:has(> strong:only-child) {
+        margin-top: 1.05em;
+      }
+
+      .dc-embed-desc blockquote + p:has(> strong:only-child) {
+        margin-top: 0.75em;
       }
 
       .dc-embed-desc a {
@@ -273,6 +388,27 @@
       .dc-embed-desc ol {
         margin: 0.35em 0;
         padding-left: 1.15rem;
+      }
+
+      /* Markdown images (![](url)) in description — match Discord / Discohook embed media. */
+      .dc-embed-desc img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 4px;
+        vertical-align: middle;
+      }
+
+      .dc-embed-desc p:has(img:only-child) img {
+        display: block;
+        margin: 0.45em 0;
+      }
+
+      .dc-embed .dc-embed--media {
+        margin: 0;
+      }
+
+      .dc-embed .dc-embed--media img {
+        border-radius: 0;
       }
 
       .ut-panel {
@@ -794,6 +930,33 @@
       .release-md p {
         margin: 0 0 0.65em;
       }
+
+      .release-md p:has(> strong:only-child) {
+        color: var(--mm-ink);
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: clamp(15px, 1.5vw, 17px);
+        font-weight: normal;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin: 1.1em 0 0.35em;
+        line-height: 1.25;
+      }
+
+      .release-md p:has(> strong:only-child) + ul,
+      .release-md p:has(> strong:only-child) + ol {
+        margin-top: 0.2em;
+        margin-bottom: 0.85em;
+      }
+
+      .release-md ul + p:has(> strong:only-child),
+      .release-md ol + p:has(> strong:only-child) {
+        margin-top: 1em;
+      }
+
+      .release-md blockquote + p:has(> strong:only-child) {
+        margin-top: 0.65em;
+      }
+
       .release-md a {
         color: var(--mm-ink-soft);
         text-decoration: underline;
@@ -863,6 +1026,17 @@
         background: rgba(0, 0, 0, 0.06);
       }
 
+      .release-md img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 6px;
+        margin: 0.5em 0;
+      }
+
+      .release-md p:has(img:only-child) img {
+        display: block;
+      }
+
       .ut-md-empty {
         color: var(--mm-ink-soft);
         font-style: italic;
@@ -929,7 +1103,6 @@
           </div>
 
           <div class="ut-actions">
-            <button type="button" id="btnPreview" class="ut-btn">Preview</button>
             <button type="button" id="btnCommit" class="ut-btn">Commit &amp; Push</button>
             <button type="button" id="btnReload" class="ut-btn ut-btn--subtle">Refresh</button>
           </div>
@@ -951,16 +1124,24 @@
       </div>
       <aside class="ut-col ut-col-discord" aria-label="Discord changelog preview">
         <div class="ut-discord-panel">
-          <p class="ut-discord-kicker">Webhook payload</p>
-          <h2 class="ut-discord-title">Discord preview</h2>
-          <p class="ut-discord-hint">
-            Same embed JSON the CI webhook sends. In-browser markdown is approximate; the Discord client may differ
-            slightly. Add a teaser above to refresh live.
-          </p>
-          <div id="discordPreviewMount" class="ut-discord-mount">
-            <p class="ut-discord-empty" id="discordPreviewPlaceholder">
-              Add a home-screen teaser to see live previews.
-            </p>
+          <div class="dc-preview-shell">
+            <div class="dc-message-surface">
+              <div class="dc-message-row">
+                <div class="dc-message-avatar" aria-hidden="true"></div>
+                <div class="dc-message-body">
+                  <div class="dc-message-meta">
+                    <span class="dc-message-name">Stratum</span>
+                    <span class="dc-message-badge">APP</span>
+                    <time class="dc-message-time" id="dcPreviewTime" datetime="">—</time>
+                  </div>
+                  <div id="discordPreviewMount" class="ut-discord-mount">
+                    <p class="ut-discord-empty" id="discordPreviewPlaceholder">
+                      Preview updates as you type.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </aside>
@@ -1161,9 +1342,49 @@
         return mdLibPromise;
       }
 
+      /** Match in-game + Discord: LF-only, trim (same as release note normalization start). */
+      function normalizeReleaseMarkdownNewlines(md) {
+        return String(md ?? "")
+          .replace(/\r\n/g, "\n")
+          .replace(/\r/g, "\n")
+          .trim();
+      }
+
+      const MARKED_DISCORD_LIKE = { async: false, gfm: true, breaks: true };
+
+      /** DOMPurify options: GFM from marked, allow task lists + ![](...) images (Discord embed body). */
+      function releaseMarkdownPurifyOptions() {
+        return {
+          USE_PROFILES: { html: true },
+          ADD_TAGS: ["input", "img"],
+          ADD_ATTR: [
+            "type",
+            "checked",
+            "disabled",
+            "class",
+            "src",
+            "alt",
+            "loading",
+            "decoding",
+            "width",
+            "height",
+          ],
+        };
+      }
+
+      function touchDiscordPreviewTimestamp() {
+        const el = document.getElementById("dcPreviewTime");
+        if (!el) return;
+        const d = new Date();
+        if ("dateTime" in el) el.dateTime = d.toISOString();
+        el.textContent =
+          "Today at " +
+          d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      }
+
       function renderChangesMarkdown(container, md, { marked, DOMPurify }) {
         container.replaceChildren();
-        const trimmed = String(md ?? "").trim();
+        const trimmed = normalizeReleaseMarkdownNewlines(md);
         if (trimmed.length === 0) {
           const p = document.createElement("p");
           p.className = "ut-md-empty";
@@ -1171,12 +1392,8 @@
           container.appendChild(p);
           return;
         }
-        const raw = marked.parse(trimmed, { async: false });
-        const clean = DOMPurify.sanitize(raw, {
-          USE_PROFILES: { html: true },
-          ADD_TAGS: ["input"],
-          ADD_ATTR: ["type", "checked", "disabled", "class"],
-        });
+        const raw = marked.parse(trimmed, MARKED_DISCORD_LIKE);
+        const clean = DOMPurify.sanitize(raw, releaseMarkdownPurifyOptions());
         container.innerHTML = clean;
         for (const el of container.querySelectorAll("a[href]")) {
           const href = el.getAttribute("href");
@@ -1185,11 +1402,25 @@
             el.rel = "noopener noreferrer";
           }
         }
+        for (const im of container.querySelectorAll("img[src]")) {
+          if (!im.hasAttribute("loading")) im.loading = "lazy";
+        }
       }
 
-      /** Discord `-# subtext` → markdown-ish line for `marked`. */
-      function preprocessDiscordSubtextForMarked(md) {
-        return String(md ?? "").replace(/^-#\s+(.+)$/gm, "> *$1*");
+      /**
+       * Discord embed description → marked input: CRLF, `-#` subtext, and extra blank lines.
+       * GFM collapses 3+ consecutive newlines to one block break; Discord keeps more vertical gap,
+       * so we insert spacer paragraphs (NBSP) for each extra newline in a run.
+       */
+      function preprocessDiscordEmbedDescriptionMarkdown(md) {
+        const MAX_EXTRA_PARAGRAPH_SPACERS = 12;
+        let s = String(md ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        s = s.replace(/\n{3,}/g, (run) => {
+          const extras = Math.min(run.length - 2, MAX_EXTRA_PARAGRAPH_SPACERS);
+          return "\n\n" + "\u00A0\n\n".repeat(extras);
+        });
+        s = s.replace(/^-#\s+(.+)$/gm, "> *$1*");
+        return s;
       }
 
       function renderDiscordEmbeds(embeds, { marked, DOMPurify }) {
@@ -1237,19 +1468,18 @@
           if (typeof emb?.description === "string" && emb.description.length > 0) {
             const desc = document.createElement("div");
             desc.className = "dc-embed-desc";
-            const pre = preprocessDiscordSubtextForMarked(emb.description);
-            const raw = marked.parse(pre, { async: false });
-            desc.innerHTML = DOMPurify.sanitize(raw, {
-              USE_PROFILES: { html: true },
-              ADD_TAGS: ["input"],
-              ADD_ATTR: ["type", "checked", "disabled", "class"],
-            });
+            const pre = preprocessDiscordEmbedDescriptionMarkdown(emb.description);
+            const raw = marked.parse(pre, MARKED_DISCORD_LIKE);
+            desc.innerHTML = DOMPurify.sanitize(raw, releaseMarkdownPurifyOptions());
             for (const el of desc.querySelectorAll("a[href]")) {
               const href = el.getAttribute("href");
               if (href !== null && /^https?:\/\//i.test(href)) {
                 el.target = "_blank";
                 el.rel = "noopener noreferrer";
               }
+            }
+            for (const im of desc.querySelectorAll("img[src]")) {
+              if (!im.hasAttribute("loading")) im.loading = "lazy";
             }
             inner.appendChild(desc);
           }
@@ -1270,100 +1500,98 @@
 
       let previewDebounceTimer = null;
       let previewInFlight = false;
+      /** When a preview is in flight and inputs change, run again once the current request finishes. */
+      let previewWantsRerun = false;
 
       async function runPreviewUpdate({ silent } = { silent: false }) {
-        if (previewInFlight) return;
-        const p = payload();
-        if (p.summary.trim().length === 0) {
-          previewPanel.hidden = true;
-          discordPreviewMount.replaceChildren();
-          const ph = document.createElement("p");
-          ph.className = "ut-discord-empty";
-          ph.textContent = "Add a home-screen teaser to see live previews.";
-          discordPreviewMount.appendChild(ph);
-          if (!silent) {
-            showBanner("err", "Write the home-screen teaser first so we know how to open the update.");
-          }
+        if (previewInFlight) {
+          previewWantsRerun = true;
           return;
         }
         previewInFlight = true;
-        if (!silent) {
-          hideBanner();
-          clearProgress();
-          setBusy(true);
-          appendProgress("Preparing preview…");
-        } else {
-          hideBanner();
-        }
-        let md;
+        const p = payload();
         try {
-          md = await loadMarkdownLibs();
-        } catch (e) {
-          previewInFlight = false;
+          if (!silent) {
+            hideBanner();
+            clearProgress();
+            setBusy(true);
+            appendProgress("Preparing preview…");
+          } else {
+            hideBanner();
+          }
+          let md;
+          try {
+            md = await loadMarkdownLibs();
+          } catch (e) {
+            if (!silent) {
+              setBusy(false);
+              clearProgress();
+              showBanner(
+                "err",
+                "Couldn’t load the preview helper. Check your internet connection. (" +
+                  (e && e.message ? e.message : String(e)) +
+                  ")",
+              );
+            }
+            return;
+          }
+          if (!silent) appendProgress("Asking your local Stratum page for a sample…");
+          let res;
+          let raw;
+          try {
+            res = await fetch(api("/preview"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...authHeaders() },
+              body: JSON.stringify(p),
+            });
+            raw = await res.text();
+          } catch (e) {
+            if (!silent) {
+              setBusy(false);
+              clearProgress();
+              showBanner(
+                "err",
+                "Preview didn’t reach the page. Is the dev server still running? (" +
+                  (e && e.message ? e.message : String(e)) +
+                  ")",
+              );
+            }
+            return;
+          }
+          let data = {};
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            if (!silent) {
+              setBusy(false);
+              clearProgress();
+              showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
+            }
+            return;
+          }
           if (!silent) {
             setBusy(false);
             clearProgress();
-            showBanner(
-              "err",
-              "Couldn’t load the preview helper. Check your internet connection, then try Preview again. (" +
-                (e && e.message ? e.message : String(e)) +
-                ")",
-            );
           }
-          return;
-        }
-        if (!silent) appendProgress("Asking your local Stratum page for a sample…");
-        let res;
-        let raw;
-        try {
-          res = await fetch(api("/preview"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...authHeaders() },
-            body: JSON.stringify(p),
-          });
-          raw = await res.text();
-        } catch (e) {
-          previewInFlight = false;
+          if (!res.ok) {
+            if (!silent) showBanner("err", data.error ?? res.statusText);
+            return;
+          }
+          previewSubject.textContent = data.commitSubject ?? data.nextVersion ?? "";
+          previewSummary.textContent = data.summaryPlain ?? "";
+          renderChangesMarkdown(previewChanges, data.changesMarkdown ?? "", md);
+          renderDiscordEmbeds(data.discordEmbeds ?? [], md);
+          touchDiscordPreviewTimestamp();
+          previewPanel.hidden = false;
           if (!silent) {
-            setBusy(false);
-            clearProgress();
-            showBanner(
-              "err",
-              "Preview didn’t reach the page. Is the dev server still running? (" +
-                (e && e.message ? e.message : String(e)) +
-                ")",
-            );
+            showBanner("ok", "Players would see version " + data.nextVersion + " on this build.");
           }
-          return;
-        }
-        let data = {};
-        try {
-          data = JSON.parse(raw);
-        } catch {
+        } finally {
           previewInFlight = false;
-          if (!silent) {
-            setBusy(false);
-            clearProgress();
-            showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
+          if (previewWantsRerun) {
+            previewWantsRerun = false;
+            void runPreviewUpdate({ silent: true });
           }
-          return;
-        }
-        previewInFlight = false;
-        if (!silent) {
-          setBusy(false);
-          clearProgress();
-        }
-        if (!res.ok) {
-          if (!silent) showBanner("err", data.error ?? res.statusText);
-          return;
-        }
-        previewSubject.textContent = data.commitSubject ?? data.nextVersion ?? "";
-        previewSummary.textContent = data.summaryPlain ?? "";
-        renderChangesMarkdown(previewChanges, data.changesMarkdown ?? "", md);
-        renderDiscordEmbeds(data.discordEmbeds ?? [], md);
-        previewPanel.hidden = false;
-        if (!silent) {
-          showBanner("ok", "Players would see version " + data.nextVersion + " on this build.");
         }
       }
 
@@ -1378,7 +1606,7 @@
       }
 
       function setBusy(busy) {
-        for (const id of ["btnPreview", "btnCommit", "btnReload"]) {
+        for (const id of ["btnCommit", "btnReload"]) {
           const el = document.getElementById(id);
           if (el) el.disabled = busy;
         }
@@ -1443,11 +1671,6 @@
 
       document.getElementById("btnReload").addEventListener("click", () => void loadState());
 
-      document.getElementById("btnPreview").addEventListener("click", () => {
-        previewPanel.hidden = true;
-        void runPreviewUpdate({ silent: false });
-      });
-
       bumpDd.onChange(() => {
         scheduleDebouncedPreview();
       });
@@ -1468,7 +1691,6 @@
           )
         )
           return;
-        previewPanel.hidden = true;
         hideBanner();
         clearProgress();
         const p = payload();
@@ -1523,9 +1745,11 @@
             (pushOk ? "Saved." : "Saved on this computer; upload to the shared project didn’t finish—ask your team."),
         );
         await loadState();
+        scheduleDebouncedPreview();
       });
 
       await loadState();
+      void runPreviewUpdate({ silent: true });
     </script>
   </body>
 </html>

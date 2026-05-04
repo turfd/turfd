@@ -177,7 +177,6 @@ export function updateToolDevPlugin(options: {
   const {
     toolToken,
     discordChangelogHeaderImageUrl,
-    discordChangelogMainEmbedImageUrl,
     discordChangelogFooterImageUrl,
     discordChangelogEmbedColor,
   } = options;
@@ -286,10 +285,6 @@ export function updateToolDevPlugin(options: {
             }
             const summary = body.summary ?? "";
             const changes = body.changes ?? "";
-            if (summary.trim().length === 0) {
-              json(res, 400, { error: "Summary must not be empty." });
-              return;
-            }
             try {
               const pkgPath = path.join(repoRoot, "package.json");
               const cur = (
@@ -298,12 +293,14 @@ export function updateToolDevPlugin(options: {
               const next = nextVersion(repoRoot, cur, bump, lane);
               const message = assembleCommitMessage(next, summary, changes);
               const parsed = parseCommitBody(message);
+              // Live markdown in the browser: omit `mainEmbedImageUrl` here so descriptions are built from
+              // the form. CI / `postDiscordChangelog.ts` still pass the real URL and post image-only embeds.
               const discordEmbeds = buildChangelogDiscordEmbeds({
                 version: next,
                 summaryPlain: parsed.summary,
                 changesMd: parsed.changesMd,
                 headerImageUrl: discordChangelogHeaderImageUrl,
-                mainEmbedImageUrl: discordChangelogMainEmbedImageUrl,
+                mainEmbedImageUrl: undefined,
                 footerImageUrl: discordChangelogFooterImageUrl,
                 embedColor: parseDiscordEmbedColor(discordChangelogEmbedColor),
               });

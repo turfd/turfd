@@ -5,6 +5,7 @@
 
 export function normalizeReleaseTypography(text: string): string {
   let s = text;
+  s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   s = s.replaceAll("\u201c", '"').replaceAll("\u201d", '"');
   s = s.replaceAll("\u2018", "'").replaceAll("\u2019", "'");
   s = s.replaceAll("\u201a", ",").replaceAll("\u201e", '"');
