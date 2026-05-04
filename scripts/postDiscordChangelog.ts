@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     headerImageUrl: trimImageUrl(img.headerImageUrl),
     mainEmbedImageUrl: mainImg,
     footerImageUrl: trimImageUrl(img.footerImageUrl),
-    includeMarkdownWhenMainImageSet: img.includeMarkdownWhenMainImageSet,
+    omitTextOnMainImageEmbed: img.omitTextOnMainImageEmbed,
     embedColor: parseDiscordEmbedColor(process.env.DISCORD_CHANGELOG_EMBED_COLOR),
   });
 

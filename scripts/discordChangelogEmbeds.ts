@@ -23,16 +23,13 @@ type BuildChangelogDiscordEmbedsOpts = {
   changesMd: string;
   headerImageUrl?: string;
   /**
-   * Second / bottom embed, image-only: a single graphic that contains the patch notes (pixels).
-   * First embed is `headerImageUrl` when set. No “middle” card — just banner then this image.
+   * Second / bottom embed: large `image` plus, when git notes exist, `title` + `description` on the
+   * **same** embed (Discord renders text under the image). First embed is the banner only.
    */
   mainEmbedImageUrl?: string;
   footerImageUrl?: string;
-  /**
-   * When `mainEmbedImageUrl` is set: if `true`, also append Discord markdown from `[Summary]` /
-   * `[Changes]` after the image embeds. Default / omitted = **two image embeds only** (Discohook-style).
-   */
-  includeMarkdownWhenMainImageSet?: boolean;
+  /** When set with `mainEmbedImageUrl`: do not add `description` / `title` on the bottom embed. */
+  omitTextOnMainImageEmbed?: boolean;
   embedColor?: number | null;
 };
 
@@ -139,10 +136,6 @@ export function buildChangelogDiscordEmbeds(
   const header = opts.headerImageUrl?.trim();
   const footer = opts.footerImageUrl?.trim();
   const mainImg = opts.mainEmbedImageUrl?.trim();
-  const appendMarkdownAfterImages =
-    mainImg !== undefined &&
-    mainImg.length > 0 &&
-    opts.includeMarkdownWhenMainImageSet === true;
 
   function appendDescriptionEmbeds(
     reserveTrailingFooterSlot: boolean,
@@ -184,17 +177,42 @@ export function buildChangelogDiscordEmbeds(
     }
   }
 
-  // First embed: banner. Second embed: full-notes graphic. Optional third: footer. No extra cards between.
+  // First embed: banner image only. Second: main graphic + changelog markdown on the same embed.
   if (mainImg !== undefined && mainImg.length > 0) {
     if (header !== undefined && header.length > 0) {
       embeds.push({ color, image: { url: header } });
     }
-    embeds.push({ color, image: { url: mainImg } });
+
+    const summaryN = normalizeReleaseTypography(opts.summaryPlain.trim());
+    const changesN = normalizeReleaseTypography(opts.changesMd.trim());
+    const body = buildDiscordChangelogBody(summaryN, changesN).trim();
+    const h = embeds.length;
+    const f = footer !== undefined && footer.length > 0 ? 1 : 0;
+    const maxChunks = Math.max(1, DISCORD_WEBHOOK_EMBEDS_MAX - h - f);
+
+    const second: DiscordWebhookEmbed = { color, image: { url: mainImg } };
+    const addText =
+      body.length > 0 && opts.omitTextOnMainImageEmbed !== true;
+    if (addText) {
+      second.title = `Stratum - ${opts.version}`;
+      const chunks = fitChunks(body, maxChunks);
+      const first = chunks[0];
+      if (first !== undefined) {
+        second.description = first;
+      }
+      embeds.push(second);
+      for (let i = 1; i < chunks.length; i++) {
+        const ch = chunks[i];
+        if (ch !== undefined) {
+          embeds.push({ color, description: ch });
+        }
+      }
+    } else {
+      embeds.push(second);
+    }
+
     if (footer !== undefined && footer.length > 0) {
       embeds.push({ color, image: { url: footer } });
-    }
-    if (appendMarkdownAfterImages) {
-      appendDescriptionEmbeds(false, false);
     }
     if (embeds.length > DISCORD_WEBHOOK_EMBEDS_MAX) {
       return embeds.slice(0, DISCORD_WEBHOOK_EMBEDS_MAX);
