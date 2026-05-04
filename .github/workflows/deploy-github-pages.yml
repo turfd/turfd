@@ -25,6 +25,14 @@ jobs:
         with:
           # `readReleaseNotesFromGit` / Discord dedupe walk `git log --skip`; depth-1 clones break that.
           fetch-depth: 0
+      - name: Discord changelog — is posting enabled?
+        run: |
+          post="${{ vars.DISCORD_CHANGELOG_POST }}"
+          if [ "$post" = "true" ]; then
+            echo "::notice::Discord changelog: posting enabled (digest + post steps run after build)."
+          else
+            echo "::notice::Discord changelog: posting DISABLED — repo variable DISCORD_CHANGELOG_POST is not exactly \"true\" (current value: \"${post:-<unset>}\"). GitHub → Settings → Secrets and variables → Actions → Variables. Also add secret DISCORD_WEBHOOK_URL_CHANGELOG."
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

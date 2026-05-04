@@ -87,7 +87,7 @@ After each successful **`main`** build, the **Deploy to GitHub Pages** workflow 
 
 Posting is **deduped** with `actions/cache` so identical version + notes do not spam on every rebuild. Failures to Discord do not fail the Pages deploy (`continue-on-error`).
 
-**If the site deploys but Discord stays empty:** open the workflow run → **Post Discord changelog** log (look for `skip:` or webhook errors). **Discord changelog skipped (dedupe)** means the version + notes digest matched a previous run — change **`DISCORD_CHANGELOG_DEDUPE_BUSTER`**. Confirm **`DISCORD_CHANGELOG_POST`** is exactly **`true`** (lowercase) and the webhook **secret** is set. The workflow uses a **full git fetch** so the script can find the latest release commit with `[Summary]` / `[Changes]`.
+**If the site deploys but Discord stays empty:** in the workflow run, expand **Discord changelog — is posting enabled?** If it says posting is disabled, your repo **variable** `DISCORD_CHANGELOG_POST` is missing or not exactly `true` (not `True` / `1`) — when that happens the digest/cache/post steps **do not appear in the log at all**. If posting is enabled, open **Post Discord changelog** (look for `skip:` or webhook errors). **Discord changelog skipped (dedupe)** means the version + notes digest matched a previous run — change **`DISCORD_CHANGELOG_DEDUPE_BUSTER`**. Add secret **`DISCORD_WEBHOOK_URL_CHANGELOG`** if you have not. The workflow uses a **full git fetch** so the script can find the latest release commit with `[Summary]` / `[Changes]`.
 
 Optional: show **Settings → Debug** (in-game profiler). Read at **build** time:
 
