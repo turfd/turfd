@@ -1,5 +1,8 @@
 /** Shift–quick-move: sprite flies along a curved path; size stays fixed (no scale). */
 
+const DST_HIDE_CLASS = "inv-shift-fly-dst-pending";
+const DST_HIDE_DEPTH = "data-inv-shift-fly-pending";
+
 const FLY_Z = 12000;
 const TOTAL_MS = 320;
 const FADE_IN_FR = 0.12;
@@ -41,6 +44,28 @@ function quadBezier(
 
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+}
+
+function beginHideDestinationStack(toSlotEl: HTMLElement): void {
+  const raw = toSlotEl.getAttribute(DST_HIDE_DEPTH);
+  const n = raw === null ? 0 : Number.parseInt(raw, 10) || 0;
+  toSlotEl.setAttribute(DST_HIDE_DEPTH, String(n + 1));
+  toSlotEl.classList.add(DST_HIDE_CLASS);
+}
+
+function endHideDestinationStack(toSlotEl: HTMLElement | null): void {
+  if (toSlotEl === null) {
+    return;
+  }
+  const raw = toSlotEl.getAttribute(DST_HIDE_DEPTH);
+  const n = raw === null ? 0 : Number.parseInt(raw, 10) || 0;
+  const next = n - 1;
+  if (next <= 0) {
+    toSlotEl.removeAttribute(DST_HIDE_DEPTH);
+    toSlotEl.classList.remove(DST_HIDE_CLASS);
+  } else {
+    toSlotEl.setAttribute(DST_HIDE_DEPTH, String(next));
+  }
 }
 
 /** Control point bulges perpendicular to the chord (arc “lift”). */
@@ -104,6 +129,9 @@ export function playShiftSlotFlyAnimation(
 ): void {
   if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
     return;
+  }
+  if (toSlotEl !== null && toSlotEl !== fromSlotEl) {
+    beginHideDestinationStack(toSlotEl);
   }
   const from = fromSlotEl.getBoundingClientRect();
   const { bg, bgPos, bgSize } = slotIconStyle(fromSlotEl);
@@ -174,15 +202,26 @@ export function playShiftSlotFlyAnimation(
   }
 
   fly.style.transition = "none";
+  const dstForCleanup =
+    toSlotEl !== null && toSlotEl !== fromSlotEl ? toSlotEl : null;
+  if (typeof fly.animate !== "function") {
+    fly.remove();
+    endHideDestinationStack(dstForCleanup);
+    return;
+  }
   const anim = fly.animate(keyframes, {
     duration: durationMs,
     easing: "linear",
     fill: "forwards",
   });
-  anim.onfinish = (): void => {
-    fly.remove();
+  const cleanup = (): void => {
+    // Reveal the real slot first while the fly is still in-tree at opacity 0, then drop the
+    // overlay on the next frame so the compositor does not flash empty / double-paint.
+    endHideDestinationStack(dstForCleanup);
+    requestAnimationFrame(() => {
+      fly.remove();
+    });
   };
-  anim.oncancel = (): void => {
-    fly.remove();
-  };
+  anim.onfinish = cleanup;
+  anim.oncancel = cleanup;
 }

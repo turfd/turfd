@@ -32,13 +32,23 @@ const BIOME_MAX_BLOCKS = 250;
 const FOREST_TYPE_SCALE = 400;
 
 /**
- * Desert bands: same order of magnitude as {@link BIOME_MAX_BLOCKS} but a separate
- * noise channel (offset 777) so desert regions are large and independent of forest macro.
+ * Desert bands: lower frequency than {@link BIOME_MAX_BLOCKS} so each desert patch spans
+ * many more blocks (simplex along wx changes slowly).
  */
-const DESERT_SCALE_BLOCKS = 280;
+const DESERT_SCALE_BLOCKS = 460;
 
-/** Raw desert field above this (after smoothstep) counts as desert if forest is sparse. */
-const DESERT_THRESHOLD = 0.63;
+/**
+ * Macro desert field in [0,1] is smoothstepped between these edges; midpoint ~0.60 so
+ * high-noise “caps” are wide enough to feel like biomes, not slivers.
+ */
+const DESERT_SMOOTH_LOW = 0.42;
+const DESERT_SMOOTH_HIGH = 0.78;
+
+/**
+ * Desert only if the macro signal stays “on” across wx ± this offset (noise-only), so
+ * paper-thin spikes from 1D simplex slices never register as desert.
+ */
+const DESERT_MIN_RUN_HALF_WIDTH_BLOCKS = 16;
 
 /** Forest density must stay below this so dense woods are never overridden by desert. */
 const DESERT_MAX_FOREST_DENSITY = 0.22;
@@ -144,15 +154,28 @@ export class TerrainNoise {
 
   /**
    * Large-scale desert biome mask. False when forest density is high so trees and desert
-   * rarely coincide on the same column.
+   * rarely coincide on the same column. Thin noise-only strips are rejected so deserts
+   * are either substantial runs of sand or absent.
    */
   isDesert(wx: number): boolean {
     if (this.getForestDensity(wx) >= DESERT_MAX_FOREST_DENSITY) {
       return false;
     }
+    const h = DESERT_MIN_RUN_HALF_WIDTH_BLOCKS;
+    if (!this.desertMacroHigh(wx)) {
+      return false;
+    }
+    if (!this.desertMacroHigh(wx - h) || !this.desertMacroHigh(wx + h)) {
+      return false;
+    }
+    return true;
+  }
+
+  /** True when the desert macro channel alone says “desert” at this column (no forest gate). */
+  private desertMacroHigh(wx: number): boolean {
     const macroRaw = this.noise2D(wx / DESERT_SCALE_BLOCKS, 777);
     const macro01 = macroRaw * 0.5 + 0.5;
-    const band = smoothstep(DESERT_THRESHOLD - 0.12, DESERT_THRESHOLD + 0.18, macro01);
+    const band = smoothstep(DESERT_SMOOTH_LOW, DESERT_SMOOTH_HIGH, macro01);
     return band >= 0.5;
   }
 }

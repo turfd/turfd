@@ -83,8 +83,196 @@
       }
 
       .ut-wrap {
-        max-width: 52rem;
+        max-width: min(120rem, 100%);
         margin: 0 auto;
+      }
+
+      .ut-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) min(400px, 38vw);
+        gap: clamp(1rem, 2.2vw, 1.85rem);
+        align-items: start;
+      }
+
+      @media (max-width: 960px) {
+        .ut-layout {
+          grid-template-columns: 1fr;
+        }
+        .ut-col-discord {
+          position: static;
+        }
+      }
+
+      .ut-col-discord {
+        position: sticky;
+        top: 1rem;
+      }
+
+      .ut-discord-panel {
+        background: var(--mm-surface-deep);
+        border: 1px solid var(--mm-border);
+        border-radius: var(--mm-radius-md);
+        corner-shape: squircle;
+        padding: 1.1rem 1.2rem 1.35rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+        max-height: min(92vh, 1200px);
+        overflow: auto;
+        overscroll-behavior: contain;
+      }
+
+      .ut-discord-kicker {
+        margin: 0;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--mm-ink-soft);
+      }
+
+      .ut-discord-title {
+        margin: 0 0 4px;
+        font-family: "BoldPixels", "Courier New", monospace;
+        font-size: 16px;
+        font-weight: normal;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--mm-ink);
+      }
+
+      .ut-discord-hint {
+        margin: 0 0 8px;
+        font-family: "M5x7", monospace;
+        font-size: calc(14px + var(--mm-m5-nudge));
+        line-height: 1.45;
+        color: var(--mm-ink-mid);
+        letter-spacing: normal;
+      }
+
+      .ut-discord-mount {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .ut-discord-empty {
+        margin: 0;
+        font-family: "M5x7", monospace;
+        font-size: calc(15px + var(--mm-m5-nudge));
+        color: var(--mm-ink-soft);
+        font-style: italic;
+      }
+
+      .dc-embed {
+        background: #2b2d31;
+        border-radius: 6px;
+        border-left: 4px solid #4e5058;
+        padding: 8px 12px 10px;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+
+      .dc-embed--media {
+        padding: 0;
+        border-left: 0;
+        overflow: hidden;
+        background: #1e1f22;
+      }
+
+      .dc-embed--media img {
+        display: block;
+        width: 100%;
+        height: auto;
+        vertical-align: middle;
+      }
+
+      .dc-embed-inner {
+        padding: 8px 12px 10px;
+      }
+
+      .dc-embed-title {
+        margin: 0 0 6px;
+        color: #fff;
+        font-weight: 600;
+        font-size: 15px;
+        line-height: 1.25;
+        font-family:
+          "gg sans",
+          "Noto Sans",
+          "Helvetica Neue",
+          Helvetica,
+          Arial,
+          sans-serif;
+      }
+
+      .dc-embed-desc {
+        margin: 0;
+        color: #dbdee1;
+        font-size: 13px;
+        line-height: 1.45;
+        font-family:
+          "gg sans",
+          "Noto Sans",
+          "Helvetica Neue",
+          Helvetica,
+          Arial,
+          sans-serif;
+        word-wrap: break-word;
+      }
+
+      .dc-embed-desc > *:first-child {
+        margin-top: 0;
+      }
+      .dc-embed-desc > *:last-child {
+        margin-bottom: 0;
+      }
+
+      .dc-embed-desc h1,
+      .dc-embed-desc h2,
+      .dc-embed-desc h3 {
+        color: #fff;
+        font-size: 1.05em;
+        margin: 0.65em 0 0.35em;
+        font-weight: 600;
+      }
+
+      .dc-embed-desc h1 {
+        font-size: 1.15em;
+      }
+
+      .dc-embed-desc a {
+        color: #00b0f4;
+      }
+
+      .dc-embed-desc code {
+        font-family: ui-monospace, "Cascadia Code", monospace;
+        font-size: 0.92em;
+        background: rgba(0, 0, 0, 0.35);
+        padding: 0.1em 0.3em;
+        border-radius: 3px;
+      }
+
+      .dc-embed-desc pre {
+        margin: 0.5em 0;
+        padding: 8px;
+        background: #1e1f22;
+        border-radius: 4px;
+        overflow: auto;
+        max-height: 12rem;
+      }
+
+      .dc-embed-desc blockquote {
+        margin: 0.4em 0;
+        padding-left: 8px;
+        border-left: 3px solid #4e5058;
+        color: #b5bac1;
+      }
+
+      .dc-embed-desc ul,
+      .dc-embed-desc ol {
+        margin: 0.35em 0;
+        padding-left: 1.15rem;
       }
 
       .ut-panel {
@@ -683,7 +871,8 @@
     </style>
   </head>
   <body class="ut-body">
-    <div class="ut-wrap">
+    <div class="ut-wrap ut-layout">
+      <div class="ut-col ut-col-left">
       <article class="ut-panel">
         <header class="ut-header">
           <p class="ut-kicker">What players see next</p>
@@ -753,12 +942,28 @@
         <div id="previewPanel" class="ut-preview" hidden>
           <div class="ut-preview-h">Version title</div>
           <p id="previewSubject" class="ut-preview-subject"></p>
-          <div class="ut-preview-h">Home teaser</div>
+          <div class="ut-preview-h">Home teaser (in-game)</div>
           <p id="previewSummary" class="ut-preview-summary"></p>
-          <div class="ut-preview-h">Full notes preview</div>
+          <div class="ut-preview-h">Full notes (in-game GFM)</div>
           <div id="previewChanges" class="release-md"></div>
         </div>
       </article>
+      </div>
+      <aside class="ut-col ut-col-discord" aria-label="Discord changelog preview">
+        <div class="ut-discord-panel">
+          <p class="ut-discord-kicker">Webhook payload</p>
+          <h2 class="ut-discord-title">Discord preview</h2>
+          <p class="ut-discord-hint">
+            Same embed JSON the CI webhook sends. In-browser markdown is approximate; the Discord client may differ
+            slightly. Add a teaser above to refresh live.
+          </p>
+          <div id="discordPreviewMount" class="ut-discord-mount">
+            <p class="ut-discord-empty" id="discordPreviewPlaceholder">
+              Add a home-screen teaser to see live previews.
+            </p>
+          </div>
+        </div>
+      </aside>
     </div>
     <script type="module">
       const api = (path) => "/stratum/__update-tool/api" + path;
@@ -767,6 +972,7 @@
       const previewSubject = document.getElementById("previewSubject");
       const previewSummary = document.getElementById("previewSummary");
       const previewChanges = document.getElementById("previewChanges");
+      const discordPreviewMount = document.getElementById("discordPreviewMount");
       const progressPanel = document.getElementById("progressPanel");
       const progressLog = document.getElementById("progressLog");
 
@@ -981,6 +1187,196 @@
         }
       }
 
+      /** Discord `-# subtext` → markdown-ish line for `marked`. */
+      function preprocessDiscordSubtextForMarked(md) {
+        return String(md ?? "").replace(/^-#\s+(.+)$/gm, "> *$1*");
+      }
+
+      function renderDiscordEmbeds(embeds, { marked, DOMPurify }) {
+        discordPreviewMount.replaceChildren();
+        if (!Array.isArray(embeds) || embeds.length === 0) {
+          const p = document.createElement("p");
+          p.className = "ut-discord-empty";
+          p.textContent = "No embeds yet.";
+          discordPreviewMount.appendChild(p);
+          return;
+        }
+        for (const emb of embeds) {
+          const imgUrl = emb?.image?.url;
+          const hasBody =
+            (typeof emb?.title === "string" && emb.title.length > 0) ||
+            (typeof emb?.description === "string" && emb.description.length > 0);
+          if (!hasBody && !(typeof imgUrl === "string" && imgUrl.length > 0)) {
+            continue;
+          }
+          if (typeof imgUrl === "string" && imgUrl.length > 0 && !hasBody) {
+            const wrap = document.createElement("div");
+            wrap.className = "dc-embed dc-embed--media";
+            const img = document.createElement("img");
+            img.src = imgUrl;
+            img.alt = "";
+            img.loading = "lazy";
+            wrap.appendChild(img);
+            discordPreviewMount.appendChild(wrap);
+            continue;
+          }
+          const wrap = document.createElement("div");
+          wrap.className = "dc-embed";
+          const c = emb?.color;
+          if (typeof c === "number" && c >= 0 && c <= 0xffffff) {
+            wrap.style.borderLeftColor = "#" + c.toString(16).padStart(6, "0");
+          }
+          const inner = document.createElement("div");
+          inner.className = "dc-embed-inner";
+          if (typeof emb?.title === "string" && emb.title.length > 0) {
+            const t = document.createElement("div");
+            t.className = "dc-embed-title";
+            t.textContent = emb.title;
+            inner.appendChild(t);
+          }
+          if (typeof emb?.description === "string" && emb.description.length > 0) {
+            const desc = document.createElement("div");
+            desc.className = "dc-embed-desc";
+            const pre = preprocessDiscordSubtextForMarked(emb.description);
+            const raw = marked.parse(pre, { async: false });
+            desc.innerHTML = DOMPurify.sanitize(raw, {
+              USE_PROFILES: { html: true },
+              ADD_TAGS: ["input"],
+              ADD_ATTR: ["type", "checked", "disabled", "class"],
+            });
+            for (const el of desc.querySelectorAll("a[href]")) {
+              const href = el.getAttribute("href");
+              if (href !== null && /^https?:\/\//i.test(href)) {
+                el.target = "_blank";
+                el.rel = "noopener noreferrer";
+              }
+            }
+            inner.appendChild(desc);
+          }
+          wrap.appendChild(inner);
+          if (typeof imgUrl === "string" && imgUrl.length > 0) {
+            const media = document.createElement("div");
+            media.className = "dc-embed--media";
+            const img = document.createElement("img");
+            img.src = imgUrl;
+            img.alt = "";
+            img.loading = "lazy";
+            media.appendChild(img);
+            wrap.appendChild(media);
+          }
+          discordPreviewMount.appendChild(wrap);
+        }
+      }
+
+      let previewDebounceTimer = null;
+      let previewInFlight = false;
+
+      async function runPreviewUpdate({ silent } = { silent: false }) {
+        if (previewInFlight) return;
+        const p = payload();
+        if (p.summary.trim().length === 0) {
+          previewPanel.hidden = true;
+          discordPreviewMount.replaceChildren();
+          const ph = document.createElement("p");
+          ph.className = "ut-discord-empty";
+          ph.textContent = "Add a home-screen teaser to see live previews.";
+          discordPreviewMount.appendChild(ph);
+          if (!silent) {
+            showBanner("err", "Write the home-screen teaser first so we know how to open the update.");
+          }
+          return;
+        }
+        previewInFlight = true;
+        if (!silent) {
+          hideBanner();
+          clearProgress();
+          setBusy(true);
+          appendProgress("Preparing preview…");
+        } else {
+          hideBanner();
+        }
+        let md;
+        try {
+          md = await loadMarkdownLibs();
+        } catch (e) {
+          previewInFlight = false;
+          if (!silent) {
+            setBusy(false);
+            clearProgress();
+            showBanner(
+              "err",
+              "Couldn’t load the preview helper. Check your internet connection, then try Preview again. (" +
+                (e && e.message ? e.message : String(e)) +
+                ")",
+            );
+          }
+          return;
+        }
+        if (!silent) appendProgress("Asking your local Stratum page for a sample…");
+        let res;
+        let raw;
+        try {
+          res = await fetch(api("/preview"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify(p),
+          });
+          raw = await res.text();
+        } catch (e) {
+          previewInFlight = false;
+          if (!silent) {
+            setBusy(false);
+            clearProgress();
+            showBanner(
+              "err",
+              "Preview didn’t reach the page. Is the dev server still running? (" +
+                (e && e.message ? e.message : String(e)) +
+                ")",
+            );
+          }
+          return;
+        }
+        let data = {};
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          previewInFlight = false;
+          if (!silent) {
+            setBusy(false);
+            clearProgress();
+            showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
+          }
+          return;
+        }
+        previewInFlight = false;
+        if (!silent) {
+          setBusy(false);
+          clearProgress();
+        }
+        if (!res.ok) {
+          if (!silent) showBanner("err", data.error ?? res.statusText);
+          return;
+        }
+        previewSubject.textContent = data.commitSubject ?? data.nextVersion ?? "";
+        previewSummary.textContent = data.summaryPlain ?? "";
+        renderChangesMarkdown(previewChanges, data.changesMarkdown ?? "", md);
+        renderDiscordEmbeds(data.discordEmbeds ?? [], md);
+        previewPanel.hidden = false;
+        if (!silent) {
+          showBanner("ok", "Players would see version " + data.nextVersion + " on this build.");
+        }
+      }
+
+      function scheduleDebouncedPreview() {
+        if (previewDebounceTimer !== null) {
+          clearTimeout(previewDebounceTimer);
+        }
+        previewDebounceTimer = setTimeout(() => {
+          previewDebounceTimer = null;
+          void runPreviewUpdate({ silent: true });
+        }, 350);
+      }
+
       function setBusy(busy) {
         for (const id of ["btnPreview", "btnCommit", "btnReload"]) {
           const el = document.getElementById(id);
@@ -1047,72 +1443,22 @@
 
       document.getElementById("btnReload").addEventListener("click", () => void loadState());
 
-      document.getElementById("btnPreview").addEventListener("click", async () => {
+      document.getElementById("btnPreview").addEventListener("click", () => {
         previewPanel.hidden = true;
-        hideBanner();
-        clearProgress();
-        const p = payload();
-        if (p.summary.trim().length === 0) {
-          showBanner("err", "Write the home-screen teaser first so we know how to open the update.");
-          return;
-        }
-        setBusy(true);
-        appendProgress("Preparing preview…");
-        let md;
-        try {
-          md = await loadMarkdownLibs();
-        } catch (e) {
-          setBusy(false);
-          clearProgress();
-          showBanner(
-            "err",
-            "Couldn’t load the preview helper. Check your internet connection, then try Preview again. (" +
-              (e && e.message ? e.message : String(e)) +
-              ")",
-          );
-          return;
-        }
-        appendProgress("Asking your local Stratum page for a sample…");
-        let res;
-        let raw;
-        try {
-          res = await fetch(api("/preview"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...authHeaders() },
-            body: JSON.stringify(p),
-          });
-          raw = await res.text();
-        } catch (e) {
-          setBusy(false);
-          clearProgress();
-          showBanner(
-            "err",
-            "Preview didn’t reach the page. Is the dev server still running? (" +
-              (e && e.message ? e.message : String(e)) +
-              ")",
-          );
-          return;
-        }
-        let data = {};
-        try {
-          data = JSON.parse(raw);
-        } catch {
-          setBusy(false);
-          clearProgress();
-          showBanner("err", res.status + " " + res.statusText + (raw ? ": " + raw.slice(0, 200) : ""));
-          return;
-        }
-        setBusy(false);
-        clearProgress();
-        if (!res.ok) {
-          showBanner("err", data.error ?? res.statusText);
-          return;
-        }
-        previewSubject.textContent = data.commitSubject ?? data.nextVersion ?? "";
-        previewSummary.textContent = data.summaryPlain ?? "";
-        renderChangesMarkdown(previewChanges, data.changesMarkdown ?? "", md);
-        previewPanel.hidden = false;
-        showBanner("ok", "Players would see version " + data.nextVersion + " on this build.");
+        void runPreviewUpdate({ silent: false });
+      });
+
+      bumpDd.onChange(() => {
+        scheduleDebouncedPreview();
+      });
+      laneDd.onChange(() => {
+        scheduleDebouncedPreview();
+      });
+      document.getElementById("summary").addEventListener("input", () => {
+        scheduleDebouncedPreview();
+      });
+      document.getElementById("changes").addEventListener("input", () => {
+        scheduleDebouncedPreview();
       });
 
       document.getElementById("btnCommit").addEventListener("click", async () => {

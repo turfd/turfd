@@ -18,6 +18,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 
+import {
+  buildChangelogDiscordEmbeds,
+  parseDiscordEmbedColor,
+} from "../scripts/discordChangelogEmbeds";
 import { parseCommitBody } from "../scripts/readReleaseNotesFromGit";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -164,8 +168,19 @@ function checkToken(
 export function updateToolDevPlugin(options: {
   /** From `.env.local` key `STRATUM_UPDATE_TOOL_TOKEN` (never `VITE_*`). */
   toolToken?: string;
+  /** Optional Discord-style preview on `/stratum/update` (never `VITE_*`). */
+  discordChangelogHeaderImageUrl?: string;
+  discordChangelogMainEmbedImageUrl?: string;
+  discordChangelogFooterImageUrl?: string;
+  discordChangelogEmbedColor?: string;
 }): Plugin {
-  const { toolToken } = options;
+  const {
+    toolToken,
+    discordChangelogHeaderImageUrl,
+    discordChangelogMainEmbedImageUrl,
+    discordChangelogFooterImageUrl,
+    discordChangelogEmbedColor,
+  } = options;
 
   type Next = (err?: unknown) => void;
 
@@ -283,12 +298,22 @@ export function updateToolDevPlugin(options: {
               const next = nextVersion(repoRoot, cur, bump, lane);
               const message = assembleCommitMessage(next, summary, changes);
               const parsed = parseCommitBody(message);
+              const discordEmbeds = buildChangelogDiscordEmbeds({
+                version: next,
+                summaryPlain: parsed.summary,
+                changesMd: parsed.changesMd,
+                headerImageUrl: discordChangelogHeaderImageUrl,
+                mainEmbedImageUrl: discordChangelogMainEmbedImageUrl,
+                footerImageUrl: discordChangelogFooterImageUrl,
+                embedColor: parseDiscordEmbedColor(discordChangelogEmbedColor),
+              });
               json(res, 200, {
                 nextVersion: next,
                 message,
                 commitSubject: commitSubjectLine(message),
                 summaryPlain: parsed.summary,
                 changesMarkdown: parsed.changesMd,
+                discordEmbeds,
               });
             } catch (e) {
               json(res, 500, {

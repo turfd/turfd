@@ -59,6 +59,11 @@ function modPackJsoncPlugin(): Plugin {
   };
 }
 
+function devModeFromEnv(env: Record<string, string>): boolean {
+  const v = (env.DEV_MODE ?? "").trim().toUpperCase();
+  return v === "TRUE" || v === "1" || v === "YES";
+}
+
 export default defineConfig(({ mode }) => {
   const root = __dirname;
   const env = loadEnv(mode, root, "");
@@ -67,6 +72,10 @@ export default defineConfig(({ mode }) => {
     devPlugins.push(
       updateToolDevPlugin({
         toolToken: env.STRATUM_UPDATE_TOOL_TOKEN,
+        discordChangelogHeaderImageUrl: env.DISCORD_CHANGELOG_HEADER_IMAGE_URL,
+        discordChangelogMainEmbedImageUrl: env.DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL,
+        discordChangelogFooterImageUrl: env.DISCORD_CHANGELOG_FOOTER_IMAGE_URL,
+        discordChangelogEmbedColor: env.DISCORD_CHANGELOG_EMBED_COLOR,
       }),
     );
   }
@@ -76,6 +85,7 @@ export default defineConfig(({ mode }) => {
     __BUILD_ID__: JSON.stringify(buildId),
     __RELEASE_SUMMARY__: JSON.stringify(releaseSummary),
     __RELEASE_CHANGES_MD__: JSON.stringify(releaseChangesMd),
+    __DEV_MODE__: JSON.stringify(devModeFromEnv(env)),
   },
   plugins: [...devPlugins, modPackJsoncPlugin(), emitBuildJsonPlugin()],
   base: "/stratum/",

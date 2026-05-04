@@ -1,14 +1,25 @@
 import type { EventBus } from "../EventBus";
 import type { GameEvent } from "../types";
 import { getStratumBuildInfo } from "../../versionInfo";
+import type { ClientDiagnosticsSnapshot } from "./clientDiagnostics";
+import { collectClientDiagnostics } from "./clientDiagnostics";
 
 type CrashSource = "error" | "unhandledrejection" | "freeze" | "manual_test";
 
 type CrashUiPayload = Extract<GameEvent, { type: "ui:crash-log" }>;
 
+type CrashReportSeverity = "crash" | "error";
+
+export type ModCrashSummary = {
+  modId: string;
+  version: string;
+  name: string;
+};
+
 type CrashReportPayload = {
   crashId: string;
   sessionId: string;
+  severity: CrashReportSeverity;
   source: CrashSource;
   message: string;
   stack: string;
@@ -17,6 +28,15 @@ type CrashReportPayload = {
   userAgent: string;
   timestampIso: string;
   build: ReturnType<typeof getStratumBuildInfo>;
+  diagnostics: ClientDiagnosticsSnapshot;
+  mods: readonly ModCrashSummary[];
+  sim: {
+    tickIndex: number | null;
+    worldTimeMs: number | null;
+    playerBlockX: number | null;
+    playerBlockY: number | null;
+    roomFingerprint: string | null;
+  };
   context: {
     worldName: string | null;
     worldUuid: string | null;
@@ -33,6 +53,8 @@ type CrashReportPayload = {
 type CrashReporterOptions = {
   sendReport: (payload: CrashReportPayload) => Promise<{ ok: boolean; detail?: string }>;
   freezeThresholdMs?: number;
+  /** Workshop / dev packs installed in IndexedDB (best-effort). */
+  getModSummaries?: () => readonly ModCrashSummary[];
 };
 
 type SessionContextPatch = {
@@ -79,10 +101,31 @@ function truncate(s: string, max: number): string {
   return `${s.slice(0, max)}…`;
 }
 
+function severityForSource(source: CrashSource): CrashReportSeverity {
+  return source === "freeze" || source === "manual_test" ? "crash" : "error";
+}
+
+function fingerprintRoomCode(code: string | null): string | null {
+  if (code === null) {
+    return null;
+  }
+  const t = code.trim();
+  if (t === "") {
+    return null;
+  }
+  let h = 2166136261;
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
 function prettyCrashLog(report: CrashReportPayload, sendStatus: string): string {
   return [
     `Crash ID: ${report.crashId}`,
     `Session ID: ${report.sessionId}`,
+    `Severity: ${report.severity}`,
     `Crash source: ${report.source}`,
     `Message: ${report.message}`,
     `Name: ${report.name}`,
@@ -97,6 +140,15 @@ function prettyCrashLog(report: CrashReportPayload, sendStatus: string): string 
         ? "n/a"
         : Math.max(0, Date.now() - report.context.lastRenderAtMs)
     } ago`,
+    `Tick: ${report.sim.tickIndex ?? "n/a"} worldTimeMs: ${report.sim.worldTimeMs ?? "n/a"}`,
+    `Player block: ${report.sim.playerBlockX ?? "n/a"}, ${report.sim.playerBlockY ?? "n/a"}`,
+    `Room fp: ${report.sim.roomFingerprint ?? "n/a"}`,
+    `Viewport: ${report.diagnostics.viewportCss} dpr=${report.diagnostics.devicePixelRatio} screen=${report.diagnostics.screenCss}`,
+    `HW: cores=${report.diagnostics.hardwareConcurrency ?? "?"} memGb=${report.diagnostics.deviceMemoryGb ?? "?"} touch=${report.diagnostics.maxTouchPoints}`,
+    `Locale: ${report.diagnostics.languages} | ${report.diagnostics.timeZone} | online=${report.diagnostics.onLine}`,
+    `WebGL: ${report.diagnostics.webglVendor} | ${report.diagnostics.webglRenderer}`,
+    `Storage MB: used=${report.diagnostics.storageUsedMb ?? "?"} quota=${report.diagnostics.storageQuotaMb ?? "?"}`,
+    `Mods (${report.mods.length}): ${report.mods.map((m) => `${m.name} (${m.modId}@${m.version})`).join("; ") || "none"}`,
     `Report status: ${sendStatus}`,
     "",
     "Recent events:",
@@ -109,6 +161,7 @@ function prettyCrashLog(report: CrashReportPayload, sendStatus: string): string 
 
 export class CrashReporter {
   private readonly sendReport: CrashReporterOptions["sendReport"];
+  private readonly getModSummaries: CrashReporterOptions["getModSummaries"];
   private readonly freezeThresholdMs: number;
   private readonly buildInfo = getStratumBuildInfo();
   private readonly sessionId = createId("session");
@@ -121,6 +174,11 @@ export class CrashReporter {
   private worldUuid: string | null = null;
   private lastCommand: string | null = null;
   private lastUiError: string | null = null;
+  private lastTickIndex: number | null = null;
+  private lastWorldTimeMs: number | null = null;
+  private lastPlayerBlockX: number | null = null;
+  private lastPlayerBlockY: number | null = null;
+  private roomFingerprint: string | null = null;
   private hasCrashed = false;
   private lastSignature = "";
   private lastReportAtMs = 0;
@@ -133,6 +191,7 @@ export class CrashReporter {
 
   constructor(opts: CrashReporterOptions) {
     this.sendReport = opts.sendReport;
+    this.getModSummaries = opts.getModSummaries;
     this.freezeThresholdMs = opts.freezeThresholdMs ?? DEFAULT_FREEZE_THRESHOLD_MS;
   }
 
@@ -177,6 +236,20 @@ export class CrashReporter {
       bus.on("net:error", (e) => {
         this.lastUiError = e.message.slice(0, 240);
         this.addBreadcrumb("net-error", this.lastUiError);
+      }),
+      bus.on("game:tick", (e) => {
+        this.lastTickIndex = e.tickIndex;
+        this.lastWorldTimeMs = e.worldTimeMs;
+      }),
+      bus.on("player:moved", (e) => {
+        this.lastPlayerBlockX = e.blockX;
+        this.lastPlayerBlockY = e.blockY;
+      }),
+      bus.on("net:room-code", (e) => {
+        this.roomFingerprint = fingerprintRoomCode(e.roomCode);
+        if (this.roomFingerprint !== null) {
+          this.addBreadcrumb("room-code", `fp:${this.roomFingerprint}`);
+        }
       }),
     );
     this.lastRenderAtMs = Date.now();
@@ -259,17 +332,35 @@ export class CrashReporter {
     this.lastReportMessage = err.message;
     this.addBreadcrumb("crash-report", `${source} ${err.name}`);
 
+    const diagnostics = await collectClientDiagnostics();
+    const modList = this.getModSummaries?.() ?? [];
+    const mods = modList.map((m) => ({
+      modId: truncate(m.modId, 64),
+      version: truncate(m.version, 32),
+      name: truncate(m.name, 64),
+    }));
+
     const payload: CrashReportPayload = {
       crashId,
       sessionId: this.sessionId,
+      severity: severityForSource(source),
       source,
       name: truncate(err.name, 120),
       message: truncate(err.message, 1800),
-      stack: truncate(err.stack, 7000),
+      stack: truncate(err.stack, 6000),
       url: window.location.href,
       userAgent: navigator.userAgent,
       timestampIso: new Date().toISOString(),
       build: this.buildInfo,
+      diagnostics,
+      mods,
+      sim: {
+        tickIndex: this.lastTickIndex,
+        worldTimeMs: this.lastWorldTimeMs,
+        playerBlockX: this.lastPlayerBlockX,
+        playerBlockY: this.lastPlayerBlockY,
+        roomFingerprint: this.roomFingerprint,
+      },
       context: {
         worldName: this.worldName,
         worldUuid: this.worldUuid,

@@ -13,7 +13,7 @@ import {
   type MultiplayerHostFromMenuSpec,
   type PlayerSavedState,
 } from "./core/Game";
-import { CrashReporter } from "./core/crash/CrashReporter";
+import { CrashReporter, type ModCrashSummary } from "./core/crash/CrashReporter";
 import type { GameEvent, WorldGameMode, WorldGenType } from "./core/types";
 import { normalizeWorldGameMode, normalizeWorldGenType } from "./core/types";
 import { AudioEngine } from "./audio/AudioEngine";
@@ -646,7 +646,11 @@ async function main(): Promise<void> {
   await store.openDB();
   await loadLocalSecretsFile();
   const auth = createAuthProvider();
+  const crashModSummariesRef: {
+    get: (() => readonly ModCrashSummary[]) | null;
+  } = { get: null };
   const crashReporter = new CrashReporter({
+    getModSummaries: () => crashModSummariesRef.get?.() ?? [],
     sendReport: async (payload) => {
       try {
         const url = (import.meta.env.VITE_SUPABASE_URL ?? "").trim();
@@ -706,6 +710,12 @@ async function main(): Promise<void> {
   const menuBus = new EventBus();
   const modRepository = new ModRepository(auth.getSupabaseClient(), store, menuBus);
   await modRepository.init();
+  crashModSummariesRef.get = () =>
+    modRepository.getInstalled().map((m) => ({
+      modId: m.modId,
+      version: m.version,
+      name: m.manifest.name,
+    }));
   wireWorkshopHandlers(menuBus, auth, store, modRepository);
 
   const assetBase = import.meta.env.BASE_URL;

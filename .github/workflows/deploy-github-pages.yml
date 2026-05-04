@@ -11,6 +11,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
   group: pages
@@ -30,6 +31,38 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      - name: Write Discord dedupe digest
+        if: vars.DISCORD_CHANGELOG_POST == 'true'
+        env:
+          DISCORD_CHANGELOG_DEDUPE_BUSTER: ${{ vars.DISCORD_CHANGELOG_DEDUPE_BUSTER }}
+        run: |
+          mkdir -p .cache
+          npx tsx scripts/printDiscordChangelogDedupeKey.ts "$GITHUB_WORKSPACE" > .cache/discord-dedupe.txt
+      - name: Ensure Discord cache marker
+        if: vars.DISCORD_CHANGELOG_POST == 'true'
+        run: mkdir -p .cache && echo ok > .cache/discord-changelog-sentinel
+      - name: Discord changelog cache
+        if: vars.DISCORD_CHANGELOG_POST == 'true'
+        id: discord_cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/discord-changelog-sentinel
+          key: stratum-discord-changelog-${{ hashFiles('.cache/discord-dedupe.txt') }}
+      - name: Post Discord changelog
+        if: vars.DISCORD_CHANGELOG_POST == 'true' && steps.discord_cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK_URL_CHANGELOG: ${{ secrets.DISCORD_WEBHOOK_URL_CHANGELOG }}
+          DISCORD_CHANGELOG_HEADER_IMAGE_URL: ${{ secrets.DISCORD_CHANGELOG_HEADER_IMAGE_URL }}
+          DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL: ${{ secrets.DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL }}
+          DISCORD_CHANGELOG_FOOTER_IMAGE_URL: ${{ secrets.DISCORD_CHANGELOG_FOOTER_IMAGE_URL }}
+          DISCORD_CHANGELOG_EMBED_COLOR: ${{ secrets.DISCORD_CHANGELOG_EMBED_COLOR }}
+        run: |
+          if [ -z "${DISCORD_WEBHOOK_URL_CHANGELOG:-}" ]; then
+            echo "::warning::DISCORD_CHANGELOG_POST is true but DISCORD_WEBHOOK_URL_CHANGELOG is empty — skipping post."
+            exit 0
+          fi
+          npx tsx scripts/postDiscordChangelog.ts "$GITHUB_WORKSPACE"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

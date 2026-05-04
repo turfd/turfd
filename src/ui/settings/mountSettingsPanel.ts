@@ -47,7 +47,15 @@ export type MountSettingsPanelOptions = {
   signal?: AbortSignal;
 };
 
-type SettingsSubTab = "audio" | "controls" | "packs" | "video" | "debug";
+type CoreSettingsSubTab = "audio" | "controls" | "packs" | "video";
+type SettingsSubTab = CoreSettingsSubTab | "debug";
+
+const CORE_SETTINGS_SUB_TABS: readonly CoreSettingsSubTab[] = [
+  "audio",
+  "controls",
+  "packs",
+  "video",
+];
 
 function makeBtn(text: string, ...classes: string[]): HTMLButtonElement {
   const b = document.createElement("button");
@@ -105,26 +113,39 @@ export async function mountSettingsPanel(
   panelVideo.className = "st-settings-tab-panel";
   panelVideo.setAttribute("role", "tabpanel");
 
+  const showProfilerSettings = __DEV_MODE__;
+
   const panelDebug = document.createElement("div");
   panelDebug.className = "st-settings-tab-panel";
   panelDebug.setAttribute("role", "tabpanel");
 
   let activeTab: SettingsSubTab = "audio";
 
-  const tabBtn: Record<SettingsSubTab, HTMLButtonElement> = {
+  const tabBtn: Record<CoreSettingsSubTab, HTMLButtonElement> & { debug?: HTMLButtonElement } = {
     audio: makeBtn("Audio", "st-settings-subtab"),
     controls: makeBtn("Controls", "st-settings-subtab"),
     packs: makeBtn("Texture packs", "st-settings-subtab"),
     video: makeBtn("Video", "st-settings-subtab"),
-    debug: makeBtn("Debug", "st-settings-subtab"),
   };
+  if (showProfilerSettings) {
+    tabBtn.debug = makeBtn("Debug", "st-settings-subtab");
+  }
 
   function setTab(tab: SettingsSubTab): void {
+    if (tab === "debug" && tabBtn.debug === undefined) {
+      return;
+    }
     activeTab = tab;
-    for (const [id, btn] of Object.entries(tabBtn) as [SettingsSubTab, HTMLButtonElement][]) {
+    for (const id of CORE_SETTINGS_SUB_TABS) {
+      const btn = tabBtn[id];
       const on = id === tab;
       btn.classList.toggle("st-settings-subtab--active", on);
       btn.setAttribute("aria-selected", on ? "true" : "false");
+    }
+    if (tabBtn.debug !== undefined) {
+      const on = tab === "debug";
+      tabBtn.debug.classList.toggle("st-settings-subtab--active", on);
+      tabBtn.debug.setAttribute("aria-selected", on ? "true" : "false");
     }
     panelAudio.classList.toggle("st-settings-tab-panel--active", tab === "audio");
     panelControls.classList.toggle("st-settings-tab-panel--active", tab === "controls");
@@ -133,10 +154,16 @@ export async function mountSettingsPanel(
     panelDebug.classList.toggle("st-settings-tab-panel--active", tab === "debug");
   }
 
-  for (const id of ["audio", "controls", "packs", "video", "debug"] as SettingsSubTab[]) {
+  for (const id of CORE_SETTINGS_SUB_TABS) {
     const b = tabBtn[id];
     b.setAttribute("role", "tab");
     b.addEventListener("click", () => setTab(id));
+    tabbar.appendChild(b);
+  }
+  if (tabBtn.debug !== undefined) {
+    const b = tabBtn.debug;
+    b.setAttribute("role", "tab");
+    b.addEventListener("click", () => setTab("debug"));
     tabbar.appendChild(b);
   }
 
@@ -501,54 +528,59 @@ export async function mountSettingsPanel(
     panelVideo.appendChild(row);
   }
 
-  // --- Debug ---
-  const debugTitle = document.createElement("div");
-  debugTitle.className = "st-settings-section";
-  debugTitle.style.marginTop = "0";
-  debugTitle.textContent = "Profiler";
-  panelDebug.appendChild(debugTitle);
-  const debugHint = document.createElement("p");
-  debugHint.className = "st-settings-hint";
-  debugHint.textContent =
-    "Capture a 30-second performance report with bottom-up timings for bug reports. For comparable numbers to shipped builds, run `npm run perf:preview` and capture from that session; JSON includes `meta.productionBundle` and a GPU-track hint. Compare spans such as RenderPipeline.renderWorldToAlbedo, RenderPipeline.compositeRender.appRender, LightingComposer.update.occlusion.* / indirect.* / torchSelection / compositeUniforms, ChunkRenderer.syncChunks, and ChunkRenderer.updateDirtyChunk.";
-  panelDebug.appendChild(debugHint);
-  const startProfilerBtn = makeBtn("Start Profiler", "mm-btn", "mm-btn-secondary");
-  const profilerStatus = document.createElement("div");
-  profilerStatus.className = "st-settings-hint";
-  profilerStatus.textContent = "Idle.";
-  startProfilerBtn.addEventListener("click", () => {
-    if (startProfilerBtn.disabled || opts.bus === undefined) {
-      return;
-    }
-    opts.bus.emit({ type: "ui:perf-capture-start" } satisfies GameEvent);
-    opts.bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
-  });
-  panelDebug.appendChild(startProfilerBtn);
-  panelDebug.appendChild(profilerStatus);
-  if (opts.bus !== undefined) {
-    const offProfilerStatus = opts.bus.on("ui:perf-capture-status", (e) => {
-      startProfilerBtn.disabled = e.status === "capturing";
-      profilerStatus.style.color = e.status === "failed" ? "#ff9f9f" : "";
-      profilerStatus.textContent = e.outputPath
-        ? `${e.message} (${e.outputPath})`
-        : e.message;
+  if (showProfilerSettings) {
+    const debugTitle = document.createElement("div");
+    debugTitle.className = "st-settings-section";
+    debugTitle.style.marginTop = "0";
+    debugTitle.textContent = "Profiler";
+    panelDebug.appendChild(debugTitle);
+    const debugHint = document.createElement("p");
+    debugHint.className = "st-settings-hint";
+    debugHint.textContent =
+      "30s JSON capture (bottom-up). Use `npm run perf:preview` for production-like `meta.productionBundle`.";
+    panelDebug.appendChild(debugHint);
+    const startProfilerBtn = makeBtn("Start Profiler", "mm-btn", "mm-btn-secondary");
+    const profilerStatus = document.createElement("div");
+    profilerStatus.className = "st-settings-hint";
+    profilerStatus.textContent = "Idle.";
+    startProfilerBtn.addEventListener("click", () => {
+      if (startProfilerBtn.disabled || opts.bus === undefined) {
+        return;
+      }
+      opts.bus.emit({ type: "ui:perf-capture-start" } satisfies GameEvent);
+      opts.bus.emit({ type: "ui:close-pause" } satisfies GameEvent);
     });
-    const offProfilerStatusOnAbort = (): void => {
-      offProfilerStatus();
-    };
-    if (opts.signal?.aborted) {
-      offProfilerStatusOnAbort();
-    } else {
-      opts.signal?.addEventListener("abort", offProfilerStatusOnAbort, {
-        once: true,
+    panelDebug.appendChild(startProfilerBtn);
+    panelDebug.appendChild(profilerStatus);
+    if (opts.bus !== undefined) {
+      const offProfilerStatus = opts.bus.on("ui:perf-capture-status", (e) => {
+        startProfilerBtn.disabled = e.status === "capturing";
+        profilerStatus.style.color = e.status === "failed" ? "#ff9f9f" : "";
+        profilerStatus.textContent = e.outputPath
+          ? `${e.message} (${e.outputPath})`
+          : e.message;
       });
+      const offProfilerStatusOnAbort = (): void => {
+        offProfilerStatus();
+      };
+      if (opts.signal?.aborted) {
+        offProfilerStatusOnAbort();
+      } else {
+        opts.signal?.addEventListener("abort", offProfilerStatusOnAbort, {
+          once: true,
+        });
+      }
+    } else {
+      startProfilerBtn.disabled = true;
+      profilerStatus.textContent = "Unavailable from main menu settings.";
     }
-  } else {
-    startProfilerBtn.disabled = true;
-    profilerStatus.textContent = "Unavailable from main menu settings.";
   }
 
-  panelsWrap.append(panelAudio, panelControls, panelPacks, panelVideo, panelDebug);
+  if (showProfilerSettings) {
+    panelsWrap.append(panelAudio, panelControls, panelPacks, panelVideo, panelDebug);
+  } else {
+    panelsWrap.append(panelAudio, panelControls, panelPacks, panelVideo);
+  }
   root.append(title, tabbar, panelsWrap);
   if (opts.signal?.aborted) {
     return;

@@ -9,8 +9,9 @@ const TOTAL_VIEWPORT_CHUNKS = REGION_CHUNKS * REGION_CHUNKS;
 
 /**
  * Solid-cell indirect blending reads cardinal neighbors in scratch space. After a partial
- * light update, edge cells in adjacent chunks still depend on the changed scratch — without
- * widening pass 2, those outputs stay stale and show as vertical seams at chunk boundaries.
+ * light update, edge cells in adjacent chunks still depend on fresh neighbor scratch — pass 2
+ * widens dirty chunks cardinally; pass 1 must refill scratch for that same set (not only the
+ * originally dirty chunks) or seams appear at chunk boundaries on doors / opaque blocks.
  */
 function expandDirtyChunksWithCardinalNeighbors(dirty: Set<string>): Set<string> {
   const out = new Set<string>();
@@ -107,6 +108,13 @@ export class IndirectLightTexture {
       this._allDirty ||
       this._dirtyChunks.size >= TOTAL_VIEWPORT_CHUNKS;
 
+    // Scratch must match pass 2's read set: solid cells blend cardinals from scratch, so when
+    // only chunk A is dirty, chunk B's scratch column along the shared edge must still refresh
+    // or seams appear at doors / opaque blocks (air/torches read chunk arrays directly in pass 2).
+    const partialChunkKeys = fullScan
+      ? null
+      : expandDirtyChunksWithCardinalNeighbors(this._dirtyChunks);
+
     // Pass 1: fill scratch arrays with raw sky/block light values.
     if (fullScan) {
       for (let dcy = 0; dcy < regionChunks; dcy++) {
@@ -114,8 +122,8 @@ export class IndirectLightTexture {
           this._fillScratchChunk(originChunkCX + dcx, originChunkCY + dcy, dcx, dcy, size, scratchSky, scratchBlock, world);
         }
       }
-    } else {
-      for (const key of this._dirtyChunks) {
+    } else if (partialChunkKeys !== null) {
+      for (const key of partialChunkKeys) {
         const comma = key.indexOf(",");
         const cx = Number.parseInt(key.slice(0, comma), 10);
         const cy = Number.parseInt(key.slice(comma + 1), 10);
@@ -128,9 +136,7 @@ export class IndirectLightTexture {
     }
 
     // Pass 2: compute blended indirect light output.
-    const pass2ChunkKeys = fullScan
-      ? null
-      : expandDirtyChunksWithCardinalNeighbors(this._dirtyChunks);
+    const pass2ChunkKeys = fullScan ? null : partialChunkKeys;
     if (fullScan) {
       for (let dcy = 0; dcy < regionChunks; dcy++) {
         for (let dcx = 0; dcx < regionChunks; dcx++) {

@@ -1,10 +1,12 @@
 // Supabase Edge Function: crash-report
 // Receives client crash payloads and forwards compact summaries to Discord.
+// Discord embed combined character limit (title + description + all field names/values): 6000.
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 type CrashReportPayload = {
   crashId?: string;
   sessionId?: string;
+  severity?: "crash" | "error";
   source?: string;
   message?: string;
   stack?: string;
@@ -18,6 +20,30 @@ type CrashReportPayload = {
     wireProtocol?: number;
     minWireProtocol?: number;
     mode?: string;
+    production?: boolean;
+  };
+  diagnostics?: {
+    viewportCss?: string;
+    screenCss?: string;
+    devicePixelRatio?: number;
+    hardwareConcurrency?: number | null;
+    deviceMemoryGb?: number | null;
+    maxTouchPoints?: number;
+    languages?: string;
+    timeZone?: string;
+    onLine?: boolean;
+    webglVendor?: string;
+    webglRenderer?: string;
+    storageUsedMb?: number | null;
+    storageQuotaMb?: number | null;
+  };
+  mods?: readonly { modId?: string; version?: string; name?: string }[];
+  sim?: {
+    tickIndex?: number | null;
+    worldTimeMs?: number | null;
+    playerBlockX?: number | null;
+    playerBlockY?: number | null;
+    roomFingerprint?: string | null;
   };
   context?: {
     worldName?: string | null;
@@ -31,6 +57,11 @@ type CrashReportPayload = {
     recentEvents?: string[];
   };
 };
+
+type DiscordField = { name: string; value: string; inline?: boolean };
+
+const DISCORD_EMBED_TOTAL_MAX = 5800;
+const DISCORD_FIELD_VALUE_MAX = 1024;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -57,17 +88,128 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
+function resolveSeverity(payload: CrashReportPayload): "crash" | "error" {
+  const s = asString(payload.severity).toLowerCase();
+  if (s === "crash" || s === "error") {
+    return s;
+  }
+  const src = asString(payload.source).toLowerCase();
+  if (src === "freeze" || src === "manual_test") {
+    return "crash";
+  }
+  return "error";
+}
+
+function embedCharTotal(title: string, description: string, fields: DiscordField[]): number {
+  let n = title.length + description.length;
+  for (const f of fields) {
+    n += f.name.length + f.value.length;
+  }
+  return n;
+}
+
+/** Shrink longest field values / description until under Discord embed cap. */
+function pickFieldToShrink(fs: DiscordField[]): { index: number; len: number } {
+  let bestNonStack = -1;
+  let lenNon = -1;
+  let bestStack = -1;
+  let lenSt = -1;
+  for (let i = 0; i < fs.length; i++) {
+    const len = fs[i]!.value.length;
+    if (fs[i]!.name.startsWith("Stack")) {
+      if (len > lenSt) {
+        lenSt = len;
+        bestStack = i;
+      }
+    } else if (len > lenNon) {
+      lenNon = len;
+      bestNonStack = i;
+    }
+  }
+  if (bestNonStack >= 0 && lenNon > 120) {
+    return { index: bestNonStack, len: lenNon };
+  }
+  if (bestStack >= 0 && lenSt > 120) {
+    return { index: bestStack, len: lenSt };
+  }
+  if (bestNonStack >= 0) {
+    return { index: bestNonStack, len: lenNon };
+  }
+  return { index: bestStack, len: lenSt };
+}
+
+function shrinkEmbedToBudget(
+  title: string,
+  description: string,
+  fields: DiscordField[],
+  maxTotal: number,
+): { title: string; description: string; fields: DiscordField[] } {
+  let t = title;
+  let d = description;
+  let fs = fields.map((f) => ({ ...f }));
+  let guard = 0;
+  while (embedCharTotal(t, d, fs) > maxTotal && guard++ < 48) {
+    const { index: bestI, len: bestLen } = pickFieldToShrink(fs);
+    if (bestI >= 0 && bestLen > 120) {
+      const cut = Math.max(80, Math.floor(bestLen * 0.65));
+      fs[bestI]!.value = trunc(fs[bestI]!.value.replace(/…$/u, ""), cut);
+      continue;
+    }
+    if (d.length > 120) {
+      d = trunc(d.replace(/…$/u, ""), Math.max(80, Math.floor(d.length * 0.65)));
+      continue;
+    }
+    if (t.length > 40) {
+      t = trunc(t, Math.max(30, Math.floor(t.length * 0.65)));
+      continue;
+    }
+    break;
+  }
+  return { title: t, description: d, fields: fs };
+}
+
+function splitStackFields(stack: string): DiscordField[] {
+  const s = stack.trim();
+  if (s === "") {
+    return [];
+  }
+  const fenceOverhead = 10;
+  const maxInner = DISCORD_FIELD_VALUE_MAX - fenceOverhead;
+  const out: DiscordField[] = [];
+  let i = 0;
+  let part = 1;
+  while (i < s.length && out.length < 4) {
+    const chunk = s.slice(i, i + maxInner);
+    out.push({
+      name: part === 1 ? "Stack" : `Stack (${part})`,
+      value: `\`\`\`\n${chunk}\n\`\`\``,
+      inline: false,
+    });
+    i += maxInner;
+    part++;
+  }
+  return out;
+}
+
+function formatMods(mods: CrashReportPayload["mods"]): string {
+  if (!Array.isArray(mods) || mods.length === 0) {
+    return "none";
+  }
+  const lines = mods.slice(0, 24).map((m) => {
+    const id = trunc(asString(m.modId) || "?", 48);
+    const ver = trunc(asString(m.version) || "?", 24);
+    const nm = trunc(asString(m.name) || id, 48);
+    return `${nm} · ${id}@${ver}`;
+  });
+  return lines.join("\n");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return json({ ok: true });
   }
   if (req.method !== "POST") {
     return json({ ok: false, error: "Method not allowed" }, 405);
-  }
-
-  const webhook = Deno.env.get("DISCORD_WEBHOOK_URL_CRASH")?.trim() ?? "";
-  if (webhook === "") {
-    return json({ ok: false, error: "Missing DISCORD_WEBHOOK_URL_CRASH secret" }, 500);
   }
 
   let payload: CrashReportPayload;
@@ -77,11 +219,23 @@ serve(async (req) => {
     return json({ ok: false, error: "Invalid JSON" }, 400);
   }
 
+  const severity = resolveSeverity(payload);
+  const crashWebhook = Deno.env.get("DISCORD_WEBHOOK_URL_CRASH")?.trim() ?? "";
+  const errorWebhook = Deno.env.get("DISCORD_WEBHOOK_URL_ERROR")?.trim() ?? "";
+  const webhook = severity === "crash" ? crashWebhook : errorWebhook;
+  const missingEnv =
+    severity === "crash"
+      ? "DISCORD_WEBHOOK_URL_CRASH"
+      : "DISCORD_WEBHOOK_URL_ERROR";
+  if (webhook === "") {
+    return json({ ok: false, error: `Missing ${missingEnv} secret` }, 500);
+  }
+
   const source = trunc(asString(payload.source) || "unknown", 60);
   const crashId = trunc(asString(payload.crashId), 80);
   const sessionId = trunc(asString(payload.sessionId), 80);
   const message = trunc(asString(payload.message) || "Unknown crash", 1400);
-  const stack = trunc(asString(payload.stack), 3500);
+  const stack = trunc(asString(payload.stack), 3800);
   const name = trunc(asString(payload.name) || "Error", 120);
   const url = trunc(asString(payload.url), 220);
   const timestampIso = trunc(asString(payload.timestampIso), 80);
@@ -106,49 +260,184 @@ serve(async (req) => {
     : [];
   const recentEvents = trunc(
     recentEventsRaw.length > 0 ? recentEventsRaw.join("\n") : "n/a",
-    1000,
+    900,
   );
   const buildId = trunc(asString(payload.build?.buildId ?? ""), 64);
   const appVersion = trunc(asString(payload.build?.appVersion ?? ""), 32);
   const mode = trunc(asString(payload.build?.mode ?? ""), 32);
+  const wire = Number.isFinite(payload.build?.wireProtocol)
+    ? String(payload.build!.wireProtocol)
+    : "";
+  const wireMin = Number.isFinite(payload.build?.minWireProtocol)
+    ? String(payload.build!.minWireProtocol)
+    : "";
+  const prod =
+    typeof payload.build?.production === "boolean"
+      ? payload.build!.production
+        ? "prod"
+        : "dev"
+      : "";
+
+  const dx = payload.diagnostics;
+  const viewport = trunc(asString(dx?.viewportCss), 24);
+  const screenCss = trunc(asString(dx?.screenCss), 24);
+  const dpr = typeof dx?.devicePixelRatio === "number" && Number.isFinite(dx.devicePixelRatio)
+    ? String(dx.devicePixelRatio)
+    : "?";
+  const cores =
+    dx?.hardwareConcurrency !== null &&
+    dx?.hardwareConcurrency !== undefined &&
+    Number.isFinite(dx.hardwareConcurrency)
+      ? String(dx.hardwareConcurrency)
+      : "?";
+  const memGb =
+    dx?.deviceMemoryGb !== null &&
+    dx?.deviceMemoryGb !== undefined &&
+    Number.isFinite(dx.deviceMemoryGb)
+      ? String(dx.deviceMemoryGb)
+      : "?";
+  const touch =
+    typeof dx?.maxTouchPoints === "number" && Number.isFinite(dx.maxTouchPoints)
+      ? String(dx.maxTouchPoints)
+      : "?";
+  const langs = trunc(asString(dx?.languages), 120);
+  const tz = trunc(asString(dx?.timeZone), 64);
+  const online = typeof dx?.onLine === "boolean" ? (dx.onLine ? "yes" : "no") : "?";
+  const glVendor = trunc(asString(dx?.webglVendor), 200);
+  const glRenderer = trunc(asString(dx?.webglRenderer), 500);
+  const stUsed =
+    dx?.storageUsedMb !== null &&
+    dx?.storageUsedMb !== undefined &&
+    Number.isFinite(dx.storageUsedMb)
+      ? `${dx.storageUsedMb}`
+      : "?";
+  const stQuota =
+    dx?.storageQuotaMb !== null &&
+    dx?.storageQuotaMb !== undefined &&
+    Number.isFinite(dx.storageQuotaMb)
+      ? `${dx.storageQuotaMb}`
+      : "?";
+
+  const sim = payload.sim;
+  const tick =
+    sim?.tickIndex !== null &&
+    sim?.tickIndex !== undefined &&
+    Number.isFinite(sim.tickIndex)
+      ? String(sim.tickIndex)
+      : "n/a";
+  const wtime =
+    sim?.worldTimeMs !== null &&
+    sim?.worldTimeMs !== undefined &&
+    Number.isFinite(sim.worldTimeMs)
+      ? String(sim.worldTimeMs)
+      : "n/a";
+  const pbx =
+    sim?.playerBlockX !== null &&
+    sim?.playerBlockX !== undefined &&
+    Number.isFinite(sim.playerBlockX)
+      ? String(sim.playerBlockX)
+      : "n/a";
+  const pby =
+    sim?.playerBlockY !== null &&
+    sim?.playerBlockY !== undefined &&
+    Number.isFinite(sim.playerBlockY)
+      ? String(sim.playerBlockY)
+      : "n/a";
+  const roomFp = trunc(asString(sim?.roomFingerprint ?? ""), 16);
+  const modsText = trunc(formatMods(payload.mods), 900);
+
+  const isCrash = severity === "crash";
+  let title = `${isCrash ? "Crash" : "Error"}: ${name}`;
+  let description = trunc(message, 1600);
+  const buildLine = trunc(
+    `${appVersion} | ${buildId} | ${mode}${prod ? ` | ${prod}` : ""}${
+      wire !== "" && wireMin !== "" ? ` | wire ${wireMin}–${wire}` : wire !== "" ? ` | wire ${wire}` : ""
+    }`,
+    500,
+  );
+
+  const fields: DiscordField[] = [
+    { name: "Severity", value: severity, inline: true },
+    {
+      name: isCrash ? "Crash ID" : "Report ID",
+      value: crashId || "unknown",
+      inline: false,
+    },
+    { name: "Session ID", value: sessionId || "unknown", inline: false },
+    { name: "Source", value: source || "unknown", inline: true },
+    { name: "Time", value: timestampIso || "unknown", inline: true },
+    { name: "Role", value: role || "unknown", inline: true },
+    { name: "World", value: worldName || "unknown", inline: true },
+    { name: "World UUID", value: worldUuid || "n/a", inline: true },
+    { name: "Last command", value: lastCommand || "n/a", inline: false },
+    { name: "Last UI error", value: lastUiError || "n/a", inline: false },
+    {
+      name: "Render / visibility",
+      value: trunc(
+        `${lastRenderAge || "n/a"} | threshold ${freezeThreshold || "n/a"} | ${visibility || "unknown"}`,
+        DISCORD_FIELD_VALUE_MAX,
+      ),
+      inline: false,
+    },
+    { name: "Recent events", value: trunc(recentEvents, DISCORD_FIELD_VALUE_MAX), inline: false },
+    { name: "URL", value: url || "n/a", inline: false },
+    { name: "Build", value: buildLine, inline: false },
+    { name: "UA", value: trunc(userAgent || "n/a", DISCORD_FIELD_VALUE_MAX), inline: false },
+    {
+      name: "Viewport / locale",
+      value: trunc(
+        `css ${viewport || "?"} | screen ${screenCss || "?"} | dpr ${dpr}\n${langs || "?"} | ${tz || "?"} | online ${online}`,
+        DISCORD_FIELD_VALUE_MAX,
+      ),
+      inline: false,
+    },
+    {
+      name: "Hardware",
+      value: trunc(`cores ${cores} | deviceMemoryGb ${memGb} | maxTouch ${touch}`, DISCORD_FIELD_VALUE_MAX),
+      inline: false,
+    },
+    {
+      name: "WebGL",
+      value: trunc(`${glVendor}\n${glRenderer}`, DISCORD_FIELD_VALUE_MAX),
+      inline: false,
+    },
+    {
+      name: "Storage (MB)",
+      value: trunc(`used ${stUsed} | quota ${stQuota}`, DISCORD_FIELD_VALUE_MAX),
+      inline: false,
+    },
+    {
+      name: "Simulation",
+      value: trunc(
+        `tick ${tick} | worldTimeMs ${wtime}\nblock ${pbx}, ${pby} | room fp ${roomFp || "n/a"}`,
+        DISCORD_FIELD_VALUE_MAX,
+      ),
+      inline: false,
+    },
+    { name: "Mods", value: trunc(modsText, DISCORD_FIELD_VALUE_MAX), inline: false },
+    ...splitStackFields(stack),
+  ];
+
+  const shrunk = shrinkEmbedToBudget(title, description, fields, DISCORD_EMBED_TOTAL_MAX);
+  title = shrunk.title;
+  description = shrunk.description;
+  const finalFields = shrunk.fields.map((f) => ({
+    ...f,
+    name: trunc(f.name, 240),
+    value: trunc(f.value, DISCORD_FIELD_VALUE_MAX),
+  }));
 
   const discordBody = {
-    username: "Stratum Crash Reporter",
+    username: isCrash ? "Stratum Crash Reporter" : "Stratum Error Reporter",
     embeds: [
       {
-        title: `Crash: ${name}`,
-        description: trunc(message, 1800),
-        color: 0xd14b4b,
-        fields: [
-          { name: "Crash ID", value: crashId || "unknown", inline: false },
-          { name: "Session ID", value: sessionId || "unknown", inline: false },
-          { name: "Source", value: source || "unknown", inline: true },
-          { name: "Time", value: timestampIso || "unknown", inline: true },
-          { name: "Role", value: role || "unknown", inline: true },
-          { name: "World", value: worldName || "unknown", inline: true },
-          { name: "World UUID", value: worldUuid || "n/a", inline: true },
-          { name: "Last command", value: lastCommand || "n/a", inline: false },
-          { name: "Last UI error", value: lastUiError || "n/a", inline: false },
-          {
-            name: "Render/Visibility",
-            value: `${lastRenderAge || "n/a"} | threshold ${freezeThreshold || "n/a"} | ${visibility || "unknown"}`,
-            inline: false,
-          },
-          { name: "Recent events", value: recentEvents, inline: false },
-          { name: "URL", value: url || "n/a", inline: false },
-          { name: "Build", value: `${appVersion} | ${buildId} | ${mode}`, inline: false },
-          { name: "UA", value: userAgent || "n/a", inline: false },
-        ],
+        title,
+        description,
+        color: isCrash ? 0xd14b4b : 0xe67e22,
+        fields: finalFields,
       },
     ],
   };
-  if (stack.trim() !== "") {
-    discordBody.embeds[0]!.fields.push({
-      name: "Stack",
-      value: `\`\`\`\n${stack}\n\`\`\``,
-      inline: false,
-    });
-  }
 
   const res = await fetch(webhook, {
     method: "POST",

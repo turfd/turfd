@@ -74,6 +74,32 @@ Optional dev-only token for bundled update tooling (see `vite.config.ts`):
 STRATUM_UPDATE_TOOL_TOKEN=...
 ```
 
+Optional **Discord-style images** on the dev-only update page (`/stratum/update` preview column). Same keys work in CI for the webhook payload. Never use a `VITE_*` prefix (these are server-side only):
+
+```env
+DISCORD_CHANGELOG_HEADER_IMAGE_URL=https://...
+DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL=https://...
+DISCORD_CHANGELOG_FOOTER_IMAGE_URL=https://...
+DISCORD_CHANGELOG_EMBED_COLOR=3447003
+```
+
+### Discord changelog on GitHub Actions
+
+After each successful **`main`** build, the **Deploy to GitHub Pages** workflow can POST the same `[Summary]` / `[Changes]` text embedded in the app to Discord.
+
+1. Add repository **secret** `DISCORD_WEBHOOK_URL_CHANGELOG` (your Discord webhook URL).  
+2. Add repository **variable** `DISCORD_CHANGELOG_POST` and set it to `true` (only after the secret exists).  
+3. Optional **secrets**: `DISCORD_CHANGELOG_HEADER_IMAGE_URL`, `DISCORD_CHANGELOG_MAIN_EMBED_IMAGE_URL`, `DISCORD_CHANGELOG_FOOTER_IMAGE_URL`, `DISCORD_CHANGELOG_EMBED_COLOR` (decimal RGB, e.g. `3447003`).  
+4. Optional **variable** `DISCORD_CHANGELOG_DEDUPE_BUSTER` — change its value to invalidate the dedupe cache and allow a repost for the same notes.
+
+Posting is **deduped** with `actions/cache` so identical version + notes do not spam on every rebuild. Failures to Discord do not fail the Pages deploy (`continue-on-error`).
+
+Optional: show **Settings → Debug** (in-game profiler). Read at **build** time:
+
+```env
+DEV_MODE=TRUE
+```
+
 ### Useful scripts
 
 | Command | Purpose |
@@ -83,6 +109,8 @@ STRATUM_UPDATE_TOOL_TOKEN=...
 | `npm run preview` | Preview production build |
 | `npm run perf:preview` | Build then preview (profiling workflows) |
 | `npm run knip` | Find unused exports / dead files (`knip.json`) |
+| `npm run changelog:discord` | POST current git release notes to Discord (`DISCORD_WEBHOOK_URL_CHANGELOG` required) |
+| `npm run changelog:discord:dedupe-key` | Print the CI dedupe hash for the current repo state |
 
 ### Project layout (short)
 

@@ -229,6 +229,10 @@ function tryPlaceBedPair(
   return true;
 }
 
+function doorTopIdentifierFromBottom(bottomIdentifier: string): string {
+  return `${bottomIdentifier}_top`;
+}
+
 function tryPlaceDoorPair(
   world: World,
   registry: BlockRegistry,
@@ -238,8 +242,25 @@ function tryPlaceDoorPair(
   wx: number,
   wy: number,
   hingeRight: boolean,
+  bottomBlockId: number,
 ): boolean {
-  const placesBlockId = registry.getByIdentifier("stratum:oak_door_bottom").id;
+  let placesBlockId = bottomBlockId;
+  let bottomDef = registry.getById(placesBlockId);
+  if (placesBlockId === 0) {
+    // Older clients sent no block id for doors; default to oak.
+    placesBlockId = registry.getByIdentifier("stratum:oak_door").id;
+    bottomDef = registry.getById(placesBlockId);
+  }
+  if (bottomDef === undefined || bottomDef.doorHalf !== "bottom") {
+    return false;
+  }
+  const topDef = registry.getByIdentifier(
+    doorTopIdentifierFromBottom(bottomDef.identifier),
+  );
+  if (topDef === undefined || topDef.doorHalf !== "top") {
+    return false;
+  }
+  const topId = topDef.id;
   const cell = world.getBlock(wx, wy);
   const canPlaceInCell =
     cell.id === airId || cell.replaceable || cell.water;
@@ -292,7 +313,6 @@ function tryPlaceDoorPair(
   ) {
     return false;
   }
-  const topId = registry.getByIdentifier("stratum:oak_door_top").id;
   if (!world.canPlaceForegroundWithCactusRules(wx, wy + 1, topId)) {
     return false;
   }
@@ -400,6 +420,7 @@ function tryPlaceSimpleForeground(
         wx,
         wy,
         hingeRight,
+        placesBlockId,
       )
     ) {
       return { ok: true, effects: ACK_CONSUME_ONE };
@@ -536,6 +557,7 @@ export function tryHostTerrainPlace(
         wx,
         wy,
         hingeRight,
+        placesBlockId,
       )
     ) {
       return { ok: true, effects: ACK_CONSUME_ONE };
@@ -661,7 +683,11 @@ export function tryHostTerrainPlace(
       return fail();
     }
     const placedDef = registry.getById(placesBlockId);
-    if (placedDef.tallGrass === "bottom" || placedDef.bedHalf === "foot") {
+    if (
+      placedDef.tallGrass === "bottom" ||
+      placedDef.bedHalf === "foot" ||
+      placedDef.doorHalf !== "none"
+    ) {
       return fail();
     }
     if (world.setBackgroundBlock(wx, wy, placesBlockId)) {

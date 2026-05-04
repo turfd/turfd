@@ -176,6 +176,8 @@ export class CreativePanel {
       const slot = document.createElement("div");
       slot.className = "inv-slot inv-creative-slot";
       slot.dataset.itemId = String(def.id);
+      slot.title = def.displayName;
+      slot.setAttribute("aria-label", def.displayName);
       const icon = document.createElement("div");
       icon.className = "inv-slot-icon";
       const count = document.createElement("span");
@@ -216,7 +218,8 @@ export class CreativePanel {
       } else {
         icon.style.cssText = "";
       }
-      icon.title = def.displayName;
+      slot.title = def.displayName;
+      slot.setAttribute("aria-label", def.displayName);
     }
   }
 

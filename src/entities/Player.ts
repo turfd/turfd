@@ -2189,9 +2189,10 @@ export class Player {
               if (
                 placedDef.tallGrass === "bottom" ||
                 placedDef.bedHalf === "foot" ||
+                placedDef.doorHalf !== "none" ||
                 placedDef.isPainting === true
               ) {
-                // multi-cell / painting blocks not supported on back layer
+                // multi-cell / painting / doors not supported on back layer
               } else if (this._mpTerrainClient) {
                 this.emitNetPlace(
                   SUB_BG,
@@ -2581,14 +2582,21 @@ export class Player {
                     !overlapsAnyMob &&
                     world.canPlaceForegroundWithCactusRules(wx, wy, placesBlockId)
                   ) {
-                    const topId = this.registry.getByIdentifier(
-                      "stratum:oak_door_top",
-                    ).id;
-                    if (
-                      !world.canPlaceForegroundWithCactusRules(wx, wy + 1, topId)
+                    const topDef = this.registry.getByIdentifier(
+                      `${placedDef.identifier}_top`,
+                    );
+                    if (topDef === undefined) {
+                      //
+                    } else if (
+                      !world.canPlaceForegroundWithCactusRules(
+                        wx,
+                        wy + 1,
+                        topDef.id,
+                      )
                     ) {
                       //
                     } else {
+                      const topId = topDef.id;
                       const cellLeft = wx * BLOCK_SIZE;
                       const cellRight = (wx + 1) * BLOCK_SIZE;
                       const px = state.position.x;
@@ -2600,7 +2608,7 @@ export class Player {
                           wx,
                           wy,
                           hotbarSlot,
-                          0,
+                          placesBlockId,
                           hingeRight ? 1 : 0,
                         );
                         this.startHandSwingVisual();

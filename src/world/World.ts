@@ -11,6 +11,7 @@ import {
   PLAYER_REMOTE_AIR_VY_THRESHOLD,
   SIMULATION_DISTANCE_CHUNKS,
   SKY_LIGHT_MAX,
+  BLOCK_LIGHT_MAX,
   SPAWN_CHUNK_RADIUS,
   LOADED_CHUNK_HARD_CAP,
   MAX_SPAWN_STRIP_COLUMNS,
@@ -237,6 +238,8 @@ function unpackChunkCoordKey(key: number): ChunkCoord {
 const LIGHT_RECOMPUTE_SKY = 1 << 0;
 const LIGHT_RECOMPUTE_BLOCK = 1 << 1;
 const LIGHT_RECOMPUTE_BOTH = LIGHT_RECOMPUTE_SKY | LIGHT_RECOMPUTE_BLOCK;
+/** Max horizontal/vertical distance sky or block light can travel into an adjacent chunk (see {@link computeSkyLight} / {@link computeBlockLight}). */
+const LIGHT_CROSS_CHUNK_PAD = Math.max(SKY_LIGHT_MAX, BLOCK_LIGHT_MAX);
 const LIGHT_RECOMPUTE_MAX_CHUNKS_PER_FLUSH = 3;
 const LIGHT_RECOMPUTE_BACKLOG_SOFT = 48;
 const LIGHT_RECOMPUTE_BACKLOG_HARD = 128;
@@ -1491,6 +1494,10 @@ export class World {
       affected.add(packChunkCoordKey(cx + 1, cy));
       affected.add(packChunkCoordKey(cx, cy - 1));
       affected.add(packChunkCoordKey(cx, cy + 1));
+      affected.add(packChunkCoordKey(cx - 1, cy - 1));
+      affected.add(packChunkCoordKey(cx + 1, cy - 1));
+      affected.add(packChunkCoordKey(cx - 1, cy + 1));
+      affected.add(packChunkCoordKey(cx + 1, cy + 1));
     }
     this._bulkFgChunkKeys.clear();
     const chunkCoords: { cx: number; cy: number }[] = [];
@@ -1626,29 +1633,16 @@ export class World {
     }
     // Door latch changed: block ID stays the same so normal light-mode check misses it,
     // but the occlusion texture and BFS reader must reflect the new open/closed state.
-    if (
+    const doorLatchChanged =
       oldId === id &&
       this.registry.isDoor(id) &&
-      doorLatchedOpenFromMeta(oldMeta) !== doorLatchedOpenFromMeta(newMeta)
-    ) {
+      doorLatchedOpenFromMeta(oldMeta) !== doorLatchedOpenFromMeta(newMeta);
+    if (doorLatchChanged) {
       this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
     }
-    const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    if (localX === 0) {
-      this._queueLightRecompute(cx - 1, cy, LIGHT_RECOMPUTE_BOTH);
+    if (lightMode !== 0 || doorLatchChanged) {
+      this._queueLightRecomputeChunkNeighborsForPropagation(wx, wy);
     }
-    if (localX === CHUNK_SIZE - 1) {
-      this._queueLightRecompute(cx + 1, cy, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localY === 0) {
-      this._queueLightRecompute(cx, cy - 1, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localY === CHUNK_SIZE - 1) {
-      this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
-    }
-    // Single-cell foreground change: at most home chunk plus cardinal chunk neighbours
-    // (chunk-grid radius `LIGHT_PROPAGATION_NEIGHBOUR_RADIUS` in constants).
 
     this.breakPlantsIfSupportLost(wx, wy);
 
@@ -1919,22 +1913,8 @@ export class World {
       (affectsBlock ? LIGHT_RECOMPUTE_BLOCK : 0);
     if (lightMode !== 0) {
       this._queueLightRecompute(cx, cy, lightMode);
+      this._queueLightRecomputeChunkNeighborsForPropagation(wx, wy);
     }
-    const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    if (localX === 0) {
-      this._queueLightRecompute(cx - 1, cy, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localX === CHUNK_SIZE - 1) {
-      this._queueLightRecompute(cx + 1, cy, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localY === 0) {
-      this._queueLightRecompute(cx, cy - 1, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localY === CHUNK_SIZE - 1) {
-      this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
-    }
-    // Same single-cell neighbour cap as `setBlock` (see `LIGHT_PROPAGATION_NEIGHBOUR_RADIUS`).
 
     this.emitForegroundBlockChanged(wx, wy, oldId, id, oldMeta, 0);
     this.markWaterActiveForBlockChange(wx, wy, oldId, id);
@@ -2637,6 +2617,10 @@ export class World {
       affected.add(packChunkCoordKey(cx + 1, cy));
       affected.add(packChunkCoordKey(cx, cy - 1));
       affected.add(packChunkCoordKey(cx, cy + 1));
+      affected.add(packChunkCoordKey(cx - 1, cy - 1));
+      affected.add(packChunkCoordKey(cx + 1, cy - 1));
+      affected.add(packChunkCoordKey(cx - 1, cy + 1));
+      affected.add(packChunkCoordKey(cx + 1, cy + 1));
     }
     const tLight = import.meta.env.DEV ? chunkPerfNow() : 0;
     for (const key of affected) {
@@ -2753,25 +2737,55 @@ export class World {
     this._pendingLightChunksStaged.clear();
   }
 
-  /** Queue light recompute for the chunk containing (wx, wy) and boundary neighbours (matches {@link setBlock}). */
+  /**
+   * Queue cardinal (and corner) neighbour chunks that can receive updated sky/block levels from a
+   * change at (wx, wy). Previously only the seam column (`localX === 0` / `CHUNK_SIZE - 1`) was
+   * enqueued; light reaches up to {@link LIGHT_CROSS_CHUNK_PAD} blocks across a boundary.
+   */
+  private _queueLightRecomputeChunkNeighborsForPropagation(wx: number, wy: number): void {
+    const cx = Math.floor(wx / CHUNK_SIZE);
+    const cy = Math.floor(wy / CHUNK_SIZE);
+    const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const pad = LIGHT_CROSS_CHUNK_PAD;
+
+    for (let k = 1; localX + 1 + (k - 1) * CHUNK_SIZE <= pad; k += 1) {
+      this._queueLightRecompute(cx - k, cy, LIGHT_RECOMPUTE_BOTH);
+    }
+    for (let k = 1; CHUNK_SIZE - localX + (k - 1) * CHUNK_SIZE <= pad; k += 1) {
+      this._queueLightRecompute(cx + k, cy, LIGHT_RECOMPUTE_BOTH);
+    }
+    for (let k = 1; localY + 1 + (k - 1) * CHUNK_SIZE <= pad; k += 1) {
+      this._queueLightRecompute(cx, cy - k, LIGHT_RECOMPUTE_BOTH);
+    }
+    for (let k = 1; CHUNK_SIZE - localY + (k - 1) * CHUNK_SIZE <= pad; k += 1) {
+      this._queueLightRecompute(cx, cy + k, LIGHT_RECOMPUTE_BOTH);
+    }
+
+    const nearWest = localX < pad;
+    const nearEast = localX >= CHUNK_SIZE - pad;
+    const nearNorth = localY < pad;
+    const nearSouth = localY >= CHUNK_SIZE - pad;
+    if (nearWest && nearNorth) {
+      this._queueLightRecompute(cx - 1, cy - 1, LIGHT_RECOMPUTE_BOTH);
+    }
+    if (nearEast && nearNorth) {
+      this._queueLightRecompute(cx + 1, cy - 1, LIGHT_RECOMPUTE_BOTH);
+    }
+    if (nearWest && nearSouth) {
+      this._queueLightRecompute(cx - 1, cy + 1, LIGHT_RECOMPUTE_BOTH);
+    }
+    if (nearEast && nearSouth) {
+      this._queueLightRecompute(cx + 1, cy + 1, LIGHT_RECOMPUTE_BOTH);
+    }
+  }
+
+  /** Queue light recompute for the chunk containing (wx, wy) and propagation-range neighbours. */
   private _queueLightRecomputeAroundWorldCell(wx: number, wy: number): void {
     const cx = Math.floor(wx / CHUNK_SIZE);
     const cy = Math.floor(wy / CHUNK_SIZE);
     this._queueLightRecompute(cx, cy, LIGHT_RECOMPUTE_BOTH);
-    const localX = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localY = ((wy % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    if (localX === 0) {
-      this._queueLightRecompute(cx - 1, cy, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localX === CHUNK_SIZE - 1) {
-      this._queueLightRecompute(cx + 1, cy, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localY === 0) {
-      this._queueLightRecompute(cx, cy - 1, LIGHT_RECOMPUTE_BOTH);
-    }
-    if (localY === CHUNK_SIZE - 1) {
-      this._queueLightRecompute(cx, cy + 1, LIGHT_RECOMPUTE_BOTH);
-    }
+    this._queueLightRecomputeChunkNeighborsForPropagation(wx, wy);
   }
 
   /**
@@ -3068,6 +3082,10 @@ export class World {
       affected.add(packChunkCoordKey(cx + 1, cy));
       affected.add(packChunkCoordKey(cx, cy - 1));
       affected.add(packChunkCoordKey(cx, cy + 1));
+      affected.add(packChunkCoordKey(cx - 1, cy - 1));
+      affected.add(packChunkCoordKey(cx + 1, cy - 1));
+      affected.add(packChunkCoordKey(cx - 1, cy + 1));
+      affected.add(packChunkCoordKey(cx + 1, cy + 1));
     }
     for (const key of affected) {
       const { cx, cy } = unpackChunkCoordKey(key);
