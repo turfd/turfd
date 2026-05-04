@@ -25,13 +25,22 @@ jobs:
         with:
           # `readReleaseNotesFromGit` / Discord dedupe walk `git log --skip`; depth-1 clones break that.
           fetch-depth: 0
+      # `secrets` cannot be used in step `if:` — resolve var-or-secret here and gate later steps via output.
       - name: Discord changelog — is posting enabled?
+        id: discord_changelog_post
+        env:
+          POST_VAR: ${{ vars.DISCORD_CHANGELOG_POST }}
+          POST_SECRET: ${{ secrets.DISCORD_CHANGELOG_POST }}
         run: |
-          post="${{ vars.DISCORD_CHANGELOG_POST }}"
-          if [ "$post" = "true" ]; then
-            echo "::notice::Discord changelog: posting enabled (digest + post steps run after build)."
+          if [ "$POST_VAR" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Discord changelog: posting enabled (variable DISCORD_CHANGELOG_POST; digest + post after build)."
+          elif [ "$POST_SECRET" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Discord changelog: posting enabled (secret DISCORD_CHANGELOG_POST). Prefer Actions → Variables — the toggle is not sensitive."
           else
-            echo "::notice::Discord changelog: posting DISABLED — repo variable DISCORD_CHANGELOG_POST is not exactly \"true\" (current value: \"${post:-<unset>}\"). GitHub → Settings → Secrets and variables → Actions → Variables. Also add secret DISCORD_WEBHOOK_URL_CHANGELOG."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Discord changelog: posting DISABLED — set variable or secret DISCORD_CHANGELOG_POST to exactly \"true\" (not True/1). Variable value: \"${POST_VAR:-<unset>}\". Also add secret DISCORD_WEBHOOK_URL_CHANGELOG."
           fi
       - uses: actions/setup-node@v4
         with:
@@ -43,24 +52,24 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       - name: Write Discord dedupe digest
-        if: vars.DISCORD_CHANGELOG_POST == 'true'
+        if: steps.discord_changelog_post.outputs.enabled == 'true'
         env:
-          DISCORD_CHANGELOG_DEDUPE_BUSTER: ${{ vars.DISCORD_CHANGELOG_DEDUPE_BUSTER }}
+          DISCORD_CHANGELOG_DEDUPE_BUSTER: ${{ vars.DISCORD_CHANGELOG_DEDUPE_BUSTER || secrets.DISCORD_CHANGELOG_DEDUPE_BUSTER }}
         run: |
           mkdir -p .cache
           npx tsx scripts/printDiscordChangelogDedupeKey.ts "$GITHUB_WORKSPACE" > .cache/discord-dedupe.txt
       - name: Ensure Discord cache marker
-        if: vars.DISCORD_CHANGELOG_POST == 'true'
+        if: steps.discord_changelog_post.outputs.enabled == 'true'
         run: mkdir -p .cache && echo ok > .cache/discord-changelog-sentinel
       - name: Discord changelog cache
-        if: vars.DISCORD_CHANGELOG_POST == 'true'
+        if: steps.discord_changelog_post.outputs.enabled == 'true'
         id: discord_cache
         uses: actions/cache@v4
         with:
           path: .cache/discord-changelog-sentinel
           key: stratum-discord-changelog-${{ hashFiles('.cache/discord-dedupe.txt') }}
       - name: Post Discord changelog
-        if: vars.DISCORD_CHANGELOG_POST == 'true' && steps.discord_cache.outputs.cache-hit != 'true'
+        if: steps.discord_changelog_post.outputs.enabled == 'true' && steps.discord_cache.outputs.cache-hit != 'true'
         continue-on-error: true
         env:
           DISCORD_WEBHOOK_URL_CHANGELOG: ${{ secrets.DISCORD_WEBHOOK_URL_CHANGELOG }}
@@ -73,8 +82,8 @@ jobs:
           echo "Posting Discord changelog (cache miss for this notes/version digest)."
           npx tsx scripts/postDiscordChangelog.ts "$GITHUB_WORKSPACE"
       - name: Discord changelog skipped (dedupe)
-        if: vars.DISCORD_CHANGELOG_POST == 'true' && steps.discord_cache.outputs.cache-hit == 'true'
-        run: 'echo "::notice::Discord changelog skipped — same version+notes digest as a previous run. Bump DISCORD_CHANGELOG_DEDUPE_BUSTER repo variable to force a repost."'
+        if: steps.discord_changelog_post.outputs.enabled == 'true' && steps.discord_cache.outputs.cache-hit == 'true'
+        run: 'echo "::notice::Discord changelog skipped — same version+notes digest as a previous run. Bump DISCORD_CHANGELOG_DEDUPE_BUSTER (variable or secret) to force a repost."'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

@@ -81,13 +81,13 @@ Discord changelog **images** are defined only in **[`scripts/discordChangelogIma
 After each successful **`main`** build, the **Deploy to GitHub Pages** workflow can POST the same `[Summary]` / `[Changes]` text embedded in the app to Discord.
 
 1. Add repository **secret** `DISCORD_WEBHOOK_URL_CHANGELOG` (your Discord webhook URL).  
-2. Add repository **variable** `DISCORD_CHANGELOG_POST` and set it to `true` (only after the secret exists).  
+2. Enable posting: repository **variable** *or* **secret** `DISCORD_CHANGELOG_POST` set to exactly `true` (only after the webhook secret exists). Prefer **Variables** — it is not sensitive.  
 3. Optional **secret** `DISCORD_CHANGELOG_EMBED_COLOR` (decimal RGB, e.g. `3447003`). Banner / footer / main-embed images are set in **[`scripts/discordChangelogImageUrls.ts`](scripts/discordChangelogImageUrls.ts)** only.  
-4. Optional **variable** `DISCORD_CHANGELOG_DEDUPE_BUSTER` — change its value to invalidate the dedupe cache and allow a repost for the same notes.
+4. Optional **variable** *or* **secret** `DISCORD_CHANGELOG_DEDUPE_BUSTER` — change its value to invalidate the dedupe cache and allow a repost for the same notes.
 
 Posting is **deduped** with `actions/cache` so identical version + notes do not spam on every rebuild. Failures to Discord do not fail the Pages deploy (`continue-on-error`).
 
-**If the site deploys but Discord stays empty:** in the workflow run, expand **Discord changelog — is posting enabled?** If it says posting is disabled, your repo **variable** `DISCORD_CHANGELOG_POST` is missing or not exactly `true` (not `True` / `1`) — when that happens the digest/cache/post steps **do not appear in the log at all**. If posting is enabled, open **Post Discord changelog** (look for `skip:` or webhook errors). **Discord changelog skipped (dedupe)** means the version + notes digest matched a previous run — change **`DISCORD_CHANGELOG_DEDUPE_BUSTER`**. Add secret **`DISCORD_WEBHOOK_URL_CHANGELOG`** if you have not. The workflow uses a **full git fetch** so the script can find the latest release commit with `[Summary]` / `[Changes]`.
+**If the site deploys but Discord stays empty:** expand **Discord changelog — is posting enabled?** If posting is disabled, **`DISCORD_CHANGELOG_POST`** is missing or not exactly `true` on the **Variables** or **Secrets** tab (GitHub does not read a secret when the workflow only referenced `vars`). If posting is enabled, open **Post Discord changelog** (webhook errors). **Discord changelog skipped (dedupe)** means the digest matched a prior run — bump **`DISCORD_CHANGELOG_DEDUPE_BUSTER`** (variable or secret). Add **`DISCORD_WEBHOOK_URL_CHANGELOG`** if needed. The job uses a **full git fetch** for release-note discovery.
 
 Optional: show **Settings → Debug** (in-game profiler). Read at **build** time:
 
