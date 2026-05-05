@@ -2,11 +2,11 @@
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
-      "identifier": "stratum:diamond"
+      "identifier": "stratum:stratite"
     },
     "components": {
-      "stratum:display_name": "Diamond",
-      "stratum:texture_key": "diamond",
+      "stratum:display_name": "Stratite",
+      "stratum:texture_key": "stratite",
       "stratum:numeric_id": 99,
       "stratum:creative_category": "items"
     }

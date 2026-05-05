@@ -2,9 +2,10 @@
  * Back-wall + foreground chunk meshes on `layerTilesBack`, and a water-only mesh on
  * `layerWaterOverEntities` so fluid draws above entities.
  */
-import { Rectangle, type Mesh } from "pixi.js";
+import { Rectangle, type Container, type Mesh } from "pixi.js";
 import type { BlockRegistry } from "../../world/blocks/BlockRegistry";
 import type { Chunk } from "../../world/chunk/Chunk";
+import { getBlock } from "../../world/chunk/Chunk";
 import type { ChunkCoord } from "../../world/chunk/ChunkCoord";
 import {
   BLOCK_SIZE,
@@ -15,8 +16,9 @@ import {
   CHUNK_SYNC_MAX_PER_FRAME_UNDER_LOAD,
   CHUNK_SYNC_NEW_MESH_BUDGET_MS,
   CHUNK_SYNC_NEW_MESH_MAX_PER_FRAME,
+  VIEW_DISTANCE_CHUNKS,
 } from "../../core/constants";
-import { chunkKey, chunkToWorldOrigin } from "../../world/chunk/ChunkCoord";
+import { chunkKey, chunkToWorldOrigin, localIndex } from "../../world/chunk/ChunkCoord";
 import type { World } from "../../world/World";
 import type { AtlasLoader } from "../AtlasLoader";
 import type { RenderPipeline } from "../RenderPipeline";
@@ -27,6 +29,7 @@ import {
   buildBackgroundMesh,
   buildFgShadowMesh,
   buildMesh,
+  buildTorchBloomUnderlayMesh,
   createWorldFgShadowSampler,
   updateBackgroundMesh,
   updateFgShadowMesh,
@@ -44,10 +47,16 @@ import {
 } from "./LeafDecorationBatch";
 import { chunkPerfLog, chunkPerfNow } from "../../debug/chunkPerf";
 import { withPerfSpan } from "../../debug/perfSpans";
+import { getTorchBloomGradientTexture } from "../torchBloomGradientTexture";
+import { getVideoPrefs } from "../../ui/settings/videoPrefs";
 
 type ChunkMeshes = {
   bg: Mesh;
   fgShadow: Mesh;
+  /** Additive underglow for placed torches; between {@link fgShadow} and {@link fg}. */
+  fgTorchBloom: Mesh | null;
+  /** Sorted local cell indices of torches; skip mesh rebuild when unchanged (dirty fg only). */
+  fgTorchBloomLayoutKey: string;
   fg: Mesh;
   /** Bushy leaf decoration (stacked overlays + edge puffs); rendered after {@link fg}. */
   leafDeco: Mesh;
@@ -74,10 +83,15 @@ export class ChunkRenderer {
   private readonly atlas: AtlasLoader;
   private readonly world: World;
   private readonly fgShadowSampler: ReturnType<typeof createWorldFgShadowSampler>;
+  /** `-1` when `stratum:torch` is not registered (e.g. stripped client). */
+  private readonly _torchBlockId: number;
   private readonly meshes = new Map<string, ChunkMeshes>();
   private readonly fgWindSways = new WeakMap<Mesh, TileWindSway[]>();
   /** Foreground meshes that have at least one wind sway tile (see {@link updateFoliageWind}). */
   private readonly _windyForegroundMeshes = new Set<Mesh>();
+  /** Chunk grid for each windy fg mesh — used to halve wind update rate far from the camera. */
+  private readonly _windyFgChunkCoord = new WeakMap<Mesh, ChunkCoord>();
+  private _foliageWindFrame = 0;
   /** Foreground meshes with lit furnace fire UV animation (see {@link updateFurnaceFire}). */
   private readonly _furnaceFireForegroundMeshes = new Set<Mesh>();
   private readonly fgFurnaceFires = new WeakMap<Mesh, TileFurnaceFire[]>();
@@ -121,6 +135,67 @@ export class ChunkRenderer {
     this.atlas = atlas;
     this.world = world;
     this.fgShadowSampler = createWorldFgShadowSampler(world);
+    this._torchBlockId = registry.isRegistered("stratum:torch")
+      ? registry.getByIdentifier("stratum:torch").id
+      : -1;
+  }
+
+  /** Stable key for {@link rebuildChunkTorchBloom} — only torch cells matter. */
+  private torchBloomLayoutKey(chunk: Chunk): string {
+    const tid = this._torchBlockId;
+    if (tid < 0) {
+      return "";
+    }
+    const ids: number[] = [];
+    for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        if (getBlock(chunk, lx, ly) === tid) {
+          ids.push(localIndex(lx, ly));
+        }
+      }
+    }
+    ids.sort((a, b) => a - b);
+    return ids.join(",");
+  }
+
+  private rebuildChunkTorchBloom(layer: Container, chunk: Chunk, meshes: ChunkMeshes): void {
+    const layoutKey = this.torchBloomLayoutKey(chunk);
+    if (
+      meshes.fgTorchBloom !== null &&
+      layoutKey === meshes.fgTorchBloomLayoutKey
+    ) {
+      meshes.fgTorchBloom.visible = getVideoPrefs().bloomEnabled;
+      return;
+    }
+
+    const prev = meshes.fgTorchBloom;
+    if (prev !== null) {
+      layer.removeChild(prev);
+      meshes.fgTorchBloom = null;
+      // Match meshGeometryReuse / chunk unload: defer so WebGPU submit cannot reference freed buffers.
+      queueMicrotask(() => {
+        prev.destroy();
+      });
+    }
+    meshes.fgTorchBloomLayoutKey = layoutKey;
+
+    if (this._torchBlockId < 0) {
+      return;
+    }
+    const mesh = buildTorchBloomUnderlayMesh(
+      chunk,
+      this._torchBlockId,
+      getTorchBloomGradientTexture(),
+    );
+    if (mesh === null) {
+      return;
+    }
+    this.applyChunkMeshCulling(mesh);
+    this.positionChunkRoot(mesh, chunk.coord);
+    mesh.visible = getVideoPrefs().bloomEnabled;
+    const idx = layer.getChildIndex(meshes.fgShadow) + 1;
+    layer.addChildAt(mesh, idx);
+    meshes.fgTorchBloom = mesh;
   }
 
   private tileMeshOpts(): TileMeshBuildOptions {
@@ -235,11 +310,15 @@ export class ChunkRenderer {
           this.atlas,
           { sampleBlockId },
         );
-        this.syncWindyFg(item.meshes.fg, windSways);
+        this.syncWindyFg(item.meshes.fg, windSways, item.chunk.coord);
         this.syncFurnaceFg(item.meshes.fg, furnaceFires);
         this.syncWateryFg(item.meshes.fgWater, waterSurfaces);
+        this.rebuildChunkTorchBloom(layer, item.chunk, item.meshes);
         this.positionChunkRoot(item.meshes.bg, item.chunk.coord);
         this.positionChunkRoot(item.meshes.fgShadow, item.chunk.coord);
+        if (item.meshes.fgTorchBloom !== null) {
+          this.positionChunkRoot(item.meshes.fgTorchBloom, item.chunk.coord);
+        }
         this.positionChunkRoot(item.meshes.fg, item.chunk.coord);
         this.positionChunkRoot(item.meshes.leafDeco, item.chunk.coord);
         this.positionChunkRoot(item.meshes.fgWater, item.chunk.coord);
@@ -291,7 +370,7 @@ export class ChunkRenderer {
           this.atlas,
           { sampleBlockId },
         );
-        this.syncWindyFg(fg, windSways);
+        this.syncWindyFg(fg, windSways, chunk.coord);
         this.syncFurnaceFg(fg, furnaceFires);
         this.syncWateryFg(fgWater, waterSurfaces);
         this.applyChunkMeshCulling(bg);
@@ -309,7 +388,17 @@ export class ChunkRenderer {
         layer.addChild(fg);
         layer.addChild(leafDeco);
         waterLayer.addChild(fgWater);
-        this.meshes.set(key, { bg, fgShadow, fg, leafDeco, fgWater });
+        const chunkMeshes: ChunkMeshes = {
+          bg,
+          fgShadow,
+          fgTorchBloom: null,
+          fgTorchBloomLayoutKey: "",
+          fg,
+          leafDeco,
+          fgWater,
+        };
+        this.rebuildChunkTorchBloom(layer, chunk, chunkMeshes);
+        this.meshes.set(key, chunkMeshes);
         chunk.dirty = false;
         chunk.renderDirty = false;
         added += 1;
@@ -323,12 +412,16 @@ export class ChunkRenderer {
       for (const key of this.meshes.keys()) {
         if (!seen.has(key)) {
           const entry = this.meshes.get(key)!;
-          const { bg, fgShadow, fg, leafDeco, fgWater } = entry;
+          const { bg, fgShadow, fgTorchBloom, fg, leafDeco, fgWater } = entry;
           this._windyForegroundMeshes.delete(fg);
+          this._windyFgChunkCoord.delete(fg);
           this._furnaceFireForegroundMeshes.delete(fg);
           this._wateryForegroundMeshes.delete(fgWater);
           layer.removeChild(bg);
           layer.removeChild(fgShadow);
+          if (fgTorchBloom !== null) {
+            layer.removeChild(fgTorchBloom);
+          }
           layer.removeChild(fg);
           layer.removeChild(leafDeco);
           waterLayer.removeChild(fgWater);
@@ -341,14 +434,22 @@ export class ChunkRenderer {
     if (chunkMeshesPendingDestroy.length > 0) {
       const batch = chunkMeshesPendingDestroy;
       queueMicrotask(() => {
-        for (const { bg, fgShadow, fg, leafDeco, fgWater } of batch) {
+        for (const { bg, fgShadow, fgTorchBloom, fg, leafDeco, fgWater } of batch) {
           bg.destroy();
           fgShadow.destroy();
+          fgTorchBloom?.destroy();
           fg.destroy();
           leafDeco.destroy();
           fgWater.destroy();
         }
       });
+    }
+
+    const bloomOn = getVideoPrefs().bloomEnabled;
+    for (const m of this.meshes.values()) {
+      if (m.fgTorchBloom !== null) {
+        m.fgTorchBloom.visible = bloomOn;
+      }
     }
 
     if (
@@ -380,8 +481,25 @@ export class ChunkRenderer {
     timeSec: number,
     influences?: readonly FoliageWindInfluence[],
   ): void {
+    this._foliageWindFrame += 1;
+    const pos = this.pipeline.getCamera().getPosition();
+    const chunkWorldSize = CHUNK_SIZE * BLOCK_SIZE;
+    const viewCX = Math.floor(pos.x / chunkWorldSize);
+    const viewCY = Math.floor(-pos.y / chunkWorldSize);
+    const farCheb = VIEW_DISTANCE_CHUNKS + 2;
+
     for (const fg of this._windyForegroundMeshes) {
       if (!fg.visible) continue;
+      const coord = this._windyFgChunkCoord.get(fg);
+      if (coord !== undefined) {
+        const cheb = Math.max(
+          Math.abs(coord.cx - viewCX),
+          Math.abs(coord.cy - viewCY),
+        );
+        if (cheb >= farCheb && (this._foliageWindFrame & 1) === 0) {
+          continue;
+        }
+      }
       applyWindSwayToMesh(
         fg,
         this.fgWindSways.get(fg) ?? [],
@@ -469,14 +587,18 @@ export class ChunkRenderer {
     this._waterRippleSamples.length = 0;
     const layer = this.pipeline.layerTilesBack;
     const waterLayer = this.pipeline.layerWaterOverEntities;
-    for (const { bg, fgShadow, fg, leafDeco, fgWater } of this.meshes.values()) {
+    for (const { bg, fgShadow, fgTorchBloom, fg, leafDeco, fgWater } of this.meshes.values()) {
       layer.removeChild(bg);
       layer.removeChild(fgShadow);
+      if (fgTorchBloom !== null) {
+        layer.removeChild(fgTorchBloom);
+      }
       layer.removeChild(fg);
       layer.removeChild(leafDeco);
       waterLayer.removeChild(fgWater);
       bg.destroy();
       fgShadow.destroy();
+      fgTorchBloom?.destroy();
       fg.destroy();
       leafDeco.destroy();
       fgWater.destroy();
@@ -492,12 +614,14 @@ export class ChunkRenderer {
     node.position.set(origin.wx * BLOCK_SIZE, -origin.wy * BLOCK_SIZE);
   }
 
-  private syncWindyFg(fg: Mesh, windSways: TileWindSway[]): void {
+  private syncWindyFg(fg: Mesh, windSways: TileWindSway[], coord: ChunkCoord): void {
     this.fgWindSways.set(fg, windSways);
     if (windSways.length > 0) {
       this._windyForegroundMeshes.add(fg);
+      this._windyFgChunkCoord.set(fg, coord);
     } else {
       this._windyForegroundMeshes.delete(fg);
+      this._windyFgChunkCoord.delete(fg);
     }
   }
 

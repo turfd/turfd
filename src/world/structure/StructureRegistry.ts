@@ -39,6 +39,11 @@ export class StructureRegistry {
     return this._structures.get(identifier);
   }
 
+  /** Sorted registered structure ids (for `/structure list` and tooling). */
+  listStructureIdentifiers(): string[] {
+    return [...this._structures.keys()].sort((a, b) => a.localeCompare(b));
+  }
+
   getFeature(identifier: string): StructureFeatureEntry | undefined {
     return this._features.get(identifier);
   }

@@ -391,14 +391,14 @@ export const BREAK_TIME_BASE = 0.5;
 export const BLOCK_BREAK_PARTICLE_LIFETIME_SEC = 0.42;
 
 /** Debris pixel count bounds (random in [MIN, MAX] inclusive). */
-export const BLOCK_BREAK_PARTICLE_MIN = 5;
-export const BLOCK_BREAK_PARTICLE_MAX = 12;
+export const BLOCK_BREAK_PARTICLE_MIN = 10;
+export const BLOCK_BREAK_PARTICLE_MAX = 22;
 
 /**
  * Expected debris spawns while mining ≈ this many particles over progress 0→1 (local player only).
  * Applied as fractional accumulator on each progress delta.
  */
-export const BLOCK_BREAK_PARTICLES_PER_PROGRESS = 16;
+export const BLOCK_BREAK_PARTICLES_PER_PROGRESS = 26;
 
 /** Footstep “kick up” debris count per step (random inclusive range). */
 export const BLOCK_STEP_KICK_PARTICLE_MIN = 1;
@@ -764,7 +764,8 @@ export const PLACED_TORCH_RADIUS_BLOCKS = 14;
  * top-left). Lighting/bloom use this so effects align with art instead of the block’s corner.
  */
 export const TORCH_FLAME_TIP_PX_X = 7.5;
-export const TORCH_FLAME_TIP_PX_Y = 2.5;
+/** Nudged +6px vs atlas anchor so underglow matches the visible flame (Pixi y-down). */
+export const TORCH_FLAME_TIP_PX_Y = 7;
 /** Offset from integer block (wx, wy) to flame center in world block units (composite pass). */
 export const TORCH_FLAME_TIP_OFFSET_X_BLOCKS = TORCH_FLAME_TIP_PX_X / BLOCK_SIZE;
 /** `wy` increases upward; tip sits near the top of the cell. */

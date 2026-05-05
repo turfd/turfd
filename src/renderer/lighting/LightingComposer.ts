@@ -93,6 +93,14 @@ export class LightingComposer {
   private readonly _playerBloomUvMinScratch: [number, number] = [0, 0];
   private readonly _playerBloomUvMaxScratch: [number, number] = [0, 0];
 
+  /**
+   * Chunk light textures removed from the active region; GPU destroy is deferred to the next
+   * frame so WebGPU does not enqueue submits that still reference destroyed buffers (same-turn
+   * `queueMicrotask` could run before the GPU finished the prior frame’s lighting work).
+   */
+  private readonly _lightTexturesPendingDestroy: LightTexture[] = [];
+  private _lightTexturesDestroyRafId: number | null = null;
+
   constructor(world: World, bus: EventBus, stage: Container) {
     this._world = world;
     this._stage = stage;
@@ -191,18 +199,24 @@ export class LightingComposer {
     const chunkWorldSize = BLOCK_SIZE * CHUNK_SIZE;
     const centerChunkX = Math.floor(pos.x / chunkWorldSize);
     const centerChunkY = Math.floor(-pos.y / chunkWorldSize);
+    let occlusionRebuilt = false;
     withPerfSpan("LightingComposer.update.occlusion.rebuild", () => {
-      occ.rebuild(centerChunkX, centerChunkY, this._world);
+      occlusionRebuilt = occ.rebuild(centerChunkX, centerChunkY, this._world);
     });
-    withPerfSpan("LightingComposer.update.occlusion.upload", () => {
-      occ.upload();
-    });
+    if (occlusionRebuilt) {
+      withPerfSpan("LightingComposer.update.occlusion.upload", () => {
+        occ.upload();
+      });
+    }
+    let indirectRebuilt = false;
     withPerfSpan("LightingComposer.update.indirect.rebuild", () => {
-      indirect.rebuild(centerChunkX, centerChunkY, this._world);
+      indirectRebuilt = indirect.rebuild(centerChunkX, centerChunkY, this._world);
     });
-    withPerfSpan("LightingComposer.update.indirect.upload", () => {
-      indirect.upload();
-    });
+    if (indirectRebuilt) {
+      withPerfSpan("LightingComposer.update.indirect.upload", () => {
+        indirect.upload();
+      });
+    }
 
     const tl = cam.screenToWorld(0, 0);
     const blockPixels = BLOCK_SIZE * cam.getZoom();
@@ -245,12 +259,7 @@ export class LightingComposer {
         }
       }
       if (lightTexturesToDestroy.length > 0) {
-        const batch = lightTexturesToDestroy;
-        queueMicrotask(() => {
-          for (const tex of batch) {
-            tex.destroy();
-          }
-        });
+        this.scheduleLightTexturesDestroy(lightTexturesToDestroy);
       }
     });
 
@@ -279,7 +288,8 @@ export class LightingComposer {
             const wyi = wy[i]! + TORCH_FLAME_TIP_OFFSET_Y_BLOCKS;
             const ddx = wxi - viewCenterWx;
             const ddy = wyi - viewCenterWy;
-            this._torchHeapOffer(wxi, wyi, 1, 1, ddx * ddx + ddy * ddy);
+            // `bloomTipShiftScale` -1: skip composite HDR bloom (mesh underglow draws placed torches).
+            this._torchHeapOffer(wxi, wyi, 1, -1, ddx * ddx + ddy * ddy);
           }
         }
       }
@@ -536,7 +546,37 @@ export class LightingComposer {
     this._composite?.resize(w, h);
   }
 
+  private scheduleLightTexturesDestroy(batch: readonly LightTexture[]): void {
+    if (batch.length === 0) {
+      return;
+    }
+    for (let i = 0; i < batch.length; i++) {
+      this._lightTexturesPendingDestroy.push(batch[i]!);
+    }
+    if (this._lightTexturesDestroyRafId !== null) {
+      return;
+    }
+    this._lightTexturesDestroyRafId = requestAnimationFrame(() => {
+      this._lightTexturesDestroyRafId = null;
+      const toDestroy = this._lightTexturesPendingDestroy.splice(
+        0,
+        this._lightTexturesPendingDestroy.length,
+      );
+      for (const tex of toDestroy) {
+        tex.destroy();
+      }
+    });
+  }
+
   destroy(): void {
+    if (this._lightTexturesDestroyRafId !== null) {
+      cancelAnimationFrame(this._lightTexturesDestroyRafId);
+      this._lightTexturesDestroyRafId = null;
+    }
+    for (const tex of this._lightTexturesPendingDestroy) {
+      tex.destroy();
+    }
+    this._lightTexturesPendingDestroy.length = 0;
     this._lightUnsub();
     this._emitterBlockUnsub();
     this._emitterBulkUnsub();

@@ -109,7 +109,9 @@ export type CompositeUniforms = {
   } | null;
   /**
    * Nearby placed/dynamic emitters (up to MAX_PLACED_TORCHES).
-   * Tuple: [worldX, worldY, strength(0..1+), bloomTipShiftScale(0..1)].
+   * Tuple: [worldX, worldY, strength(0..1+), bloomMeta].
+   * `bloomMeta`: torch tip shift in [0,1]; fireflies use `0` (no shift); chunk torches use `-1`
+   * (skip composite HDR bloom — mesh/sprite draw glow instead).
    */
   placedTorches: [number, number, number?, number?][];
   /**

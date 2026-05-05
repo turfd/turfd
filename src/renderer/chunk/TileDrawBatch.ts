@@ -5,6 +5,8 @@ import {
   BLOCK_SIZE,
   CHUNK_SIZE,
   LEAF_DECO_CORNER_SHAVE_PX,
+  TORCH_FLAME_TIP_PX_X,
+  TORCH_FLAME_TIP_PX_Y,
 } from "../../core/constants";
 import {
   getWaterFlowLevel,
@@ -1498,6 +1500,76 @@ export function buildFgShadowMesh(
     texture: getFgShadowTexture(),
     roundPixels: true,
   });
+}
+
+/** Half-extents in px for additive torch glow quads (world space, chunk-local). */
+const TORCH_WORLD_BLOOM_HALF_W = BLOCK_SIZE * 0.52;
+const TORCH_WORLD_BLOOM_HALF_H = BLOCK_SIZE * 0.44;
+
+/**
+ * One batched additive mesh of soft glows under placed torch blocks (drawn before foreground
+ * tiles so the torch sprite paints on top). Uses `torchBlockId` from the live registry.
+ */
+export function buildTorchBloomUnderlayMesh(
+  chunk: Chunk,
+  torchBlockId: number,
+  bloomTexture: Texture,
+): Mesh | null {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  let vertBase = 0;
+  let torchCount = 0;
+  for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      if (getBlock(chunk, lx, ly) !== torchBlockId) {
+        continue;
+      }
+      const px = lx * BLOCK_SIZE;
+      const py = -(ly + 1) * BLOCK_SIZE;
+      const tcx = px + TORCH_FLAME_TIP_PX_X;
+      const tcy = py + TORCH_FLAME_TIP_PX_Y;
+      const x0 = tcx - TORCH_WORLD_BLOOM_HALF_W;
+      const y0 = tcy - TORCH_WORLD_BLOOM_HALF_H;
+      const x1 = tcx + TORCH_WORLD_BLOOM_HALF_W;
+      const y1 = tcy + TORCH_WORLD_BLOOM_HALF_H;
+      const pushVert = (x: number, y: number, u: number, v: number): void => {
+        positions.push(x, y);
+        uvs.push(u, v);
+      };
+      pushVert(x0, y0, 0, 0);
+      pushVert(x1, y0, 1, 0);
+      pushVert(x0, y1, 0, 1);
+      pushVert(x1, y1, 1, 1);
+      indices.push(
+        vertBase,
+        vertBase + 1,
+        vertBase + 2,
+        vertBase + 1,
+        vertBase + 3,
+        vertBase + 2,
+      );
+      vertBase += 4;
+      torchCount += 1;
+    }
+  }
+  if (torchCount === 0) {
+    return null;
+  }
+  const geometry = new MeshGeometry({
+    positions: new Float32Array(positions),
+    uvs: new Float32Array(uvs),
+    indices: new Uint32Array(indices),
+  });
+  const mesh = new Mesh({
+    geometry,
+    texture: bloomTexture,
+    roundPixels: true,
+  });
+  mesh.blendMode = "add";
+  mesh.tint = 0xfff2dc;
+  mesh.alpha = 0.82;
+  return mesh;
 }
 
 export function updateFgShadowMesh(

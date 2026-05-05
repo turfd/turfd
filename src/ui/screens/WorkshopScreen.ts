@@ -1876,17 +1876,6 @@ export class WorkshopScreen {
       "Templates are built-in packs you can download, edit, and reload (for dev mode / packaging).";
     stack.appendChild(lead);
 
-    const wikiRow = el("div");
-    wikiRow.style.marginTop = "10px";
-    const wikiBtn = el("button", "mm-btn mm-btn-subtle") as HTMLButtonElement;
-    wikiBtn.type = "button";
-    wikiBtn.textContent = "Open documentation wiki";
-    wikiBtn.addEventListener("click", () => {
-      window.open(`${import.meta.env.BASE_URL}wiki/index.html`, "_blank", "noopener,noreferrer");
-    });
-    wikiRow.appendChild(wikiBtn);
-    stack.appendChild(wikiRow);
-
     const err = el("p", "mm-workshop-publish-err");
     err.textContent = "";
 

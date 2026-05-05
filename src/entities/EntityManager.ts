@@ -162,6 +162,8 @@ import type { ItemRegistry } from "../items/ItemRegistry";
 import type { ArmorSlot } from "../items/PlayerInventory";
 import type { AtlasLoader } from "../renderer/AtlasLoader";
 import type { RenderPipeline } from "../renderer/RenderPipeline";
+import { getTorchBloomGradientTexture } from "../renderer/torchBloomGradientTexture";
+import { getVideoPrefs } from "../ui/settings/videoPrefs";
 import type { BlockRegistry } from "../world/blocks/BlockRegistry";
 import type { World } from "../world/World";
 import type { DoorPlayerSample } from "../world/door/doorWorld";
@@ -1292,6 +1294,8 @@ export class EntityManager {
   private localPlayerAnim: AnimatedSprite | null = null;
   /** Sibling of the local body sprite; draw order via `zIndex` (body over tool when facing left). */
   private localHeldItemSprite: Sprite | null = null;
+  /** Additive glow at flame tip; child of {@link localHeldItemSprite}. */
+  private localHeldTorchBloomSprite: Sprite | null = null;
   private fishingLineGraphic: Graphics | null = null;
   private fishingHookSprite: Sprite | null = null;
   private localPlayerPlaceholder: Graphics | null = null;
@@ -2923,6 +2927,9 @@ export class EntityManager {
       held.visible = false;
       held.rotation = 0;
       this._heldTorchLightWorldBlock = null;
+      if (this.localHeldTorchBloomSprite !== null) {
+        this.localHeldTorchBloomSprite.visible = false;
+      }
       return;
     }
     held.texture = tex;
@@ -3025,10 +3032,30 @@ export class EntityManager {
     held.visible = true;
 
     const placeId = this.itemRegistry.getById(heldItemId as ItemId)?.placesBlockId ?? 0;
+    const heldBloom = this.localHeldTorchBloomSprite;
     if (heldPlaceableBlock && placeId === this._torchBlockId) {
       this.refreshHeldTorchLightWorldBlock(held);
+      if (heldBloom !== null) {
+        const fr = held.texture.frame;
+        const fw = fr.width;
+        const fh = fr.height;
+        const lx = TORCH_FLAME_TIP_PX_X - PLAYER_HELD_ITEM_ANCHOR_X * fw;
+        const ly = TORCH_FLAME_TIP_PX_Y - PLAYER_HELD_ITEM_ANCHOR_Y * fh;
+        heldBloom.position.set(lx, ly);
+        const sx = Math.max(0.0005, Math.abs(held.scale.x));
+        const sy = Math.max(0.0005, Math.abs(held.scale.y));
+        const desiredWorld = BLOCK_SIZE * 1.04;
+        heldBloom.scale.set(
+          desiredWorld / (sx * heldBloom.texture.width),
+          desiredWorld / (sy * heldBloom.texture.height),
+        );
+        heldBloom.visible = getVideoPrefs().bloomEnabled;
+      }
     } else {
       this._heldTorchLightWorldBlock = null;
+      if (heldBloom !== null) {
+        heldBloom.visible = false;
+      }
     }
   }
 
@@ -3375,6 +3402,7 @@ export class EntityManager {
       this.localPlayerAnim = null;
     }
     if (this.localHeldItemSprite !== null) {
+      this.localHeldTorchBloomSprite = null;
       this.localHeldItemSprite.destroy();
       this.localHeldItemSprite = null;
     }
@@ -3400,6 +3428,14 @@ export class EntityManager {
     }
     root.addChildAt(held, 0);
     this.localHeldItemSprite = held;
+    const heldBloom = new Sprite(getTorchBloomGradientTexture());
+    heldBloom.anchor.set(0.5);
+    heldBloom.blendMode = "add";
+    heldBloom.visible = false;
+    heldBloom.tint = 0xfff2dc;
+    heldBloom.alpha = 0.82;
+    held.addChild(heldBloom);
+    this.localHeldTorchBloomSprite = heldBloom;
   }
 
   /**
@@ -4847,6 +4883,7 @@ export class EntityManager {
     }
     this.localPlayerAnim = null;
     this.localHeldItemSprite = null;
+    this.localHeldTorchBloomSprite = null;
     this.localPlayerPlaceholder = null;
     this.playerBodyAtlasFrames = null;
     this.playerIdleAnimTextures = null;

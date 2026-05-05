@@ -1,0 +1,10 @@
+- Fixed block and sky light refreshing in too small an area at world chunk boundary.
+- Fixed wrong or stuck light near doors and chunk edges until a large area had updated
+- Opening or closing a door forces a proper light refresh around it
+- Tuned desert noise — fewer random sand patches, with a focus on larger biomes
+- Multiplayer doors use the wood type you placed, instead of the default Oak texture.
+- Can’t place doors on the background layer (same as other two-tall blocks); older clients still get a safe fallback.
+- Fixed shift–quick-move double-flash on the destination slot
+- Creative slots show item name in tooltip and for accessibility, not just the icon
+- Debug / profiler sub-tab only shows in dev builds
+- Sheep mask texture cleaned up, preventing a flickering bug that occured.

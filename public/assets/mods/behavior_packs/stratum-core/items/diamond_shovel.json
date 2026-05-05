@@ -2,11 +2,11 @@
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
-      "identifier": "stratum:diamond_shovel"
+      "identifier": "stratum:stratite_shovel"
     },
     "components": {
-      "stratum:display_name": "Diamond Shovel",
-      "stratum:texture_key": "diamond_shovel",
+      "stratum:display_name": "Stratite Shovel",
+      "stratum:texture_key": "stratite_shovel",
       "stratum:max_stack": 1,
       "stratum:tool_type": "shovel",
       "stratum:tool_tier": 3,

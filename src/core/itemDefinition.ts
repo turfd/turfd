@@ -40,7 +40,7 @@ export interface ItemDefinition {
 
   /** Tool category (axe, pickaxe, shovel, hoe). Undefined for non-tool items. */
   readonly toolType?: "axe" | "pickaxe" | "shovel" | "hoe";
-  /** Tool tier: 0=wood, 1=stone, 2=iron, 3=diamond. */
+  /** Tool tier: 0=wood, 1=stone, 2=iron, 3=stratite. */
   readonly toolTier?: number;
   /** Mining speed multiplier when this tool matches the block's harvest tool type. */
   readonly toolSpeed?: number;

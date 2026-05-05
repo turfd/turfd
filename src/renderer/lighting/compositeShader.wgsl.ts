@@ -183,37 +183,6 @@ fn softSolidSkyExposure(worldPosBlocks: vec2<f32>) -> f32 {
   return mix(avg, darker, 0.34);
 }
 
-fn placedTorchShadow(rayOrigin: vec2<f32>, to: vec2<f32>) -> f32 {
-  let delta = to - rayOrigin;
-  let dist = length(delta);
-  let dSafe = max(dist, 1e-6);
-  let dir = delta / dSafe;
-  let perp = vec2<f32>(-dir.y, dir.x);
-  var totalVis = 0.0;
-  let rayWeight = select(3.0, 1.0, compositeUniforms.uLightingQuality <= 0);
-  let lq = compositeUniforms.uLightingQuality;
-  for (var r: u32 = 0u; r < 3u; r = r + 1u) {
-    let rayActive = (lq > 0) || (r == 1u);
-    let rayOffset = perp * (f32(i32(r) - 1) * 0.18);
-    var vis = 1.0;
-    let steps = select(4.0, 8.0, lq >= 2);
-    for (var s: u32 = 0u; s < 8u; s = s + 1u) {
-      let stepActive = (lq >= 2) || (s < 4u);
-      let t = dist * (f32(s) + 0.5) / steps;
-      let sp = rayOrigin + dir * t + rayOffset;
-      let uv = smoothOcclusionUV(sp);
-      let uvInBounds = (uv.x > 0.0) && (uv.x < 1.0) && (uv.y > 0.0) && (uv.y < 1.0);
-      let uvSamp = clamp(uv, vec2<f32>(0.001), vec2<f32>(0.999));
-      let occ = textureSample(uOcclusion, uOcclusionSampler, uvSamp).r;
-      let occMul = select(1.0, 1.0 - occ * 0.96, uvInBounds);
-      vis *= select(1.0, occMul, stepActive);
-    }
-    totalVis += select(0.0, vis, rayActive);
-  }
-  let marched = pow(totalVis / rayWeight, 1.18);
-  return select(1.0, marched, dist >= 0.001);
-}
-
 fn torchBloomGain(worldPos: vec2<f32>, tip: vec2<f32>) -> f32 {
   let dPx = (worldPos - tip) * 16.0;
   let hw = 4.05;
@@ -290,11 +259,6 @@ fn mainFragment(@location(0) vTextureCoord: vec2<f32>) -> @location(0) vec4<f32>
   let skyS = pow(clamp(smoothedSky, 0.0, 1.0), skyGamma);
   let shadowFactor = shadowFloor + (1.0 - shadowFloor) * skyS;
 
-  var heldTorchVis = 1.0;
-  if (compositeUniforms.uTorchActive > 0.5) {
-    heldTorchVis = placedTorchShadow(worldPos, compositeUniforms.uTorchWorldPos);
-  }
-
   let directSun = compositeUniforms.uSunIntensity * shadowFactor;
   let directMoon = compositeUniforms.uMoonIntensity * shadowFactor;
   let skyExposure = max(smoothedSky, mix(0.03, 0.10, nightPenumbra));
@@ -319,7 +283,7 @@ fn mainFragment(@location(0) vTextureCoord: vec2<f32>) -> @location(0) vec4<f32>
       let n = tdist / max(compositeUniforms.uTorchRadius, 1e-4);
       var atten = max(0.0, 1.0 - n);
       atten = atten * atten * 0.7 + atten * 0.3;
-      let heldTorchLight = compositeUniforms.uTorchIntensity * atten * heldTorchVis;
+      let heldTorchLight = compositeUniforms.uTorchIntensity * atten;
       light += compositeUniforms.uTorchColor * clamp(heldTorchLight, 0.0, 1.0);
     }
   }
@@ -335,12 +299,11 @@ fn mainFragment(@location(0) vTextureCoord: vec2<f32>) -> @location(0) vec4<f32>
     let tp = placed.xy;
     let placedStrength = max(0.0, placed.z);
     let ptdist = length(tp - worldPos);
-    let shadow = placedTorchShadow(worldPos, tp);
     let inPlacedRadius = ptdist < PLACED_TORCH_RADIUS;
     let n = ptdist / PLACED_TORCH_RADIUS;
     var patten = max(0.0, 1.0 - n);
     patten = patten * patten * 0.7 + patten * 0.3;
-    let placedContrib = 0.75 * patten * shadow * placedStrength;
+    let placedContrib = 0.75 * patten * placedStrength;
     placedTorchAmt = max(placedTorchAmt, select(0.0, placedContrib, inPlacedRadius));
   }
   light += vec3<f32>(1.0, 0.85, 0.55) * placedTorchAmt;
@@ -350,11 +313,6 @@ fn mainFragment(@location(0) vTextureCoord: vec2<f32>) -> @location(0) vec4<f32>
   var bloomPlayerOccl = 1.0;
   if (compositeUniforms.uBloomEnabled > 0.5) {
     let bloomTipShift = vec2<f32>(1.0 / compositeUniforms.uBlockPixels, -13.0 / compositeUniforms.uBlockPixels);
-    if (compositeUniforms.uTorchActive > 0.5) {
-      let g = torchBloomGain(worldPos, compositeUniforms.uTorchWorldPos + bloomTipShift);
-      let heldBloom = compositeUniforms.uTorchIntensity * 0.48 * g * heldTorchVis;
-      bloom += compositeUniforms.uTorchColor * clamp(heldBloom, 0.0, 1.0);
-    }
 
     var placedBloomAmt = 0.0;
     for (var j: i32 = 0; j < ${MAX_PLACED_TORCHES}; j = j + 1) {
@@ -364,10 +322,18 @@ fn mainFragment(@location(0) vTextureCoord: vec2<f32>) -> @location(0) vec4<f32>
       let placedB = compositeUniforms.uPlacedTorchPositions[u32(j)];
       let tpB = placedB.xy;
       let placedStrengthB = max(0.0, placedB.z);
-      let bloomTipShiftScale = clamp(placedB.w, 0.0, 1.0);
+      let wBloomMeta = placedB.w;
+      let placedBloomWeight = select(1.0, 0.0, wBloomMeta < -0.5);
+      let bloomTipShiftScale = select(
+        clamp(wBloomMeta, 0.0, 1.0),
+        0.0,
+        wBloomMeta < 0.0,
+      );
       let gB = torchBloomGain(worldPos, tpB + bloomTipShift * bloomTipShiftScale);
-      let shadowB = placedTorchShadow(worldPos, tpB);
-      placedBloomAmt = max(placedBloomAmt, 0.42 * gB * shadowB * placedStrengthB);
+      placedBloomAmt = max(
+        placedBloomAmt,
+        placedBloomWeight * 0.42 * gB * placedStrengthB,
+      );
     }
     bloom += vec3<f32>(1.0, 0.85, 0.50) * placedBloomAmt;
 

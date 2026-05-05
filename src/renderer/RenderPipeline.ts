@@ -140,10 +140,6 @@ export class RenderPipeline implements RenderPipelineLayers {
   private _lastSkyCanvasPaintCw = -1;
   private _lastSkyCanvasPaintCh = -1;
   private _lastSkyCanvasPaintLightning = -999;
-  private _lastCullCameraX = Number.NaN;
-  private _lastCullCameraY = Number.NaN;
-  private _lastCullScreenW = -1;
-  private _lastCullScreenH = -1;
   private readonly _cullScreen = new Rectangle();
   /** Sky flash alpha from {@link updateSky} (0–1). */
   private _skyLightningAlpha = 0;
@@ -397,6 +393,13 @@ export class RenderPipeline implements RenderPipelineLayers {
 
     this.app = application;
     this._graphicsBackend = backend;
+    if (import.meta.env.DEV) {
+      console.info(
+        "[RenderPipeline] Pixi graphics backend:",
+        backend,
+        "(WebGPU validation like `used in submit while destroyed` should not reproduce on webgl)",
+      );
+    }
 
     const skyCanvas = document.createElement("canvas");
     skyCanvas.dataset.stratumCanvas = "game-sky-2d";
@@ -1009,26 +1012,17 @@ export class RenderPipeline implements RenderPipelineLayers {
       this.camera.worldRoot.visible = true;
       const cameraPos = this.camera.getPosition();
       const screen = this.app.renderer.screen;
-      const shouldCull =
-        !Number.isFinite(this._lastCullCameraX) ||
-        Math.abs(cameraPos.x - this._lastCullCameraX) >= 6 ||
-        Math.abs(cameraPos.y - this._lastCullCameraY) >= 6 ||
-        screen.width !== this._lastCullScreenW ||
-        screen.height !== this._lastCullScreenH;
-      if (shouldCull) {
-        const tCull = import.meta.env.DEV ? chunkPerfNow() : 0;
-        this._cullScreen.x = -this._overscanPadPx;
-        this._cullScreen.y = -this._overscanPadPx;
-        this._cullScreen.width = screen.width + this._overscanPadPx * 2;
-        this._cullScreen.height = screen.height + this._overscanPadPx * 2;
-        Culler.shared.cull(this.camera.worldRoot, this._cullScreen, true);
-        this._lastCullCameraX = cameraPos.x;
-        this._lastCullCameraY = cameraPos.y;
-        this._lastCullScreenW = screen.width;
-        this._lastCullScreenH = screen.height;
-        if (import.meta.env.DEV) {
-          chunkPerfLog("renderPipeline:cull", chunkPerfNow() - tCull);
-        }
+      // Manual cull must run every frame: chunk `culled` flags are sticky until refreshed.
+      // Gating on camera Δ (e.g. ≥6px) left stale flags vs a moving `worldRoot` transform,
+      // which froze the albedo RT while the lighting composite still updated `uCameraWorld`.
+      const tCull = import.meta.env.DEV ? chunkPerfNow() : 0;
+      this._cullScreen.x = -this._overscanPadPx;
+      this._cullScreen.y = -this._overscanPadPx;
+      this._cullScreen.width = screen.width + this._overscanPadPx * 2;
+      this._cullScreen.height = screen.height + this._overscanPadPx * 2;
+      Culler.shared.cull(this.camera.worldRoot, this._cullScreen, true);
+      if (import.meta.env.DEV) {
+        chunkPerfLog("renderPipeline:cull", chunkPerfNow() - tCull);
       }
       withPerfSpan("RenderPipeline.renderWorldToAlbedo", () => {
         this.renderWorldWithOverscanOffset(this._albedoRT!);
@@ -1041,7 +1035,14 @@ export class RenderPipeline implements RenderPipelineLayers {
         Number.isFinite(this._lastBloomMaskCameraX) &&
         Math.abs(cameraPos.x - this._lastBloomMaskCameraX) < 1 &&
         Math.abs(cameraPos.y - this._lastBloomMaskCameraY) < 1;
-      const bloomModulo = bloomCameraStill ? 3 : 2;
+      const lowResBloom = videoPrefs.renderScale < 0.95;
+      const bloomModulo = lowResBloom
+        ? bloomCameraStill
+          ? 4
+          : 3
+        : bloomCameraStill
+          ? 3
+          : 2;
       const bloomPlayerChanged = this.shouldRefreshBloomMaskForPlayerMotion();
       if (
         videoPrefs.bloomEnabled &&

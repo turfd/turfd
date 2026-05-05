@@ -3,6 +3,6 @@
   "entry": [
     "vite.config.ts",
     "scripts/release-version.mjs",
-    "dev/updateToolDevPlugin.ts"
+    "tools/release/updateToolDevPlugin.ts"
   ]
 }

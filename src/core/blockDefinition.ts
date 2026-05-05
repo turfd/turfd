@@ -46,7 +46,7 @@ export interface BlockDefinitionBase {
   harvestToolType?: "axe" | "pickaxe" | "shovel";
   /** When true, mining without the correct tool+tier drops nothing. */
   requiresToolForDrops: boolean;
-  /** Minimum tool tier needed for drops (0=wood, 1=stone, 2=iron, 3=diamond). */
+  /** Minimum tool tier needed for drops (0=wood, 1=stone, 2=iron, 3=stratite). */
   minToolTier: number;
   /** 0–15 */
   lightEmission: number;

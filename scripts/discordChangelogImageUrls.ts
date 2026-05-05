@@ -18,7 +18,7 @@ export type DiscordChangelogImageUrlsCommitted = {
 };
 
 export const DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED: DiscordChangelogImageUrlsCommitted = {
-  headerImageUrl: "https://i.imgur.com/VIbjjom.png",
+  headerImageUrl: "https://i.imgur.com/BFlIcA9.png",
   mainEmbedImageUrl: "https://i.imgur.com/S3afxkt.png",
   footerImageUrl: "",
 };

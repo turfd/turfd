@@ -78,7 +78,7 @@ export class OreVeins {
 
     this.oreTable = [
       {
-        oreId: id("stratum:diamond_ore"),
+        oreId: id("stratum:stratite_ore"),
         veinSpacing: 14, peakSpawnChance: 0.19, veinRadius: 0.92,
         minHAB: 0, peakStartHAB: 15, peakEndHAB: 55, maxHAB: 75,
         salts: DIAMOND_SALTS,

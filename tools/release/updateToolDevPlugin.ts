@@ -21,8 +21,8 @@ import type { Plugin } from "vite";
 import {
   buildChangelogDiscordEmbeds,
   parseDiscordEmbedColor,
-} from "../scripts/discordChangelogEmbeds";
-import { parseCommitBody } from "../scripts/readReleaseNotesFromGit";
+} from "../../scripts/discordChangelogEmbeds";
+import { parseCommitBody } from "../../scripts/readReleaseNotesFromGit";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,10 +37,7 @@ type CommitPayload = {
 };
 
 function readPageHtml(): string {
-  return readFileSync(
-    path.join(__dirname, "update-tool", "page.html"),
-    "utf-8",
-  );
+  return readFileSync(path.join(__dirname, "page.html"), "utf-8");
 }
 
 function isLocalHost(host: string | undefined): boolean {

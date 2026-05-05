@@ -112,6 +112,8 @@ export class InventoryUI {
   private sandboxHud = false;
   private readonly itemTooltipEl: HTMLDivElement;
   private tooltipActiveSlot: number | null = null;
+  /** True when {@link itemTooltipEl} is showing a sandbox creative-grid item (not a player slot). */
+  private creativeTooltipActive = false;
   private inventoryOpen = false;
   private overlayDirty = true;
 
@@ -195,6 +197,7 @@ export class InventoryUI {
 
   private hideItemTooltip(): void {
     this.tooltipActiveSlot = null;
+    this.creativeTooltipActive = false;
     this.itemTooltipEl.classList.remove("inv-item-tooltip--visible");
     this.itemTooltipEl.replaceChildren();
   }
@@ -211,19 +214,25 @@ export class InventoryUI {
     return summary !== null ? `${baseName} (+ Data)` : baseName;
   }
 
-  private fillItemTooltip(def: ItemDefinition, slotIndex: number): void {
+  /** @param slotIndex - `null` for creative sidebar items (no slot data). */
+  private fillItemTooltipForDefinition(def: ItemDefinition, slotIndex: number | null): void {
     const root = this.itemTooltipEl;
     root.replaceChildren();
     const nameLine = document.createElement("div");
     nameLine.className = "inv-item-tooltip__name";
-    nameLine.textContent = this.displayNameForSlot(slotIndex, def.displayName);
+    nameLine.textContent =
+      slotIndex !== null
+        ? this.displayNameForSlot(slotIndex, def.displayName)
+        : def.displayName;
     root.appendChild(nameLine);
-    const slotDataSummary = this.getInventory().getSlotDataSummary(slotIndex);
-    if (slotDataSummary !== null) {
-      const dataLine = document.createElement("div");
-      dataLine.className = "inv-item-tooltip__detail";
-      dataLine.textContent = `Data: ${this.truncateDataLine(slotDataSummary)}`;
-      root.appendChild(dataLine);
+    if (slotIndex !== null) {
+      const slotDataSummary = this.getInventory().getSlotDataSummary(slotIndex);
+      if (slotDataSummary !== null) {
+        const dataLine = document.createElement("div");
+        dataLine.className = "inv-item-tooltip__detail";
+        dataLine.textContent = `Data: ${this.truncateDataLine(slotDataSummary)}`;
+        root.appendChild(dataLine);
+      }
     }
     const tip = def.inventoryTooltip;
     if (tip !== undefined && tip.length > 0) {
@@ -239,6 +248,10 @@ export class InventoryUI {
       stats.textContent = `Attack: ${combat.damage} damage · Knockback: ${combat.knockback}`;
       root.appendChild(stats);
     }
+  }
+
+  private fillItemTooltip(def: ItemDefinition, slotIndex: number): void {
+    this.fillItemTooltipForDefinition(def, slotIndex);
   }
 
   private positionItemTooltip(clientX: number, clientY: number): void {
@@ -260,13 +273,48 @@ export class InventoryUI {
     el.style.top = `${y}px`;
   }
 
+  /**
+   * Sandbox creative grid: same styled tooltip as player slots (see {@link CreativePanel}).
+   */
+  showCreativeItemTooltip(def: ItemDefinition, clientX: number, clientY: number): void {
+    if (!this.inventoryOpen) {
+      return;
+    }
+    this.tooltipActiveSlot = null;
+    this.creativeTooltipActive = true;
+    this.fillItemTooltipForDefinition(def, null);
+    this.itemTooltipEl.classList.add("inv-item-tooltip--visible");
+    requestAnimationFrame(() => {
+      this.positionItemTooltip(clientX, clientY);
+    });
+  }
+
+  moveCreativeItemTooltip(clientX: number, clientY: number): void {
+    if (!this.creativeTooltipActive) {
+      return;
+    }
+    if (!this.itemTooltipEl.classList.contains("inv-item-tooltip--visible")) {
+      return;
+    }
+    this.positionItemTooltip(clientX, clientY);
+  }
+
+  hideCreativeItemTooltip(): void {
+    if (!this.creativeTooltipActive) {
+      return;
+    }
+    this.hideItemTooltip();
+  }
+
   private bindSlotTooltip(slot: HTMLDivElement, slotIndex: number): void {
     slot.addEventListener("mouseenter", (e: MouseEvent) => {
+      this.creativeTooltipActive = false;
       if (this.iconUrlLookup === null) {
         return;
       }
       const stack = this.getInventory().getStack(slotIndex);
       if (stack === null || stack.count <= 0) {
+        this.hideItemTooltip();
         return;
       }
       const def = this.itemRegistry.getById(stack.itemId);

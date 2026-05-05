@@ -320,8 +320,8 @@ export type DynamicLightEmitter = {
   /** Relative intensity scale (1 = regular placed torch contribution). */
   strength: number;
   /**
-   * Multiplier for torch-specific bloom tip shift in the composite shader.
-   * 1 = keep default torch shift, 0 = no shift (centered glow).
+   * Bloom tip shift in the composite placed-torch path: `1` = default torch offset (default),
+   * `0` = centered on `worldBlock` (fireflies).
    */
   bloomTipShiftScale?: number;
 };

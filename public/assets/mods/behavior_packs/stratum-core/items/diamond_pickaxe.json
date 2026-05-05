@@ -2,11 +2,11 @@
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
-      "identifier": "stratum:diamond_pickaxe"
+      "identifier": "stratum:stratite_pickaxe"
     },
     "components": {
-      "stratum:display_name": "Diamond Pickaxe",
-      "stratum:texture_key": "diamond_pickaxe",
+      "stratum:display_name": "Stratite Pickaxe",
+      "stratum:texture_key": "stratite_pickaxe",
       "stratum:max_stack": 1,
       "stratum:tool_type": "pickaxe",
       "stratum:tool_tier": 3,

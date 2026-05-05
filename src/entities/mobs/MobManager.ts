@@ -524,6 +524,22 @@ export class MobManager {
     return out;
   }
 
+  /**
+   * Count live mobs in pixel space within a Euclidean radius (no allocations).
+   * Used by spawner tick; matches historical `getPublicViews().filter(...).length` distance check.
+   */
+  countMobsWithinPxRadiusSq(centerXPx: number, centerYPx: number, radiusSqPx: number): number {
+    let n = 0;
+    for (const m of this.mobs.values()) {
+      const dx = m.x - centerXPx;
+      const dy = m.y - centerYPx;
+      if (dx * dx + dy * dy <= radiusSqPx) {
+        n += 1;
+      }
+    }
+    return n;
+  }
+
   getById(id: number): MobRecord | undefined {
     return this.mobs.get(id);
   }

@@ -16,6 +16,10 @@ type CreativeTabId = "all" | CreativeCategory;
 export interface CreativePanelDeps {
   getItemIconUrlLookup: () => ItemIconUrlLookup | null;
   onPickItem: (itemId: number, count: number, button: number) => void;
+  /** Styled inventory tooltip (native `title` is unreliable over game canvas / layered UI). */
+  onItemHover?: (def: ItemDefinition, e: MouseEvent) => void;
+  onItemMove?: (e: MouseEvent) => void;
+  onItemLeave?: () => void;
 }
 
 function tabLabel(id: CreativeTabId): string {
@@ -176,7 +180,6 @@ export class CreativePanel {
       const slot = document.createElement("div");
       slot.className = "inv-slot inv-creative-slot";
       slot.dataset.itemId = String(def.id);
-      slot.title = def.displayName;
       slot.setAttribute("aria-label", def.displayName);
       const icon = document.createElement("div");
       icon.className = "inv-slot-icon";
@@ -184,6 +187,21 @@ export class CreativePanel {
       count.className = "inv-slot-count";
       slot.appendChild(icon);
       slot.appendChild(count);
+      slot.addEventListener("mouseenter", (e: MouseEvent) => {
+        if (!this.open || !this.visible) {
+          return;
+        }
+        this.deps.onItemHover?.(def, e);
+      });
+      slot.addEventListener("mousemove", (e: MouseEvent) => {
+        if (!this.open || !this.visible) {
+          return;
+        }
+        this.deps.onItemMove?.(e);
+      });
+      slot.addEventListener("mouseleave", () => {
+        this.deps.onItemLeave?.();
+      });
       slot.addEventListener("mousedown", (e: MouseEvent) => {
         if (!this.open || !this.visible || (e.button !== 0 && e.button !== 2)) {
           return;
@@ -218,7 +236,6 @@ export class CreativePanel {
       } else {
         icon.style.cssText = "";
       }
-      slot.title = def.displayName;
       slot.setAttribute("aria-label", def.displayName);
     }
   }

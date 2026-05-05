@@ -140,6 +140,7 @@ Key runtime libraries: `@supabase/supabase-js`, `peerjs`, `pixi.js`, `zod`, `idb
 |-----|----------|
 | `docs/agents.md` | Architects and contributors — systems, conventions, renderer notes |
 | `changelogs/` | Release note drafts and reference copy for versioning |
+| `tools/release/` | Dev-only release UI (`/stratum/update` when `npm run dev` runs with a `.git` checkout) |
 | `scripts/release-commit.sh` | Scripted release workflow for maintainers |
 
 ---

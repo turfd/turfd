@@ -98,7 +98,6 @@ import {
 import { InputManager } from "../input/InputManager";
 import { ItemRegistry, registerBlockItems } from "../items/ItemRegistry";
 import { LootResolver } from "../items/LootResolver";
-import { worldToChunk } from "../world/chunk/ChunkCoord";
 import { GeneratorContext } from "../world/gen/GeneratorContext";
 import type { IModRepository } from "../mods/IModRepository";
 import {
@@ -200,6 +199,7 @@ import {
   loadBuiltinStructures,
 } from "../world/structure/loadBuiltinStructures";
 import { placeStructureAt } from "../world/structure/placeStructure";
+import { normalizeStructurePlaceIdentifier } from "../world/structure/structureIdFromPath";
 import { applyCommittedBreakOnWorld } from "../world/terrain/applyCommittedBreak";
 import { applyCommittedDoorToggle } from "../world/terrain/applyDoorToggle";
 import {
@@ -1691,6 +1691,15 @@ export class Game {
       itemRegistry,
       {
         getItemIconUrlLookup: () => this.inventoryUI?.getItemIconUrlLookup() ?? null,
+        onItemHover: (def, e) => {
+          this.inventoryUI?.showCreativeItemTooltip(def, e.clientX, e.clientY);
+        },
+        onItemMove: (e) => {
+          this.inventoryUI?.moveCreativeItemTooltip(e.clientX, e.clientY);
+        },
+        onItemLeave: () => {
+          this.inventoryUI?.hideCreativeItemTooltip();
+        },
         onPickItem: (itemId, count, button) => {
           const em = this.entityManager;
           if (em === null || !this._isSandboxWorld()) {
@@ -3698,11 +3707,42 @@ export class Game {
     if (tokens.length === 0) {
       this._giveFeedbackToIssuer(
         issuerPeerId,
-        "Usage: /structure export | /structure place <identifier> [x y]",
+        "Usage: /structure export | /structure list | /structure place <id> [x y] — e.g. place dungeon or stratum:dungeon",
       );
       return;
     }
     const sub = tokens[0]!.toLowerCase();
+    if (sub === "list") {
+      if (tokens.length !== 1) {
+        this._giveFeedbackToIssuer(issuerPeerId, "Usage: /structure list");
+        return;
+      }
+      const ids = this._structureRegistry.listStructureIdentifiers();
+      const joined = ids.join(", ");
+      const maxLen = 3600;
+      if (joined.length <= maxLen) {
+        this._giveFeedbackToIssuer(
+          issuerPeerId,
+          ids.length === 0 ? "No structures registered." : `Structures (${ids.length}): ${joined}`,
+        );
+      } else {
+        let acc = "";
+        let shown = 0;
+        for (const id of ids) {
+          const next = acc.length === 0 ? id : `${acc}, ${id}`;
+          if (next.length > maxLen) {
+            break;
+          }
+          acc = next;
+          shown += 1;
+        }
+        this._giveFeedbackToIssuer(
+          issuerPeerId,
+          `Structures (${ids.length}, showing ${shown}): ${acc} …`,
+        );
+      }
+      return;
+    }
     if (sub === "place") {
       const world = this.world;
       const ir = this._itemRegistry;
@@ -3713,11 +3753,12 @@ export class Game {
       if (tokens.length !== 2 && tokens.length !== 4) {
         this._giveFeedbackToIssuer(
           issuerPeerId,
-          "Usage: /structure place <identifier> [x y]",
+          "Usage: /structure place <id> [x y] — short names map to stratum:<name> (see /structure list)",
         );
         return;
       }
-      const id = tokens[1]!;
+      const rawId = tokens[1]!;
+      const id = normalizeStructurePlaceIdentifier(rawId);
       let targetWx: number;
       let targetWy: number;
       if (tokens.length === 4) {
@@ -3726,7 +3767,7 @@ export class Game {
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
           this._giveFeedbackToIssuer(
             issuerPeerId,
-            "Usage: /structure place <identifier> [x y]",
+            "Usage: /structure place <id> [x y]",
           );
           return;
         }
@@ -3741,20 +3782,25 @@ export class Game {
       }
       const structure = this._structureRegistry.getStructure(id);
       if (structure === undefined) {
-        this._giveFeedbackToIssuer(issuerPeerId, `Unknown structure: ${id}`);
+        this._giveFeedbackToIssuer(
+          issuerPeerId,
+          rawId === id
+            ? `Unknown structure: ${id}. Try /structure list.`
+            : `Unknown structure: ${rawId} (resolved to ${id}). Try /structure list.`,
+        );
         return;
       }
       const placed = placeStructureAt(world, ir, structure, targetWx, targetWy);
       this._giveFeedbackToIssuer(
         issuerPeerId,
-        `Placed ${id} at (${targetWx}, ${targetWy}). Cells: fg ${placed.placedForeground}, bg ${placed.placedBackground}, containers ${placed.placedContainers}, furnaces ${placed.placedFurnaces}.`,
+        `Placed ${id}${rawId !== id ? ` (${rawId})` : ""} at (${targetWx}, ${targetWy}). Cells: fg ${placed.placedForeground}, bg ${placed.placedBackground}, containers ${placed.placedContainers}, furnaces ${placed.placedFurnaces}.`,
       );
       return;
     }
     if (sub !== "export") {
       this._giveFeedbackToIssuer(
         issuerPeerId,
-        "Usage: /structure export | /structure place <identifier> [x y]",
+        "Usage: /structure export | /structure list | /structure place <id> [x y]",
       );
       return;
     }
@@ -6975,12 +7021,7 @@ export class Game {
       const f = rp.getAuthorityFeet();
       playerFeet.push({ x: f.x, y: f.y });
     }
-    const mobs = mm.getPublicViews();
-    world.forEachSpawnerTile((wx, wy, tile) => {
-      const { cx, cy } = worldToChunk(wx, wy);
-      if (!simulationChunkKeys.has(`${cx},${cy}`)) {
-        return;
-      }
+    world.forEachSpawnerTileInSimulationChunkKeys(simulationChunkKeys, (wx, wy, tile) => {
       const playerRangePx = tile.playerRange * BLOCK_SIZE;
       const hasPlayerInRange =
         playerRangePx <= 0 ||
@@ -6994,7 +7035,8 @@ export class Game {
       const spawnRangePx = Math.max(0, tile.spawnRange) * BLOCK_SIZE;
       const centerX = (wx + 0.5) * BLOCK_SIZE;
       const centerY = (wy + 1) * BLOCK_SIZE;
-      const nearby = mobs.filter((m) => (m.x - centerX) ** 2 + (m.y - centerY) ** 2 <= spawnRangePx * spawnRangePx).length;
+      const spawnRangeSq = spawnRangePx * spawnRangePx;
+      const nearby = mm.countMobsWithinPxRadiusSq(centerX, centerY, spawnRangeSq);
       if (tile.maxCount > 0 && nearby >= tile.maxCount) {
         return;
       }
@@ -8175,9 +8217,12 @@ export class Game {
 
       this._maybeBroadcastBlockBreakProgress(world, plState);
 
-      this.blockBreakParticles?.update(dtSec);
+      withPerfSpan("Game.fixedUpdate.particlesMining", () => {
+        this.blockBreakParticles?.update(dtSec);
+        const plPos = entityManager.getPlayer().state.position;
+        this.leafFallParticles?.update(dtSec, plPos.x, plPos.y);
+      });
       const pl = entityManager.getPlayer().state.position;
-      this.leafFallParticles?.update(dtSec, pl.x, pl.y);
       // NOTE: firefly / butterfly ambient particles are visual-only and are now ticked
       // from the render path (see {@link Game._tickAmbientVisualParticles}) so their
       // cost scales with render FPS (and an adaptive-workload gate) rather than the
@@ -8188,7 +8233,9 @@ export class Game {
         this._playerStateBroadcastPhase = 0;
         this._playerStateBroadcaster.tick();
       }
-      world.updateRemotePlayers(dtSec);
+      withPerfSpan("Game.fixedUpdate.remotePlayers", () => {
+        world.updateRemotePlayers(dtSec);
+      });
       withPerfSpan("Game.fixedUpdate.audioAmbient", () => {
         const em = this.entityManager;
         const w = this.world;
@@ -8342,187 +8389,195 @@ export class Game {
       }
 
       if (role !== "client" && this.world !== null && this._mobManager !== null) {
-        const rng = this.world.forkMobRng();
-        const world = this.world;
-        const zombiePlayerTargets: {
-          peerId: string | null;
-          x: number;
-          y: number;
-        }[] = [];
-        const netForMobs = this.adapter.state;
-        if (netForMobs.status !== "connected") {
-          zombiePlayerTargets.push({ peerId: null, x: pl.x, y: pl.y });
-        } else {
-          const localPeer = this.adapter.getLocalPeerId();
-          if (localPeer !== null) {
-            zombiePlayerTargets.push({
-              peerId: localPeer,
-              x: pl.x,
-              y: pl.y,
-            });
-          }
-          for (const [pid, rp] of world.getRemotePlayers()) {
-            const f = rp.getAuthorityFeet();
-            zombiePlayerTargets.push({ peerId: pid, x: f.x, y: f.y });
-          }
-          if (zombiePlayerTargets.length === 0) {
+        withPerfSpan("Game.fixedUpdate.mobHostTick", () => {
+          const mm = this._mobManager!;
+          const rng = this.world!.forkMobRng();
+          const world = this.world!;
+          const zombiePlayerTargets: {
+            peerId: string | null;
+            x: number;
+            y: number;
+          }[] = [];
+          const netForMobs = this.adapter.state;
+          if (netForMobs.status !== "connected") {
             zombiePlayerTargets.push({ peerId: null, x: pl.x, y: pl.y });
+          } else {
+            const localPeer = this.adapter.getLocalPeerId();
+            if (localPeer !== null) {
+              zombiePlayerTargets.push({
+                peerId: localPeer,
+                x: pl.x,
+                y: pl.y,
+              });
+            }
+            for (const [pid, rp] of world.getRemotePlayers()) {
+              const f = rp.getAuthorityFeet();
+              zombiePlayerTargets.push({ peerId: pid, x: f.x, y: f.y });
+            }
+            if (zombiePlayerTargets.length === 0) {
+              zombiePlayerTargets.push({ peerId: null, x: pl.x, y: pl.y });
+            }
           }
-        }
-        const sandboxWorld = this._isSandboxWorld();
-        let spawnViewRects: ReadonlyArray<MobSpawnViewRect> | undefined;
-        const pipeForSpawn = this.pipeline;
-        if (pipeForSpawn !== null) {
-          try {
-            const cam = pipeForSpawn.getCamera();
-            const { width: sw, height: sh } = pipeForSpawn.pixiApp.renderer.screen;
-            if (sw > 0 && sh > 0) {
-              const rects: MobSpawnViewRect[] = [
-                buildMobSpawnViewRectFromCamera(
-                  cam,
-                  sw,
-                  sh,
-                  MOB_SPAWN_VIEW_MARGIN_SCREEN_PX,
+          const sandboxWorld = this._isSandboxWorld();
+          let spawnViewRects: ReadonlyArray<MobSpawnViewRect> | undefined;
+          const pipeForSpawn = this.pipeline;
+          if (pipeForSpawn !== null) {
+            try {
+              const cam = pipeForSpawn.getCamera();
+              const { width: sw, height: sh } = pipeForSpawn.pixiApp.renderer.screen;
+              if (sw > 0 && sh > 0) {
+                const rects: MobSpawnViewRect[] = [
+                  buildMobSpawnViewRectFromCamera(
+                    cam,
+                    sw,
+                    sh,
+                    MOB_SPAWN_VIEW_MARGIN_SCREEN_PX,
+                  ),
+                ];
+                const z = cam.getZoom();
+                const localPeerForSpawn = this.adapter.getLocalPeerId();
+                for (const t of zombiePlayerTargets) {
+                  if (t.peerId !== null && t.peerId !== localPeerForSpawn) {
+                    rects.push(
+                      buildMobSpawnViewRectCenteredOnFeet(
+                        t.x,
+                        t.y,
+                        sw,
+                        sh,
+                        z,
+                        MOB_SPAWN_VIEW_MARGIN_SCREEN_PX,
+                      ),
+                    );
+                  }
+                }
+                spawnViewRects = rects;
+              }
+            } catch {
+              /* Pixi not ready */
+            }
+          }
+          mm.tickHost(
+            FIXED_TIMESTEP_SEC,
+            rng,
+            this._worldTime.ms,
+            { x: pl.x, y: pl.y },
+            sandboxWorld ? [] : zombiePlayerTargets,
+            sandboxWorld
+              ? undefined
+              : (peerId, dmg) => {
+                  const em = this.entityManager;
+                  if (em === null) {
+                    return;
+                  }
+                  const localPeer = this.adapter.getLocalPeerId();
+                  const st = this.adapter.state;
+                  if (peerId === null || (localPeer !== null && peerId === localPeer)) {
+                    em.getPlayer().takeDamage(dmg);
+                    return;
+                  }
+                  if (st.status === "connected" && st.role === "host") {
+                    this.adapter.send(peerId as PeerId, {
+                      type: MsgType.PLAYER_DAMAGE_APPLIED,
+                      damage: dmg,
+                    });
+                  }
+                },
+            spawnViewRects,
+          );
+          const flush = mm.flushHostReplication();
+          const netSt = this.adapter.state;
+          if (netSt.status === "connected" && netSt.role === "host") {
+            for (const id of flush.despawns) {
+              this.adapter.broadcast({ type: MsgType.ENTITY_DESPAWN, entityId: id });
+            }
+            for (const sp of flush.spawns) {
+              const spFx = this._pendingSpawnerFxByMobId.get(sp.id);
+              if (spFx !== undefined) {
+                this._pendingSpawnerFxByMobId.delete(sp.id);
+              }
+              this.adapter.broadcast({
+                type: MsgType.ENTITY_SPAWN,
+                entityId: sp.id,
+                entityType: sp.type,
+                x: sp.x,
+                y: sp.y,
+                woolColor: sp.woolColor,
+                ...(spFx !== undefined
+                  ? { spawnerFxWx: spFx.wx, spawnerFxWy: spFx.wy }
+                  : {}),
+              });
+            }
+            for (const v of flush.states) {
+              let flags = 0;
+              if (v.facingRight) {
+                flags |= 1;
+              }
+              if (v.panic) {
+                flags |= 2;
+              }
+              if (v.walking) {
+                flags |= 4;
+              }
+              if (v.hurt) {
+                flags |= 8;
+              }
+              if (v.attacking) {
+                flags |= 16;
+              }
+              if (v.burning) {
+                flags |= 32;
+              }
+              if (v.type === MobType.Slime) {
+                if (v.slimeOnGround) {
+                  flags |= ENTITY_STATE_FLAG_SLIME_ON_GROUND;
+                }
+                if (v.slimeJumpPriming) {
+                  flags |= ENTITY_STATE_FLAG_SLIME_JUMP_PRIMING;
+                }
+              }
+              this.adapter.broadcast({
+                type: MsgType.ENTITY_STATE,
+                entityId: v.id,
+                entityType: v.type,
+                x: v.x,
+                y: v.y,
+                vx: v.vx,
+                vy: v.vy,
+                hp: v.hp,
+                flags,
+                woolColor: v.woolColor,
+                deathAnim10Ms: Math.min(
+                  255,
+                  Math.max(0, Math.round(v.deathAnimRemainSec / 0.01)),
                 ),
-              ];
-              const z = cam.getZoom();
-              const localPeerForSpawn = this.adapter.getLocalPeerId();
-              for (const t of zombiePlayerTargets) {
-                if (t.peerId !== null && t.peerId !== localPeerForSpawn) {
-                  rects.push(
-                    buildMobSpawnViewRectCenteredOnFeet(
-                      t.x,
-                      t.y,
-                      sw,
-                      sh,
-                      z,
-                      MOB_SPAWN_VIEW_MARGIN_SCREEN_PX,
-                    ),
-                  );
-                }
-              }
-              spawnViewRects = rects;
+              });
             }
-          } catch {
-            /* Pixi not ready */
           }
-        }
-        this._mobManager.tickHost(
-          FIXED_TIMESTEP_SEC,
-          rng,
-          this._worldTime.ms,
-          { x: pl.x, y: pl.y },
-          sandboxWorld ? [] : zombiePlayerTargets,
-          sandboxWorld
-            ? undefined
-            : (peerId, dmg) => {
-                const em = this.entityManager;
-                if (em === null) {
-                  return;
-                }
-                const localPeer = this.adapter.getLocalPeerId();
-                const st = this.adapter.state;
-                if (peerId === null || (localPeer !== null && peerId === localPeer)) {
-                  em.getPlayer().takeDamage(dmg);
-                  return;
-                }
-                if (st.status === "connected" && st.role === "host") {
-                  this.adapter.send(peerId as PeerId, {
-                    type: MsgType.PLAYER_DAMAGE_APPLIED,
-                    damage: dmg,
-                  });
-                }
-              },
-          spawnViewRects,
-        );
-        const flush = this._mobManager.flushHostReplication();
-        const netSt = this.adapter.state;
-        if (netSt.status === "connected" && netSt.role === "host") {
-          for (const id of flush.despawns) {
-            this.adapter.broadcast({ type: MsgType.ENTITY_DESPAWN, entityId: id });
-          }
-          for (const sp of flush.spawns) {
-            const spFx = this._pendingSpawnerFxByMobId.get(sp.id);
-            if (spFx !== undefined) {
-              this._pendingSpawnerFxByMobId.delete(sp.id);
-            }
-            this.adapter.broadcast({
-              type: MsgType.ENTITY_SPAWN,
-              entityId: sp.id,
-              entityType: sp.type,
-              x: sp.x,
-              y: sp.y,
-              woolColor: sp.woolColor,
-              ...(spFx !== undefined
-                ? { spawnerFxWx: spFx.wx, spawnerFxWy: spFx.wy }
-                : {}),
-            });
-          }
-          for (const v of flush.states) {
-            let flags = 0;
-            if (v.facingRight) {
-              flags |= 1;
-            }
-            if (v.panic) {
-              flags |= 2;
-            }
-            if (v.walking) {
-              flags |= 4;
-            }
-            if (v.hurt) {
-              flags |= 8;
-            }
-            if (v.attacking) {
-              flags |= 16;
-            }
-            if (v.burning) {
-              flags |= 32;
-            }
-            if (v.type === MobType.Slime) {
-              if (v.slimeOnGround) {
-                flags |= ENTITY_STATE_FLAG_SLIME_ON_GROUND;
-              }
-              if (v.slimeJumpPriming) {
-                flags |= ENTITY_STATE_FLAG_SLIME_JUMP_PRIMING;
-              }
-            }
-            this.adapter.broadcast({
-              type: MsgType.ENTITY_STATE,
-              entityId: v.id,
-              entityType: v.type,
-              x: v.x,
-              y: v.y,
-              vx: v.vx,
-              vy: v.vy,
-              hp: v.hp,
-              flags,
-              woolColor: v.woolColor,
-              deathAnim10Ms: Math.min(
-                255,
-                Math.max(0, Math.round(v.deathAnimRemainSec / 0.01)),
-              ),
-            });
-          }
-        }
+        });
       }
 
       if (this._blockInteractions !== null && role !== "client") {
         const pbx = Math.floor(pl.x / BLOCK_SIZE);
         const pby = Math.floor(pl.y / BLOCK_SIZE);
         const rainGrowthMul = this._weather.isRaining() ? RAIN_GROWTH_MUL : 1;
-        this._blockInteractions.tick(dtSec, pbx, pby, {
-          rainGrowthMul,
+        withPerfSpan("Game.fixedUpdate.blockInteractions", () => {
+          this._blockInteractions!.tick(dtSec, pbx, pby, {
+            rainGrowthMul,
+          });
         });
       }
 
       if (role !== "client" && this._itemRegistry !== null) {
+        const itemRegistry = this._itemRegistry;
         const tWater = import.meta.env.DEV ? chunkPerfNow() : 0;
-        world.tickWaterSystems();
+        withPerfSpan("Game.fixedUpdate.waterSystems", () => {
+          world.tickWaterSystems();
+        });
         if (import.meta.env.DEV) {
           chunkPerfLog("game:tickWaterSystems", chunkPerfNow() - tWater);
         }
         const simChunks = new Set<string>();
-        {
+        withPerfSpan("Game.fixedUpdate.simChunksBuild", () => {
           const localPx = entityManager.getPlayer().state.position.x;
           const localPy = entityManager.getPlayer().state.position.y;
           const lcx = Math.floor(localPx / BLOCK_SIZE / CHUNK_SIZE);
@@ -8541,15 +8596,20 @@ export class Game {
               }
             }
           }
-        }
-        const changed = world.tickFurnaces(
-          FIXED_TIMESTEP_SEC,
-          this._worldTime.ms,
-          this._itemRegistry,
-          this._smeltingRegistry,
-          simChunks,
-        );
-        this._tickSpawnersHost(world, world.forkMobRng(), simChunks);
+        });
+        let changed: string[] = [];
+        withPerfSpan("Game.fixedUpdate.furnaces", () => {
+          changed = world.tickFurnaces(
+            FIXED_TIMESTEP_SEC,
+            this._worldTime.ms,
+            itemRegistry,
+            this._smeltingRegistry,
+            simChunks,
+          );
+        });
+        withPerfSpan("Game.fixedUpdate.spawners", () => {
+          this._tickSpawnersHost(world, world.forkMobRng(), simChunks);
+        });
         const nowMs = performance.now();
         for (const key of changed) {
           const comma = key.indexOf(",");

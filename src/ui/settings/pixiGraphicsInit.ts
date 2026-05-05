@@ -33,6 +33,10 @@ function hasWebGpuApi(): boolean {
  * Custom filters must supply both `gpuProgram` (WGSL) and `glProgram` (GLSL) — see
  * {@link CompositePass}, {@link TonemapFilter}, {@link createSlimeGelAlphaFilter}.
  * If WebGPU init fails, falls back to WebGL.
+ *
+ * **Diagnostics:** Chrome WebGPU validation (`[Buffer] used in submit while destroyed`) is
+ * WebGPU-only; compare behavior with a WebGL-only repro via `{ forceWebGl: true }` in callers
+ * (dev builds also log the chosen backend from {@link RenderPipeline.init}).
  */
 export async function createApplicationWithGraphicsPreference(
   base: PixiApplicationInitBase,

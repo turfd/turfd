@@ -1,12 +1,12 @@
 {
   "format_version": "1.0.0",
   "recipe": {
-    "id": "stratum:diamond_sword_from_diamonds_and_stick",
+    "id": "stratum:stratite_sword_from_stratites_and_stick",
     "category": "Workbench",
     "station": "stratum:crafting_table",
     "ingredients": [
       {
-        "itemId": "stratum:diamond",
+        "itemId": "stratum:stratite",
         "count": 2
       },
       {
@@ -15,7 +15,7 @@
       }
     ],
     "output": {
-      "itemId": "stratum:diamond_sword",
+      "itemId": "stratum:stratite_sword",
       "count": 1
     }
   }

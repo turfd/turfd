@@ -1,12 +1,12 @@
 {
   "format_version": "1.0.0",
   "recipe": {
-    "id": "stratum:diamond_shovel_from_diamond_and_sticks",
+    "id": "stratum:stratite_shovel_from_stratite_and_sticks",
     "category": "Workbench",
     "station": "stratum:crafting_table",
     "ingredients": [
       {
-        "itemId": "stratum:diamond",
+        "itemId": "stratum:stratite",
         "count": 1
       },
       {
@@ -15,7 +15,7 @@
       }
     ],
     "output": {
-      "itemId": "stratum:diamond_shovel",
+      "itemId": "stratum:stratite_shovel",
       "count": 1
     }
   }

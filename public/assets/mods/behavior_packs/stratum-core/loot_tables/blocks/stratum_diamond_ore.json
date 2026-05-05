@@ -1,10 +1,10 @@
 {
   "format_version": "1.0.0",
-  "table_id": "stratum:diamond_ore",
+  "table_id": "stratum:stratite_ore",
   "table": {
     "entries": [
       {
-        "itemKey": "stratum:diamond",
+        "itemKey": "stratum:stratite",
         "countMin": 1,
         "countMax": 1,
         "chance": 1

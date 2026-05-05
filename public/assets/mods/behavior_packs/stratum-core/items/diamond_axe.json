@@ -2,11 +2,11 @@
   "format_version": "1.0.0",
   "stratum:item": {
     "description": {
-      "identifier": "stratum:diamond_axe"
+      "identifier": "stratum:stratite_axe"
     },
     "components": {
-      "stratum:display_name": "Diamond Axe",
-      "stratum:texture_key": "diamond_axe",
+      "stratum:display_name": "Stratite Axe",
+      "stratum:texture_key": "stratite_axe",
       "stratum:max_stack": 1,
       "stratum:tool_type": "axe",
       "stratum:tool_tier": 3,

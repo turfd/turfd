@@ -175,40 +175,6 @@ float softSolidSkyExposure(vec2 worldPosBlocks) {
   return mix(avg, darker, 0.34);
 }
 
-// Ray-march from 'from' toward 'to' sampling the occlusion mask.
-// Returns a visibility factor in [0, 1] using a tight 3-ray cone.
-float placedTorchShadow(vec2 from, vec2 to) {
-  vec2 delta = to - from;
-  float dist = length(delta);
-  if (dist < 0.001) return 1.0;
-  vec2 dir  = delta / dist;
-  vec2 perp = vec2(-dir.y, dir.x);
-  float totalVis = 0.0;
-  float rayWeight = (uLightingQuality <= 0) ? 1.0 : 3.0;
-  for (int r = 0; r < 3; r++) {
-    if (uLightingQuality <= 0 && r != 1) {
-      continue;
-    }
-    vec2 rayOffset = perp * (float(r - 1) * 0.18);
-    float vis = 1.0;
-    float steps = (uLightingQuality >= 2) ? 8.0 : 4.0;
-    for (int s = 0; s < 8; s++) {
-      if (uLightingQuality < 2 && s >= 4) {
-        break;
-      }
-      float t = dist * (float(s) + 0.5) / steps;
-      vec2 sp = from + dir * t + rayOffset;
-      vec2 uv = smoothOcclusionUV(sp);
-      if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
-        float occ = texture(uOcclusion, uv).r;
-        vis *= 1.0 - occ * 0.96;
-      }
-    }
-    totalVis += vis;
-  }
-  return pow(totalVis / rayWeight, 1.18);
-}
-
 // Bloom: elliptical falloff in 16px-tile space; center shifted slightly below flame tip on screen.
 float torchBloomGain(vec2 worldPos, vec2 tip) {
   vec2 dPx = (worldPos - tip) * 16.0;
@@ -287,11 +253,6 @@ void main() {
   float skyS = pow(clamp(smoothedSky, 0.0, 1.0), skyGamma);
   float shadowFactor = shadowFloor + (1.0 - shadowFloor) * skyS;
 
-  float heldTorchVis = 1.0;
-  if (uTorchActive > 0.5) {
-    heldTorchVis = placedTorchShadow(worldPos, uTorchWorldPos);
-  }
-
   float directSun = uSunIntensity * shadowFactor;
   float directMoon = uMoonIntensity * shadowFactor;
 
@@ -316,14 +277,12 @@ void main() {
       float n = dist / max(uTorchRadius, 1e-4);
       float atten = max(0.0, 1.0 - n);
       atten = atten * atten * 0.7 + atten * 0.3;
-      // Same as placed torches: distance × ray-marched visibility (not a screen-space overlay).
-      float heldTorchLight = uTorchIntensity * atten * heldTorchVis;
+      float heldTorchLight = uTorchIntensity * atten;
       light += uTorchColor * clamp(heldTorchLight, 0.0, 1.0);
     }
   }
 
-  // Placed torches: take the strongest single contribution only (no stacking). Summing
-  // multiple ray-marched shadows caused harsh lines where visibility differed per torch.
+  // Placed torches: take the strongest single contribution only (no stacking).
   const float PLACED_TORCH_RADIUS = 14.0;
   float placedTorchAmt = 0.0;
   for (int i = 0; i < MAX_PLACED_TORCHES; i++) {
@@ -336,8 +295,7 @@ void main() {
       float n = dist / PLACED_TORCH_RADIUS;
       float atten = max(0.0, 1.0 - n);
       atten = atten * atten * 0.7 + atten * 0.3;
-      float shadow = placedTorchShadow(worldPos, tp);
-      placedTorchAmt = max(placedTorchAmt, 0.75 * atten * shadow * placedStrength);
+      placedTorchAmt = max(placedTorchAmt, 0.75 * atten * placedStrength);
     }
   }
   light += vec3(1.0, 0.85, 0.55) * placedTorchAmt;
@@ -347,18 +305,12 @@ void main() {
   // ACES something to compress without over-brightening the base scene.
   light = clamp(light, 0.0, 1.0);
 
-  // HDR bloom + player silhouette mask: skip entirely when bloom is off — avoids duplicate
-  // torch ray-marches and five uPlayerBloomMask taps per pixel on the hot fullscreen pass.
+  // HDR bloom + player silhouette mask: skip entirely when bloom is off — avoids five
+  // uPlayerBloomMask taps per pixel on the hot fullscreen pass.
   vec3 bloom = vec3(0.0);
   float bloomPlayerOccl = 1.0;
   if (uBloomEnabled > 0.5) {
     vec2 bloomTipShift = vec2(1.0 / uBlockPixels, -13.0 / uBlockPixels);
-
-    if (uTorchActive > 0.5) {
-      float g = torchBloomGain(worldPos, uTorchWorldPos + bloomTipShift);
-      float heldBloom = uTorchIntensity * 0.48 * g * heldTorchVis;
-      bloom += uTorchColor * clamp(heldBloom, 0.0, 1.0);
-    }
 
     float placedBloomAmt = 0.0;
     for (int i = 0; i < MAX_PLACED_TORCHES; i++) {
@@ -366,10 +318,15 @@ void main() {
       vec4 placed = uPlacedTorchPositions[i];
       vec2 tp = placed.xy;
       float placedStrength = max(0.0, placed.z);
-      float bloomTipShiftScale = clamp(placed.w, 0.0, 1.0);
+      float wBloomMeta = placed.w;
+      float placedBloomWeight = wBloomMeta < -0.5 ? 0.0 : 1.0;
+      float bloomTipShiftScale =
+        wBloomMeta < 0.0 ? 0.0 : clamp(wBloomMeta, 0.0, 1.0);
       float g = torchBloomGain(worldPos, tp + bloomTipShift * bloomTipShiftScale);
-      float shadow = placedTorchShadow(worldPos, tp);
-      placedBloomAmt = max(placedBloomAmt, 0.42 * g * shadow * placedStrength);
+      placedBloomAmt = max(
+        placedBloomAmt,
+        placedBloomWeight * 0.42 * g * placedStrength
+      );
     }
     bloom += vec3(1.0, 0.85, 0.50) * placedBloomAmt;
 

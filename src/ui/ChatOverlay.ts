@@ -19,7 +19,7 @@ const CMD_HINTS: Record<string, string> = {
   summon:
     "/summon <sheep|pig|duck|zombie|slime> [blockX] [woolColor] — Mobs at feet or surface column; sheep wool color optional (host / OP)",
   structure:
-    "/structure export | /structure place <id> [x y] — Export selection or place a structure (host / OP, cheats)",
+    "/structure export | /structure list | /structure place <id> [x y] — place dungeon → stratum:dungeon (host / OP, cheats)",
   op: "/op <player> — Grant operator (host only)",
   deop: "/deop <player|uuid> — Revoke operator (host only)",
   wand: "/wand — Toggle wooden-axe wand selection mode (host / OP, cheats)",

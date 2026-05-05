@@ -56,6 +56,7 @@ import {
 } from "./chunk/Chunk";
 import { computeBlockLight, computeSkyLight } from "./lighting/LightPropagation";
 import {
+  chunkKey,
   chunkToWorldOrigin,
   localIndex,
   worldToChunk,
@@ -357,6 +358,8 @@ export class World {
   private readonly _chestTiles = new Map<string, ChestTileState>();
   private _spawnerBlockId: number | null = null;
   private readonly _spawnerTiles = new Map<string, SpawnerTileState>();
+  /** Chunk key (`cx,cy`) → spawner cell keys in that chunk; kept in sync with `_spawnerTiles`. */
+  private readonly _spawnerTilesByChunkKey = new Map<string, Set<string>>();
   private readonly _signBlockIds = new Set<number>();
   private readonly _signTiles = new Map<string, SignTileState>();
 
@@ -3662,36 +3665,122 @@ export class World {
     return this._spawnerTiles.get(spawnerCellKey(wx, wy));
   }
 
+  private _spawnerChunkIndexAddCellKey(cellKey: string): void {
+    const i = cellKey.indexOf(",");
+    if (i <= 0) {
+      return;
+    }
+    const wx = Number.parseInt(cellKey.slice(0, i), 10);
+    const wy = Number.parseInt(cellKey.slice(i + 1), 10);
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+      return;
+    }
+    const ck = chunkKey(worldToChunk(wx, wy));
+    let set = this._spawnerTilesByChunkKey.get(ck);
+    if (set === undefined) {
+      set = new Set();
+      this._spawnerTilesByChunkKey.set(ck, set);
+    }
+    set.add(cellKey);
+  }
+
+  private _spawnerChunkIndexRemoveCellKey(cellKey: string): void {
+    const i = cellKey.indexOf(",");
+    if (i <= 0) {
+      return;
+    }
+    const wx = Number.parseInt(cellKey.slice(0, i), 10);
+    const wy = Number.parseInt(cellKey.slice(i + 1), 10);
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+      return;
+    }
+    const ck = chunkKey(worldToChunk(wx, wy));
+    const set = this._spawnerTilesByChunkKey.get(ck);
+    if (set === undefined) {
+      return;
+    }
+    set.delete(cellKey);
+    if (set.size === 0) {
+      this._spawnerTilesByChunkKey.delete(ck);
+    }
+  }
+
+  private _invokeSpawnerCallbackIfLive(
+    cellKey: string,
+    sid: number,
+    callback: (wx: number, wy: number, tile: SpawnerTileState) => void,
+  ): void {
+    const i = cellKey.indexOf(",");
+    if (i <= 0) {
+      return;
+    }
+    const wx = Number.parseInt(cellKey.slice(0, i), 10);
+    const wy = Number.parseInt(cellKey.slice(i + 1), 10);
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+      return;
+    }
+    if (this.getBlock(wx, wy).id !== sid) {
+      return;
+    }
+    const tile = this._spawnerTiles.get(cellKey);
+    if (tile === undefined) {
+      return;
+    }
+    callback(wx, wy, tile);
+  }
+
   setSpawnerTile(wx: number, wy: number, state: SpawnerTileState): void {
-    this._spawnerTiles.set(spawnerCellKey(wx, wy), {
+    const k = spawnerCellKey(wx, wy);
+    this._spawnerTiles.set(k, {
       ...state,
       spawnPotentials: [...state.spawnPotentials],
     });
+    this._spawnerChunkIndexAddCellKey(k);
   }
 
   removeSpawnerTile(wx: number, wy: number): void {
-    this._spawnerTiles.delete(spawnerCellKey(wx, wy));
+    const k = spawnerCellKey(wx, wy);
+    this._spawnerChunkIndexRemoveCellKey(k);
+    this._spawnerTiles.delete(k);
   }
 
+  /**
+   * Invokes `callback` for every spawner tile whose block is still the registered spawner id.
+   * Iterates the chunk index (O(registered spawners)), not the full loaded world.
+   */
   forEachSpawnerTile(callback: (wx: number, wy: number, tile: SpawnerTileState) => void): void {
     if (this._spawnerBlockId === null) {
       return;
     }
     const sid = this._spawnerBlockId;
-    for (const [key, tile] of this._spawnerTiles) {
-      const i = key.indexOf(",");
-      if (i <= 0) {
+    for (const set of this._spawnerTilesByChunkKey.values()) {
+      for (const cellKey of set) {
+        this._invokeSpawnerCallbackIfLive(cellKey, sid, callback);
+      }
+    }
+  }
+
+  /**
+   * Like {@link forEachSpawnerTile}, but only considers spawner cell keys in `simulationChunkKeys`
+   * (`"${cx},${cy}"` chunk keys). Used by the host spawner tick to avoid scanning spawners outside
+   * the simulation ring.
+   */
+  forEachSpawnerTileInSimulationChunkKeys(
+    simulationChunkKeys: ReadonlySet<string>,
+    callback: (wx: number, wy: number, tile: SpawnerTileState) => void,
+  ): void {
+    if (this._spawnerBlockId === null) {
+      return;
+    }
+    const sid = this._spawnerBlockId;
+    for (const ck of simulationChunkKeys) {
+      const set = this._spawnerTilesByChunkKey.get(ck);
+      if (set === undefined) {
         continue;
       }
-      const wx = Number.parseInt(key.slice(0, i), 10);
-      const wy = Number.parseInt(key.slice(i + 1), 10);
-      if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
-        continue;
+      for (const cellKey of set) {
+        this._invokeSpawnerCallbackIfLive(cellKey, sid, callback);
       }
-      if (this.getBlock(wx, wy).id !== sid) {
-        continue;
-      }
-      callback(wx, wy, tile);
     }
   }
 
@@ -3729,7 +3818,9 @@ export class World {
         continue;
       }
       const { wx, wy } = worldXYFromChunkLocal(cx, cy, e.lx, e.ly);
-      this._spawnerTiles.set(spawnerCellKey(wx, wy), persistedToSpawnerTile(e));
+      const sk = spawnerCellKey(wx, wy);
+      this._spawnerTiles.set(sk, persistedToSpawnerTile(e));
+      this._spawnerChunkIndexAddCellKey(sk);
     }
     const chunk = this.chunks.getChunk({ cx, cy });
     if (chunk !== undefined) {
@@ -3762,6 +3853,7 @@ export class World {
       stale.push(key);
     }
     for (const k of stale) {
+      this._spawnerChunkIndexRemoveCellKey(k);
       this._spawnerTiles.delete(k);
     }
   }
@@ -4086,9 +4178,13 @@ export class World {
     if (blockId === sid) {
       if (!this._spawnerTiles.has(k)) {
         this._spawnerTiles.set(k, createDefaultSpawnerTileState());
+        this._spawnerChunkIndexAddCellKey(k);
       }
     } else {
-      this._spawnerTiles.delete(k);
+      if (this._spawnerTiles.has(k)) {
+        this._spawnerChunkIndexRemoveCellKey(k);
+        this._spawnerTiles.delete(k);
+      }
     }
   }
 

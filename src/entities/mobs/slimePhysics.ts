@@ -28,7 +28,6 @@ import {
   SLIME_PHYSICS_CLAMP_VX_PX,
   SLIME_PHYSICS_CLAMP_VY_DOWN_PX,
   SLIME_PHYSICS_CLAMP_VY_UP_PX,
-  ZOMBIE_ATTACK_EXTRA_REACH_BLOCKS,
   ZOMBIE_PREFERRED_GAP_BLOCKS,
   mobSwimBobVyDelta,
 } from "./mobConstants";
@@ -380,8 +379,8 @@ export function slimeFeetOverlapPlayerFeet(
 }
 
 /**
- * Same melee reach model as {@link zombieFeetInMeleeRangeOfPlayerFeet}, using the slime combat
- * hitbox so attacks line up with zombie spacing.
+ * Slime damage is body contact, not arm's-length melee like zombies — require overlapping combat
+ * hitboxes so jumping past with clear horizontal clearance does not register a hit.
  */
 export function slimeFeetInMeleeRangeOfPlayerFeet(
   sx: number,
@@ -391,17 +390,5 @@ export function slimeFeetInMeleeRangeOfPlayerFeet(
   playerHalfW: number,
   playerH: number,
 ): boolean {
-  const sHalfW = SLIME_WIDTH_PX * 0.5;
-  const sTop = sy - SLIME_HEIGHT_PX;
-  const sBot = sy;
-  const pTop = py - playerH;
-  const pBot = py;
-  const verticalOverlap = sTop < pBot && sBot > pTop;
-  if (!verticalOverlap) {
-    return false;
-  }
-  const desiredGapPx =
-    (ZOMBIE_PREFERRED_GAP_BLOCKS + ZOMBIE_ATTACK_EXTRA_REACH_BLOCKS) * BLOCK_SIZE;
-  const centerDx = Math.abs(sx - px);
-  return centerDx <= playerHalfW + sHalfW + desiredGapPx;
+  return slimeFeetOverlapPlayerFeet(sx, sy, px, py, playerHalfW, playerH);
 }

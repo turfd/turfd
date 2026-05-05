@@ -31,11 +31,22 @@ function clampRenderScale(n: number): number {
   );
 }
 
-const DEFAULTS: VideoPrefs = {
-  tonemapper: "reinhard",
-  renderScale: 1,
-  bloomEnabled: true,
-};
+/** Default internal RT scale on retina: slightly below 1 cuts GPU fill with little visible loss. */
+function deviceDefaultRenderScale(): number {
+  if (typeof window === "undefined") {
+    return 1;
+  }
+  const dpr = window.devicePixelRatio >= 1 ? window.devicePixelRatio : 1;
+  return dpr >= 2 ? clampRenderScale(0.85) : 1;
+}
+
+function defaultVideoPrefs(): VideoPrefs {
+  return {
+    tonemapper: "reinhard",
+    renderScale: deviceDefaultRenderScale(),
+    bloomEnabled: true,
+  };
+}
 
 let _cache: VideoPrefs | null = null;
 
@@ -51,17 +62,18 @@ function isTonemapper(v: unknown): v is Tonemapper {
 function mergeVideoPrefsFromStorage(
   parsed: Partial<VideoPrefs> & Record<string, unknown>,
 ): VideoPrefs {
+  const defs = defaultVideoPrefs();
   const rawTm = isTonemapper(parsed.tonemapper)
     ? parsed.tonemapper
-    : DEFAULTS.tonemapper;
+    : defs.tonemapper;
   const rs =
     typeof parsed.renderScale === "number"
       ? clampRenderScale(parsed.renderScale)
-      : DEFAULTS.renderScale;
+      : 1;
   const bloom =
     typeof parsed.bloomEnabled === "boolean"
       ? parsed.bloomEnabled
-      : DEFAULTS.bloomEnabled;
+      : defs.bloomEnabled;
   return {
     tonemapper: normalizeStoredTonemapper(rawTm),
     renderScale: rs,
@@ -83,7 +95,7 @@ export function getVideoPrefs(): VideoPrefs {
   } catch {
     // ignore parse / storage errors
   }
-  _cache = { ...DEFAULTS };
+  _cache = defaultVideoPrefs();
   return _cache;
 }
 

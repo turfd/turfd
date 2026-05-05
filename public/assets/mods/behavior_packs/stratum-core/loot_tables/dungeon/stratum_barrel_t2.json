@@ -25,7 +25,7 @@
         "chance": 0.45
       },
       {
-        "itemKey": "stratum:diamond",
+        "itemKey": "stratum:stratite",
         "countMin": 1,
         "countMax": 2,
         "chance": 0.16

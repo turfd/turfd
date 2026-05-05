@@ -87,9 +87,10 @@
         margin: 0 auto;
       }
 
+      /* Aside must fit: panel padding + message surface padding + avatar row + 455px embed-inner (427 content + 12+16 pad). */
       .ut-layout {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(280px, min(432px, 52vw));
+        grid-template-columns: minmax(0, 1fr) minmax(280px, min(565px, 70vw));
         gap: clamp(1rem, 2.2vw, 1.85rem);
         align-items: start;
       }
@@ -129,16 +130,19 @@
         margin-top: 0;
       }
 
-      /* Discohook / Discord client column width (~432px). */
+      /*
+       * Inner text grid matches Discord (`padding: 2px 16px 16px 12px`, ~427px content). Shell fills
+       * the aside so that width can actually be reached once avatar + surface padding are paid for.
+       */
       .dc-preview-shell {
-        max-width: 432px;
         width: 100%;
+        max-width: none;
       }
 
       .dc-message-surface {
         background: #313338;
         border-radius: 8px;
-        padding: 12px 14px 14px;
+        padding: 12px 12px 14px;
         box-sizing: border-box;
       }
 
@@ -236,7 +240,10 @@
       }
 
       .dc-embed-inner {
-        padding: 10px 12px 10px;
+        /* Measured from Discord desktop embed inner grid: padding 2px 16px 16px 12px; content ~427px */
+        padding: 2px 16px 16px 12px;
+        box-sizing: border-box;
+        width: min(455px, 100%);
       }
 
       .dc-embed-title {
@@ -379,15 +386,15 @@
 
       .dc-embed-desc blockquote {
         margin: 0.4em 0;
-        padding-left: 8px;
-        border-left: 3px solid #4e5058;
+        padding-left: 12px;
+        border-left: 4px solid #4e5058;
         color: #b5bac1;
       }
 
       .dc-embed-desc ul,
       .dc-embed-desc ol {
         margin: 0.35em 0;
-        padding-left: 1.15rem;
+        padding-left: 1.35rem;
       }
 
       /* Markdown images (![](url)) in description — match Discord / Discohook embed media. */

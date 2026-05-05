@@ -404,7 +404,10 @@ export async function captureAndSavePerformanceReport(
       networkRole: options.networkRole,
       productionBundle: import.meta.env.PROD,
       gpuSpikeHint:
-        "Chrome DevTools → Performance: enable GPU track + Frame stats to see whether spikes are main-thread vs GPU queue.",
+        "Chrome DevTools → Performance: enable GPU track + Frame stats to see whether spikes are main-thread vs GPU queue. " +
+        "In Stratum exports, compare `Game.fixedUpdate.spawners` (CPU) vs `RenderPipeline.renderBloomMask.world` / `compositeRender.appRender` (often GPU-bound).",
+      profilingCompareHint:
+        "Re-capture with a production build (`import.meta.env.PROD` / `productionBundle: true` in this export) before tuning: dev bundles inflate JS time and long-task noise.",
       viewport: {
         cssWidth: typeof window !== "undefined" ? window.innerWidth : null,
         cssHeight: typeof window !== "undefined" ? window.innerHeight : null,

@@ -3,7 +3,7 @@ import path from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import type { Plugin } from "vite";
 import { defineConfig, loadEnv } from "vite";
-import { repoHasGit, updateToolDevPlugin } from "./dev/updateToolDevPlugin";
+import { repoHasGit, updateToolDevPlugin } from "./tools/release/updateToolDevPlugin";
 import {
   DISCORD_CHANGELOG_IMAGE_URLS_COMMITTED,
   trimImageUrl,
