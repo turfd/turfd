@@ -343,7 +343,7 @@ export const CAMERA_PLAYER_VERTICAL_OFFSET_PX = 12;
 export const REACH_BLOCKS = 5;
 
 /**
- * Terraria-style melee crit roll (host). Affects knockback via ×1.4 after soft caps (wiki.gg/Knockback).
+ * Terraria-style melee crit roll (host). Affects knockback via ×1.4 after soft caps.
  */
 export const PLAYER_MELEE_CRIT_CHANCE = 0.04;
 
@@ -781,6 +781,9 @@ export const DAY_LENGTH_MS = 20 * 60 * 1000;
 export const DAWN_LENGTH_MS = 90 * 1000;
 export const DAYLIGHT_LENGTH_MS = 10 * 60 * 1000;
 export const DUSK_LENGTH_MS = 90 * 1000;
+
+/** How often profile UI rechecks Discord donor entitlement while mounted. */
+export const DISCORD_ENTITLEMENT_REFRESH_MS = 10 * 60 * 1000;
 
 /** Within this Chebyshev distance (blocks) the item pulls toward the player and can be collected. */
 export const ITEM_PULL_RANGE_BLOCKS = 1.5;

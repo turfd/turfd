@@ -111,6 +111,9 @@ function sortWorldsByLastPlayed(a: WorldMetadata, b: WorldMetadata): number {
 
 const STYLES_ID = "stratum-mm2-styles";
 
+/** Public invite for the Stratum Discord server (main menu link). */
+const STRATUM_DISCORD_INVITE_URL = "https://discord.gg/KJjNZvbWtw";
+
 function injectStyles(base: string): void {
   if (document.getElementById(STYLES_ID)) return;
 
@@ -135,7 +138,7 @@ function injectStyles(base: string): void {
     }
 
     :root {
-      /* +4px applied to M5x7 font-size rules below (bitmap font reads better ~22–26px body) */
+      /* +4px on M5x7 sizes; floors use --mm-m5-min (global.css) so tiny text stays legible */
       --mm-m5-nudge: 4px;
       --mm-ink: #f2f2f7;
       --mm-ink-mid: #aeaeb2;
@@ -146,6 +149,11 @@ function injectStyles(base: string): void {
       --mm-border: rgba(255, 255, 255, 0.1);
       --mm-border-strong: rgba(255, 255, 255, 0.16);
       --mm-danger: #ff453a;
+      /* Stratum logo (wordmark) — accent for nav hover / selection */
+      --mm-logo-periwinkle-light: #a5a9d8;
+      --mm-logo-periwinkle-mid: #8a8fc4;
+      --mm-logo-navy-deep: #2d2d5a;
+      --mm-nav-selection-tint: rgba(165, 169, 216, 0.12);
       --mm-radius-sm: 10px;
       --mm-radius-md: 14px;
       --mm-radius-lg: 18px;
@@ -171,13 +179,61 @@ function injectStyles(base: string): void {
       font-family: 'BoldPixels', 'Courier New', monospace;
       font-weight: normal;
       font-synthesis: none;
-      -webkit-font-smoothing: none;
-      -moz-osx-font-smoothing: grayscale;
-      text-rendering: optimizeSpeed;
+      /* Bitmap TTFs (M5x7) rasterize unevenly with “none”; BoldPixels stays crisp at ≥20px. */
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: auto;
+      text-rendering: geometricPrecision;
       color: var(--mm-ink);
       background: transparent;
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
+    }
+
+    /* -- Top bar (external links; matches horizontal padding of .mm-body) -- */
+    .mm-topbar {
+      --mm-edge: clamp(1.25rem, 4vw, 2rem);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0.55rem var(--mm-edge) 0;
+      pointer-events: auto;
+    }
+    .mm-discord-link {
+      box-sizing: border-box;
+      width: 44px;
+      height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      color: #5865f2;
+      text-decoration: none;
+      transition:
+        border-color 130ms ease,
+        background 130ms ease,
+        color 130ms ease,
+        box-shadow 130ms ease;
+    }
+    .mm-discord-link:hover {
+      background: var(--mm-surface-raised);
+      border-color: rgba(88, 101, 242, 0.45);
+      color: #7289da;
+    }
+    .mm-discord-link:focus-visible {
+      outline: none;
+      border-color: rgba(88, 101, 242, 0.75);
+      box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.35);
+    }
+    .mm-discord-link svg {
+      width: 22px;
+      height: 22px;
+      display: block;
+      fill: currentColor;
     }
 
     /* -- Body: nav + main column (tabs use full remaining width/height) -- */
@@ -226,15 +282,16 @@ function injectStyles(base: string): void {
     }
     .mm-brand-kicker {
       font-family: 'M5x7', monospace;
-      font-size: calc(14px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
+      line-height: 22px;
     }
     .mm-brand-title {
       margin: 6px 0 2px;
       font-size: clamp(32px, 5vw, 48px);
-      line-height: 0.95;
+      line-height: 38px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--mm-ink);
@@ -242,14 +299,70 @@ function injectStyles(base: string): void {
     .mm-brand-subtitle {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
-      line-height: 1.4;
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
+      line-height: 28px;
       color: var(--mm-ink-mid);
     }
     .mm-nav-list {
       display: flex;
       flex-direction: column;
       gap: 6px;
+      flex: 1;
+      min-height: 0;
+    }
+    .mm-nav-bottom-cluster {
+      margin-top: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--mm-border);
+    }
+    .mm-nav-quick {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .mm-nav-icon-btn {
+      box-sizing: border-box;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      background: var(--mm-surface-deep);
+      border: 1px solid var(--mm-border);
+      color: var(--mm-ink-mid);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+      transition:
+        border-color 130ms ease,
+        background 130ms ease,
+        color 130ms ease,
+        box-shadow 130ms ease;
+    }
+    .mm-nav-icon-btn:hover:not(.mm-nav-btn-disabled) {
+      background: var(--mm-surface-raised);
+      color: var(--mm-logo-periwinkle-light);
+      border-color: rgba(165, 169, 216, 0.38);
+    }
+    .mm-nav-icon-btn:focus-visible:not(.mm-nav-btn-disabled) {
+      outline: none;
+      border-color: var(--mm-logo-periwinkle-mid);
+      box-shadow: 0 0 0 2px rgba(45, 45, 90, 0.55);
+    }
+    .mm-nav-icon-btn.mm-nav-btn-active {
+      background: var(--mm-surface-raised) !important;
+      border-color: rgba(138, 143, 196, 0.55) !important;
+      color: var(--mm-logo-periwinkle-light) !important;
+      box-shadow: 0 0 0 2px rgba(138, 143, 196, 0.55) !important;
     }
     .mm-nav-btn {
       display: block;
@@ -260,8 +373,8 @@ function injectStyles(base: string): void {
       border: 1px solid transparent;
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 19px;
-      line-height: 1.08;
+      font-size: max(var(--mm-bold-min), 19px);
+      line-height: 22px;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       text-align: left;
@@ -269,21 +382,27 @@ function injectStyles(base: string): void {
       cursor: pointer;
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
-      transition: border-color 130ms ease, background 130ms ease, color 130ms ease;
+      transition:
+        border-color 130ms ease,
+        background 130ms ease,
+        color 130ms ease,
+        box-shadow 130ms ease;
     }
     .mm-nav-btn:hover:not(.mm-nav-btn-disabled) {
       background: var(--mm-surface-raised);
-      border-color: var(--mm-border);
-      color: var(--mm-ink);
+      border-color: rgba(165, 169, 216, 0.38);
+      color: var(--mm-logo-periwinkle-light);
     }
     .mm-nav-btn:focus-visible:not(.mm-nav-btn-disabled) {
       outline: none;
-      border-color: var(--mm-border-strong);
+      border-color: var(--mm-logo-periwinkle-mid);
+      box-shadow: 0 0 0 2px rgba(45, 45, 90, 0.55);
     }
     .mm-nav-btn-active {
       background: var(--mm-surface-raised) !important;
-      border-color: var(--mm-border-strong) !important;
-      color: var(--mm-ink) !important;
+      border-color: rgba(138, 143, 196, 0.55) !important;
+      color: var(--mm-logo-periwinkle-light) !important;
+      box-shadow: 0 0 0 2px rgba(138, 143, 196, 0.55) !important;
     }
     .mm-nav-btn-disabled {
       opacity: 0.38;
@@ -292,19 +411,20 @@ function injectStyles(base: string): void {
     .mm-nav-label-sub {
       display: block;
       margin-top: 3px;
-      font-size: calc(14px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
       letter-spacing: 0.06em;
       opacity: 0.7;
       font-family: 'M5x7', monospace;
+      line-height: 22px;
     }
     .mm-nav-meta {
-      margin-top: auto;
+      margin-top: 0;
       font-family: 'M5x7', monospace;
-      font-size: calc(17px + var(--mm-m5-nudge));
-      line-height: 1.35;
+      font-size: max(var(--mm-m5-min), calc(17px + var(--mm-m5-nudge)));
+      line-height: 26px;
       color: var(--mm-ink-soft);
-      border-top: 1px solid var(--mm-border);
-      padding-top: 12px;
+      border-top: none;
+      padding-top: 0;
     }
 
     /* -- Content: full main column; home pins changelog bottom-right ------ */
@@ -370,6 +490,21 @@ function injectStyles(base: string): void {
     .mm-root.mm-root--content-transition .mm-nav {
       pointer-events: none;
     }
+    @keyframes mm-surface-in {
+      from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.992);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @keyframes mm-surface-pulse-ok {
+      0% { box-shadow: 0 0 0 0 rgba(138, 143, 196, 0); }
+      35% { box-shadow: 0 0 0 3px rgba(138, 143, 196, 0.45); }
+      100% { box-shadow: 0 0 0 0 rgba(138, 143, 196, 0); }
+    }
 
     /* -- Generic panel ---------------------------------------------------- */
     .mm-panel {
@@ -382,12 +517,12 @@ function injectStyles(base: string): void {
     }
     .mm-panel-title {
       font-family: 'BoldPixels', monospace;
-      font-size: var(--mm-type-title);
+      font-size: max(var(--mm-bold-min), var(--mm-type-title));
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--mm-ink);
       margin: 0 0 1.1rem;
-      line-height: 1.18;
+      line-height: 32px;
       text-wrap: balance;
     }
 
@@ -428,7 +563,8 @@ function injectStyles(base: string): void {
     .mm-home-changelog-kicker {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--mm-ink-soft);
@@ -436,8 +572,8 @@ function injectStyles(base: string): void {
     .mm-home-changelog-title {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 22px;
-      line-height: 1.18;
+      font-size: max(var(--mm-bold-min), 22px);
+      line-height: 28px;
       letter-spacing: 0.03em;
       text-transform: uppercase;
       color: var(--mm-ink);
@@ -451,8 +587,8 @@ function injectStyles(base: string): void {
     }
     .mm-whats-new-summary {
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
-      line-height: 1.5;
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
+      line-height: 35px;
       color: var(--mm-ink-mid);
       margin: 0;
       overflow-wrap: break-word;
@@ -465,7 +601,8 @@ function injectStyles(base: string): void {
     .mm-whats-new-readmore {
       cursor: pointer;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       letter-spacing: 0.05em;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
@@ -514,8 +651,9 @@ function injectStyles(base: string): void {
       overflow-x: hidden;
       overflow-wrap: break-word;
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
-      line-height: 1.55;
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
+      /* Integer px line box: unitless 1.55 × font-size is often fractional and warps bitmap TTFs. */
+      line-height: 32px;
       color: var(--mm-ink-mid);
       padding: 14px var(--mm-release-pad-x) 0;
       box-sizing: border-box;
@@ -588,9 +726,10 @@ function injectStyles(base: string): void {
       padding-bottom: 0;
       pointer-events: none;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
       letter-spacing: 0.05em;
       text-transform: uppercase;
+      line-height: 18px;
       color: var(--mm-ink-soft);
       opacity: 1;
     }
@@ -628,14 +767,13 @@ function injectStyles(base: string): void {
       font-family: 'BoldPixels', monospace;
       color: var(--mm-ink);
       letter-spacing: 0.04em;
-      line-height: 1.2;
       margin: 1.1em 0 0.45em;
       text-transform: uppercase;
     }
-    .mm-release-changes-md h1 { font-size: clamp(22px, 2.4vw, 26px); }
-    .mm-release-changes-md h2 { font-size: clamp(19px, 2.1vw, 22px); }
-    .mm-release-changes-md h3 { font-size: 17px; text-transform: none; letter-spacing: 0.03em; }
-    .mm-release-changes-md h4 { font-size: 16px; text-transform: none; }
+    .mm-release-changes-md h1 { font-size: max(var(--mm-bold-min), clamp(22px, 2.4vw, 26px)); line-height: 30px; }
+    .mm-release-changes-md h2 { font-size: max(var(--mm-bold-min), clamp(19px, 2.1vw, 22px)); line-height: 27px; }
+    .mm-release-changes-md h3 { font-size: max(var(--mm-bold-min), 17px); text-transform: none; letter-spacing: 0.03em; line-height: 22px; }
+    .mm-release-changes-md h4 { font-size: max(var(--mm-bold-min), 16px); text-transform: none; line-height: 20px; }
     /* "pretty" line balancing is costly on long release notes during scroll/layout. */
     .mm-release-changes-md p { margin: 0 0 0.75em; text-wrap: wrap; }
     .mm-release-changes-md a {
@@ -719,7 +857,8 @@ function injectStyles(base: string): void {
       width: 100%;
       border-collapse: collapse;
       margin: 0.65em 0 0.9em;
-      font-size: 0.92em;
+      /* 0.92em made body text non-integer px and broke M5x7 rasterization. */
+      font-size: 100%;
     }
     .mm-release-changes-md th,
     .mm-release-changes-md td {
@@ -729,9 +868,10 @@ function injectStyles(base: string): void {
     }
     .mm-release-changes-md th {
       font-family: 'BoldPixels', monospace;
-      font-size: 0.82em;
+      font-size: max(var(--mm-bold-min), 0.82em);
       letter-spacing: 0.04em;
       text-transform: uppercase;
+      line-height: 20px;
       background: rgba(0, 0, 0, 0.12);
       color: var(--mm-ink);
     }
@@ -813,7 +953,8 @@ function injectStyles(base: string): void {
     .mm-world-info { flex: 1; min-width: 0; }
     .mm-world-name {
       font-family: 'BoldPixels', monospace;
-      font-size: 20px;
+      font-size: max(var(--mm-bold-min), 20px);
+      line-height: 24px;
       color: var(--mm-ink);
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -823,16 +964,16 @@ function injectStyles(base: string): void {
     }
     .mm-world-meta {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       margin-top: 4px;
-      line-height: 1.3;
+      line-height: 26px;
     }
     .mm-world-desc {
       margin-top: 6px;
       font-family: 'M5x7', monospace;
-      font-size: calc(16px + var(--mm-m5-nudge));
-      line-height: 1.4;
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
+      line-height: 28px;
       color: var(--mm-ink-mid);
       display: -webkit-box;
       -webkit-line-clamp: 2;
@@ -845,7 +986,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 16px;
+      font-size: max(var(--mm-bold-min), 16px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -862,7 +1004,7 @@ function injectStyles(base: string): void {
     .mm-world-empty {
       padding: 2rem 1.25rem;
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       text-align: center;
       line-height: 1.45;
@@ -899,7 +1041,8 @@ function injectStyles(base: string): void {
     .mm-bedrock-world-section-subtitle {
       margin: 18px 0 8px;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       letter-spacing: 0.5px;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
@@ -914,7 +1057,7 @@ function injectStyles(base: string): void {
     }
     .mm-import-feedback {
       font-family: 'M5x7', monospace;
-      font-size: calc(16px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
       color: var(--mm-ink-mid);
       margin: 0 0 10px;
       min-height: 1.25em;
@@ -936,8 +1079,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-ink);
       color: #1c1c1e;
       font-family: 'BoldPixels', monospace;
-      font-size: var(--mm-type-ui);
-      line-height: 1.05;
+      font-size: max(var(--mm-bold-min), var(--mm-type-ui));
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       text-align: center;
@@ -949,6 +1092,14 @@ function injectStyles(base: string): void {
     }
     .mm-btn:hover { opacity: 0.92; }
     .mm-btn:active { opacity: 0.85; }
+    .mm-btn:active,
+    .mm-nav-btn:active,
+    .mm-nav-icon-btn:active,
+    .mm-workshop-tab:active,
+    .mm-bedrock-world-nav-item:active,
+    .mm-pack-bedrock-tab:active {
+      transform: translateY(1px);
+    }
     .mm-btn:focus-visible {
       outline: none;
       border-color: var(--mm-border-strong);
@@ -984,7 +1135,8 @@ function injectStyles(base: string): void {
     .mm-field label {
       display: block;
       font-family: 'BoldPixels', monospace;
-      font-size: var(--mm-type-label);
+      font-size: max(var(--mm-bold-min), var(--mm-type-label));
+      line-height: 22px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--mm-ink-soft);
@@ -1002,7 +1154,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       color: var(--mm-ink);
       font-family: 'M5x7', monospace;
-      font-size: calc(21px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(21px + var(--mm-m5-nudge)));
+      line-height: 32px;
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
       transition: border-color 0.14s ease;
@@ -1046,8 +1199,8 @@ function injectStyles(base: string): void {
         inset 0 0 0 1px rgba(0, 0, 0, 0.18);
       color: var(--mm-ink);
       font-family: 'BoldPixels', monospace;
-      font-size: var(--mm-type-ui-strong);
-      line-height: 1.08;
+      font-size: max(var(--mm-bold-min), var(--mm-type-ui-strong));
+      line-height: 22px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       cursor: pointer;
@@ -1178,8 +1331,8 @@ function injectStyles(base: string): void {
       background: transparent;
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: var(--mm-type-ui-strong);
-      line-height: 1.08;
+      font-size: max(var(--mm-bold-min), var(--mm-type-ui-strong));
+      line-height: 22px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       padding: 12px var(--mm-control-pad-x);
@@ -1210,8 +1363,8 @@ function injectStyles(base: string): void {
     .mm-note {
       margin: 0 0 1rem;
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
-      line-height: 1.55;
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
+      line-height: 32px;
       color: var(--mm-ink-mid);
       text-wrap: pretty;
     }
@@ -1224,8 +1377,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       color: var(--mm-ink);
       font-family: 'M5x7', monospace;
-      font-size: calc(21px + var(--mm-m5-nudge));
-      line-height: 1.4;
+      font-size: max(var(--mm-m5-min), calc(21px + var(--mm-m5-nudge)));
+      line-height: 28px;
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
       resize: vertical;
@@ -1256,10 +1409,15 @@ function injectStyles(base: string): void {
       gap: var(--ws-3);
       font-family: 'M5x7', monospace;
       color: var(--mm-ink);
-      -webkit-font-smoothing: none;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: auto;
+      text-rendering: geometricPrecision;
     }
     .mm-workshop-root .mm-panel-title {
       margin-bottom: 0.35rem;
+    }
+    .mm-workshop-body > * {
+      animation: mm-surface-in 190ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .mm-workshop-tabs {
       display: flex;
@@ -1272,7 +1430,8 @@ function injectStyles(base: string): void {
       border: 1px solid transparent;
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 16px;
+      font-size: max(var(--mm-bold-min), 16px);
+      line-height: 22px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -1297,6 +1456,7 @@ function injectStyles(base: string): void {
     .mm-workshop-tab-secondary {
       padding: 8px 12px;
       font-size: 13px;
+      line-height: 18px;
       background: transparent;
       border: 1px dashed var(--mm-border);
       color: var(--mm-ink-soft);
@@ -1393,7 +1553,8 @@ function injectStyles(base: string): void {
     .mm-workshop-sort-pills::before {
       content: "Sort";
       font-family: 'BoldPixels', monospace;
-      font-size: 10px;
+      font-size: max(var(--mm-bold-min), 10px);
+      line-height: 14px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--mm-ink-soft);
@@ -1408,7 +1569,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 12px;
+      font-size: max(var(--mm-bold-min), 12px);
+      line-height: 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -1441,7 +1603,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
       font-family: 'BoldPixels', monospace;
-      font-size: 12px;
+      font-size: max(var(--mm-bold-min), 12px);
+      line-height: 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -1501,7 +1664,7 @@ function injectStyles(base: string): void {
       border: 0;
       color: var(--mm-ink);
       font-family: 'M5x7', monospace;
-      font-size: calc(17px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(17px + var(--mm-m5-nudge)));
       outline: none;
     }
     .mm-workshop-search-input::placeholder {
@@ -1511,7 +1674,7 @@ function injectStyles(base: string): void {
     .mm-workshop-list-status {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: calc(14px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
       line-height: 1.35;
       color: var(--mm-ink-mid);
       min-height: 1.35em;
@@ -1575,10 +1738,18 @@ function injectStyles(base: string): void {
       outline-offset: 2px;
     }
     .mm-workshop-tile-media {
+      position: relative;
       width: 100%;
       aspect-ratio: 16 / 9;
       background: #1c1c1e;
       border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-workshop-tile-badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 1;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
     }
     .mm-workshop-tile-img {
       width: 100%;
@@ -1597,8 +1768,8 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-tile-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
-      line-height: 1.25;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--mm-ink);
@@ -1609,30 +1780,46 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-tile-author {
       margin: 0;
-      font-size: calc(16px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
       line-height: 1.35;
       color: var(--mm-ink-mid);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .mm-workshop-tile-author-row {
+      display: flex;
+      align-items: baseline;
+      gap: var(--ws-2);
+      min-width: 0;
+    }
+    .mm-workshop-tile-posted-at {
+      margin-left: auto;
+      flex-shrink: 0;
+      font-family: 'M5x7', monospace;
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
+      line-height: 1.3;
+      color: var(--mm-ink-soft);
+      text-align: right;
+      opacity: 0.85;
+    }
     .mm-workshop-tile-meta {
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       gap: var(--ws-1) var(--ws-2);
       align-items: center;
+      justify-content: flex-end;
       margin-top: var(--ws-1);
     }
     .mm-workshop-tile-meta-line {
       font-family: 'M5x7', monospace;
-      font-size: calc(14px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
       line-height: 1.35;
       color: var(--mm-ink-mid);
-      min-width: 0;
-      flex: 1;
+      flex: 0 0 auto;
       overflow: hidden;
-      text-overflow: ellipsis;
       white-space: nowrap;
+      text-align: right;
     }
     .mm-workshop-tile-actions {
       margin-top: var(--ws-2);
@@ -1702,8 +1889,8 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-rowcard-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
-      line-height: 1.25;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--mm-ink);
@@ -1711,7 +1898,7 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-rowcard-author {
       margin: 0;
-      font-size: calc(16px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
       line-height: 1.35;
       color: var(--mm-ink-mid);
     }
@@ -1739,7 +1926,7 @@ function injectStyles(base: string): void {
     .mm-workshop-rowcard-meta {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: calc(14px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
       line-height: 1.4;
       color: var(--mm-ink-mid);
       white-space: nowrap;
@@ -1760,24 +1947,29 @@ function injectStyles(base: string): void {
     .mm-workshop-rowcard-install:not(:disabled):hover {
       opacity: 0.95;
     }
-    .mm-workshop-card-stars {
+    .mm-workshop-stat-inline {
       display: inline-flex;
-      gap: 2px;
-      font-size: 14px;
+      align-items: center;
+      gap: 6px;
+    }
+    .mm-workshop-stat-inline i {
+      font-size: 12px;
       line-height: 1;
-      letter-spacing: 0.02em;
-    }
-    .mm-workshop-card-star-on {
-      color: #ffd60a;
-    }
-    .mm-workshop-card-star-off {
       color: var(--mm-ink-soft);
-      opacity: 0.45;
+      opacity: 0.9;
+    }
+    .mm-workshop-stat-inline .mm-workshop-stat-icon-rating {
+      color: #ffd60a;
+      opacity: 1;
+    }
+    .mm-workshop-stat-text {
+      line-height: 1;
     }
     .mm-workshop-badge {
       display: inline-block;
       font-family: 'BoldPixels', monospace;
-      font-size: 10px;
+      font-size: max(var(--mm-bold-min), 10px);
+      line-height: 14px;
       padding: 4px 8px;
       border-radius: 4px;
       text-transform: uppercase;
@@ -1808,7 +2000,8 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-pager-indicator {
       font-family: 'BoldPixels', monospace;
-      font-size: 11px;
+      font-size: max(var(--mm-bold-min), 11px);
+      line-height: 14px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--mm-ink-soft);
@@ -1887,7 +2080,8 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-detail-toolbar-context {
       font-family: 'BoldPixels', monospace;
-      font-size: 11px;
+      font-size: max(var(--mm-bold-min), 11px);
+      line-height: 14px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--mm-ink-soft);
@@ -1931,8 +2125,8 @@ function injectStyles(base: string): void {
       align-items: center;
       justify-content: center;
       font-family: 'BoldPixels', monospace;
-      font-size: 34px;
-      line-height: 1;
+      font-size: max(var(--mm-bold-min), 34px);
+      line-height: 38px;
       color: rgba(46, 204, 113, 0.55);
       background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.2));
     }
@@ -1957,7 +2151,7 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-detail-hero-stat {
       font-family: 'M5x7', monospace;
-      font-size: calc(14px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
       line-height: 1.3;
       color: var(--mm-ink-mid);
     }
@@ -2026,8 +2220,8 @@ function injectStyles(base: string): void {
       align-items: center;
       justify-content: center;
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(28px, 8vw, 40px);
-      line-height: 1;
+      font-size: max(var(--mm-bold-min), clamp(28px, 8vw, 40px));
+      line-height: 42px;
       color: rgba(46, 204, 113, 0.55);
       background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.2));
     }
@@ -2062,7 +2256,7 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-detail-banner-stat {
       font-family: 'M5x7', monospace;
-      font-size: calc(14px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge)));
       line-height: 1.3;
       color: rgba(235, 235, 245, 0.78);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
@@ -2083,7 +2277,8 @@ function injectStyles(base: string): void {
     .mm-workshop-detail-section-title {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: max(var(--mm-bold-min), 13px);
+      line-height: 18px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--mm-ink-soft);
@@ -2128,7 +2323,7 @@ function injectStyles(base: string): void {
       grid-template-columns: auto minmax(0, 1fr);
       gap: 6px 12px;
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge)));
       line-height: 1.35;
     }
     .mm-workshop-detail-meta-term {
@@ -2143,22 +2338,22 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-detail-name {
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(18px, 2.4vw, 26px);
+      font-size: max(var(--mm-bold-min), clamp(18px, 2.4vw, 26px));
       text-transform: uppercase;
       letter-spacing: 0.06em;
       margin: 0;
       color: var(--mm-ink);
-      line-height: 1.15;
+      line-height: 28px;
     }
     .mm-workshop-detail-author {
       margin: 0;
-      font-size: calc(16px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
       line-height: 1.35;
       color: var(--mm-ink-soft);
     }
     .mm-workshop-detail-desc {
       margin: 0;
-      font-size: calc(17px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(17px + var(--mm-m5-nudge)));
       line-height: 1.55;
       color: var(--mm-ink-mid);
       max-width: none;
@@ -2227,7 +2422,7 @@ function injectStyles(base: string): void {
       justify-content: center;
       gap: 8px;
       font-family: 'M5x7', monospace;
-      font-size: calc(13px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(13px + var(--mm-m5-nudge)));
       text-transform: none;
       letter-spacing: normal;
       line-height: 1.2;
@@ -2251,11 +2446,24 @@ function injectStyles(base: string): void {
     .mm-workshop-btn--working:hover {
       opacity: 1;
     }
+    .mm-workshop-btn--installed {
+      background: rgba(52, 199, 89, 0.2) !important;
+      border-color: rgba(52, 199, 89, 0.55) !important;
+      color: #d8f8e0 !important;
+      opacity: 1 !important;
+      cursor: default !important;
+    }
+    .mm-workshop-btn--installed:hover {
+      background: rgba(52, 199, 89, 0.2) !important;
+      border-color: rgba(52, 199, 89, 0.55) !important;
+      color: #d8f8e0 !important;
+      opacity: 1 !important;
+    }
     .mm-workshop-action-feedback {
       margin: 0 0 12px;
       min-height: 1.35em;
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge)));
       line-height: 1.4;
       color: rgba(52, 199, 89, 0.95);
     }
@@ -2273,7 +2481,8 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-detail-rate-label {
       font-family: 'BoldPixels', monospace;
-      font-size: 11px;
+      font-size: max(var(--mm-bold-min), 11px);
+      line-height: 14px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-soft);
@@ -2298,8 +2507,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       color: #ffd60a;
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
-      line-height: 1;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       cursor: pointer;
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
@@ -2321,7 +2530,8 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-comments-summary {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-soft);
@@ -2352,14 +2562,15 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-comment-head {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--mm-ink-soft);
       margin-bottom: 6px;
     }
     .mm-workshop-comment-body {
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       line-height: 1.45;
       color: var(--mm-ink-mid);
     }
@@ -2390,13 +2601,14 @@ function injectStyles(base: string): void {
     .mm-workshop-owned-label {
       flex: 1;
       min-width: 160px;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-ink-mid);
       line-height: 1.35;
     }
     .mm-workshop-owned-label strong {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--mm-ink);
@@ -2416,7 +2628,7 @@ function injectStyles(base: string): void {
     .mm-workshop-library-lead {
       margin: 0 0 8px;
       font-family: 'M5x7', monospace;
-      font-size: calc(17px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(17px + var(--mm-m5-nudge)));
       line-height: 1.4;
       color: var(--mm-ink-mid);
     }
@@ -2424,7 +2636,7 @@ function injectStyles(base: string): void {
       margin: 0;
       padding-left: 1.15rem;
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge)));
       line-height: 1.45;
       color: var(--mm-ink-soft);
     }
@@ -2437,7 +2649,8 @@ function injectStyles(base: string): void {
     .mm-workshop-library-heading {
       margin: 14px 0 8px;
       font-family: 'BoldPixels', monospace;
-      font-size: 12px;
+      font-size: max(var(--mm-bold-min), 12px);
+      line-height: 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-soft);
@@ -2445,7 +2658,7 @@ function injectStyles(base: string): void {
     .mm-workshop-library-empty-hint {
       margin: 0 0 8px;
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge)));
       line-height: 1.45;
       color: var(--mm-ink-soft);
     }
@@ -2508,14 +2721,15 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-library-pack-name {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--mm-ink);
     }
     .mm-workshop-library-pack-meta {
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge)));
       line-height: 1.35;
       color: var(--mm-ink-soft);
       overflow: hidden;
@@ -2525,7 +2739,7 @@ function injectStyles(base: string): void {
     .mm-workshop-library-pack-desc {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge)));
       line-height: 1.45;
       color: var(--mm-ink-mid);
       display: -webkit-box;
@@ -2544,7 +2758,8 @@ function injectStyles(base: string): void {
     .mm-workshop-upload-steps {
       margin: 0 0 6px;
       font-family: 'BoldPixels', monospace;
-      font-size: 12px;
+      font-size: max(var(--mm-bold-min), 12px);
+      line-height: 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-soft);
@@ -2564,7 +2779,7 @@ function injectStyles(base: string): void {
       border: 1px dashed var(--mm-border);
       color: var(--mm-ink-mid);
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
       border-radius: var(--mm-radius-sm);
       corner-shape: squircle;
       min-height: 2.5rem;
@@ -2588,7 +2803,7 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-filename {
       font-family: 'M5x7', monospace;
-      font-size: calc(17px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(17px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       flex: 1;
       min-width: 120px;
@@ -2610,14 +2825,14 @@ function injectStyles(base: string): void {
     }
     .mm-workshop-publish-err {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-danger);
       min-height: 1.35em;
       margin: 8px 0 0;
     }
     .mm-workshop-err {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-danger);
       margin: 0 0 10px;
     }
@@ -2625,7 +2840,7 @@ function injectStyles(base: string): void {
       display: flex;
       align-items: center;
       gap: 12px;
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
       color: var(--mm-ink-mid);
     }
     .mm-workshop-spinner {
@@ -2645,7 +2860,7 @@ function injectStyles(base: string): void {
       text-align: center;
       padding: 2.5rem 1rem;
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       line-height: 1.5;
     }
@@ -2669,7 +2884,7 @@ function injectStyles(base: string): void {
     }
     .mm-feedback-error {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-danger);
       min-height: 1.25em;
       margin-top: 10px;
@@ -2685,7 +2900,8 @@ function injectStyles(base: string): void {
     }
     .mm-settings-row label {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-soft);
@@ -2728,14 +2944,15 @@ function injectStyles(base: string): void {
     }
     .mm-settings-val {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-ink-mid);
       width: 44px;
       text-align: right;
     }
     .mm-settings-section {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.07em;
       color: var(--mm-ink-soft);
@@ -2746,7 +2963,7 @@ function injectStyles(base: string): void {
     .mm-settings-section:first-child { margin-top: 0; }
     .mm-settings-coming-soon {
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       margin-top: 4px;
       line-height: 1.45;
@@ -2800,12 +3017,12 @@ function injectStyles(base: string): void {
     }
     .mm-modal-title {
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(22px, 2.5vw, 26px);
+      font-size: max(var(--mm-bold-min), clamp(22px, 2.5vw, 26px));
       text-transform: uppercase;
       letter-spacing: 1px;
       color: var(--mm-ink);
       margin: 0 0 1.1rem;
-      line-height: 1.15;
+      line-height: 28px;
     }
     .mm-modal-actions {
       display: flex;
@@ -2815,14 +3032,14 @@ function injectStyles(base: string): void {
     }
     .mm-modal-meta {
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       margin-bottom: 12px;
       line-height: 1.45;
     }
     .mm-modal-feedback {
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
       color: var(--mm-ink-mid);
       min-height: 1.2em;
       margin-top: 8px;
@@ -2875,8 +3092,8 @@ function injectStyles(base: string): void {
     .mm-rooms-row:hover { background: rgba(255, 255, 255, 0.04); }
     .mm-rooms-row-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 18px;
-      line-height: 1.15;
+      font-size: max(var(--mm-bold-min), 18px);
+      line-height: 22px;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--mm-ink);
@@ -2884,7 +3101,7 @@ function injectStyles(base: string): void {
     }
     .mm-rooms-row-meta {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       display: flex;
       flex-wrap: wrap;
@@ -2897,7 +3114,7 @@ function injectStyles(base: string): void {
       padding: 2rem 1rem;
       text-align: center;
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
       color: var(--mm-ink-soft);
       line-height: 1.45;
     }
@@ -2952,6 +3169,7 @@ function injectStyles(base: string): void {
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      animation: mm-surface-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .mm-bedrock-world-topbar {
       flex-shrink: 0;
@@ -2972,19 +3190,19 @@ function injectStyles(base: string): void {
       align-items: center;
       justify-content: center;
       font-family: 'BoldPixels', monospace;
-      font-size: 28px;
-      line-height: 1;
+      font-size: max(var(--mm-bold-min), 28px);
+      line-height: 28px;
       letter-spacing: 0;
       text-transform: none;
     }
     .mm-bedrock-world-heading {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(22px, 2.8vw, 28px);
+      font-size: max(var(--mm-bold-min), clamp(22px, 2.8vw, 28px));
       letter-spacing: 1px;
       text-transform: uppercase;
       color: var(--mm-ink);
-      line-height: 1.15;
+      line-height: 30px;
     }
     .mm-bedrock-world-body {
       flex: 1;
@@ -3045,9 +3263,15 @@ function injectStyles(base: string): void {
       font-size: 18px;
       min-height: 48px;
     }
+    .mm-bedrock-world-sidebar-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 2px;
+    }
     .mm-bedrock-world-sidebar .mm-modal-feedback {
       margin-top: 6px;
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
       line-height: 1.45;
     }
     .mm-bedrock-world-nav {
@@ -3067,7 +3291,7 @@ function injectStyles(base: string): void {
       background: transparent;
       color: var(--mm-ink-mid);
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
       text-align: left;
       cursor: pointer;
       transition: border-color 130ms ease, background 130ms ease, color 130ms ease;
@@ -3085,8 +3309,9 @@ function injectStyles(base: string): void {
     .mm-bedrock-world-nav-icon {
       width: 28px;
       text-align: center;
-      font-size: 17px;
+      font-size: max(var(--mm-bold-min), 17px);
       font-family: 'BoldPixels', monospace;
+      line-height: 20px;
       color: var(--mm-ink-soft);
       opacity: 0.95;
     }
@@ -3109,7 +3334,8 @@ function injectStyles(base: string): void {
     .mm-bedrock-world-section-title {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
+      font-size: max(var(--mm-bold-min), 17px);
+      line-height: 22px;
       letter-spacing: 1px;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
@@ -3118,6 +3344,9 @@ function injectStyles(base: string): void {
       flex: 1;
       overflow-y: auto;
       padding: 18px 20px 24px;
+    }
+    .mm-bedrock-world-section-body > * {
+      animation: mm-surface-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .mm-bedrock-world-section-body::-webkit-scrollbar {
       width: 4px;
@@ -3129,7 +3358,7 @@ function injectStyles(base: string): void {
     .mm-bedrock-panel-desc {
       margin: 0 0 12px;
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
       line-height: 1.45;
       color: var(--mm-ink-mid);
     }
@@ -3192,7 +3421,8 @@ function injectStyles(base: string): void {
     .mm-pack-drag-row-index {
       flex-shrink: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: max(var(--mm-bold-min), 13px);
+      line-height: 17px;
       color: var(--mm-ink-soft);
       min-width: 2rem;
     }
@@ -3211,7 +3441,8 @@ function injectStyles(base: string): void {
       border-bottom: 3px solid transparent;
       color: var(--mm-ink-soft);
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       cursor: pointer;
@@ -3228,17 +3459,24 @@ function injectStyles(base: string): void {
       min-height: 120px;
       padding-top: 14px;
     }
+    .mm-pack-bedrock-tab-body > * {
+      animation: mm-surface-in 170ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .mm-world-edit-save.mm-btn.mm-world-edit-save--saved {
+      animation: mm-surface-pulse-ok 420ms ease-out;
+    }
     .mm-pack-bedrock-pane-label {
       margin: 0 0 8px;
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: max(var(--mm-bold-min), 13px);
+      line-height: 17px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
     }
     .mm-pack-bedrock-footnote {
       margin: 12px 0 0 !important;
-      font-size: calc(16px + var(--mm-m5-nudge)) !important;
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge))) !important;
       line-height: 1.45 !important;
     }
     .mm-pack-available-well {
@@ -3268,7 +3506,7 @@ function injectStyles(base: string): void {
     }
     .mm-bedrock-pack-row-label {
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
       color: var(--mm-ink-mid);
       overflow: hidden;
       text-overflow: ellipsis;
@@ -3287,7 +3525,8 @@ function injectStyles(base: string): void {
     .mm-pack-stack-block-title {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       letter-spacing: 1px;
       text-transform: uppercase;
       color: var(--mm-ink-soft);
@@ -3317,7 +3556,7 @@ function injectStyles(base: string): void {
       padding: 10px 6px;
       margin: 0;
       text-align: center;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       line-height: 1.4;
     }
     .mm-pack-installed-row {
@@ -3334,7 +3573,7 @@ function injectStyles(base: string): void {
       margin-top: 8px;
       cursor: pointer;
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge)));
       letter-spacing: normal;
       font-weight: normal;
       color: var(--mm-ink-mid);
@@ -3345,12 +3584,12 @@ function injectStyles(base: string): void {
       flex-shrink: 0;
     }
     .mm-pack-built-in-sub {
-      font-size: calc(16px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
       line-height: 1.45;
       color: var(--mm-ink-soft);
     }
     .mm-bedrock-world-meta {
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
       line-height: 1.45;
     }
 
@@ -3383,13 +3622,14 @@ function injectStyles(base: string): void {
     }
     .mm-comment-author {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       color: var(--mm-ink-mid);
       margin-bottom: 4px;
     }
     .mm-comment-body {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
       color: var(--mm-ink-mid);
       line-height: 1.4;
       white-space: pre-wrap;
@@ -3400,7 +3640,7 @@ function injectStyles(base: string): void {
       min-width: 40px;
       padding: 8px 10px;
       font-family: 'M5x7', monospace;
-      font-size: calc(16px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
       background: var(--mm-surface-deep);
       border: 1px solid var(--mm-border);
       color: var(--mm-ink-mid);
@@ -3423,8 +3663,8 @@ function injectStyles(base: string): void {
         inset 0 0 0 1px rgba(0, 0, 0, 0.18);
       color: var(--mm-ink);
       font-family: 'BoldPixels', monospace;
-      font-size: var(--mm-type-ui-strong);
-      line-height: 1.08;
+      font-size: max(var(--mm-bold-min), var(--mm-type-ui-strong));
+      line-height: 22px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       border-radius: 12px;
@@ -3441,7 +3681,8 @@ function injectStyles(base: string): void {
       border: 1px solid var(--mm-border);
       color: var(--mm-ink);
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge)));
+      line-height: 30px;
       border-radius: var(--mm-radius-sm);
       resize: vertical;
     }
@@ -3457,7 +3698,7 @@ function injectStyles(base: string): void {
       margin: 0;
       flex: 1;
       min-width: 0;
-      line-height: 1.15;
+      line-height: 30px;
     }
     .mm-online-back-btn {
       flex-shrink: 0;
@@ -3468,6 +3709,9 @@ function injectStyles(base: string): void {
       display: flex;
       flex-direction: column;
       gap: 1rem;
+    }
+    .mm-online-body-stage > * {
+      animation: mm-surface-in 210ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     /* Room detail sections: same inset surface as world list / changelog card */
     .mm-room-section-card {
@@ -3480,7 +3724,8 @@ function injectStyles(base: string): void {
     }
     .mm-room-section-kicker {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.1em;
       color: var(--mm-ink-soft);
@@ -3494,7 +3739,7 @@ function injectStyles(base: string): void {
     }
     .mm-rooms-badge {
       font-family: 'M5x7', monospace;
-      font-size: calc(16px + var(--mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(16px + var(--mm-m5-nudge)));
       padding: 6px 12px;
       border-radius: 999px;
       background: var(--mm-surface-raised);
@@ -3525,7 +3770,8 @@ function injectStyles(base: string): void {
     }
     .mm-placeholder-block-title {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 1px;
       color: var(--mm-ink-mid);
@@ -3533,18 +3779,227 @@ function injectStyles(base: string): void {
     }
     .mm-placeholder-block-body {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--mm-m5-nudge));
-      line-height: 1.5;
+      font-size: max(var(--mm-m5-min), calc(18px + var(--mm-m5-nudge)));
+      line-height: 28px;
       color: var(--mm-ink-soft);
       margin: 0;
       max-width: 28rem;
       margin-left: auto;
       margin-right: auto;
     }
+
+    /* —— Async content skeletons (main menu tabs) ------------------------ */
+    @keyframes mm-skel-shimmer {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+    .mm-skel {
+      pointer-events: none;
+      flex-shrink: 0;
+      background: linear-gradient(
+        105deg,
+        rgba(58, 58, 62, 0.92) 0%,
+        rgba(138, 143, 196, 0.22) 42%,
+        rgba(58, 58, 62, 0.92) 84%
+      );
+      background-size: 240% 100%;
+      animation: mm-skel-shimmer 1.45s ease-in-out infinite;
+      border-radius: var(--mm-radius-sm);
+      corner-shape: squircle;
+    }
+    .mm-skel-inline {
+      display: inline-block;
+      vertical-align: middle;
+      border-radius: 6px;
+    }
+    .mm-skel-pill {
+      border-radius: 999px;
+    }
+    .mm-skel-world-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-skel-world-row:last-child {
+      border-bottom: none;
+    }
+    .mm-skel-world-thumb {
+      width: 88px;
+      height: 56px;
+    }
+    .mm-skel-world-lines {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .mm-skel-world-line-title {
+      width: min(260px, 58%);
+      height: 22px;
+    }
+    .mm-skel-world-line-meta {
+      width: min(200px, 44%);
+      height: 17px;
+    }
+    .mm-skel-room-row {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-skel-room-row:last-child { border-bottom: none; }
+    .mm-skel-room-title {
+      width: min(320px, 78%);
+      height: 21px;
+      margin-bottom: 8px;
+    }
+    .mm-skel-room-meta {
+      width: min(380px, 92%);
+      height: 17px;
+    }
+    .mm-skel-comment {
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      border-radius: var(--mm-radius-sm);
+      border: 1px solid var(--mm-border);
+      background: var(--mm-surface-deep);
+    }
+    .mm-skel-comment-author {
+      width: min(140px, 52%);
+      height: 17px;
+      margin-bottom: 8px;
+    }
+    .mm-skel-comment-body {
+      width: 100%;
+      height: 15px;
+    }
+    .mm-skel-comment-body + .mm-skel-comment-body {
+      margin-top: 8px;
+      width: 86%;
+    }
+    .mm-skel-star {
+      min-width: 40px;
+      height: 36px;
+      border-radius: var(--mm-radius-sm);
+    }
+    .mm-skel-settings-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      padding: 8px 0 4px;
+    }
+    .mm-skel-settings-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .mm-skel-settings-label {
+      width: 112px;
+      height: 18px;
+    }
+    .mm-skel-settings-track {
+      flex: 1;
+      height: 16px;
+      border-radius: 999px;
+    }
+    .mm-skel-settings-block {
+      width: 100%;
+      height: 120px;
+    }
+    .mm-skel-bedrock-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      flex: 1;
+      min-height: min(480px, 62vh);
+    }
+    .mm-skel-bedrock-top {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--mm-border);
+    }
+    .mm-skel-bedrock-back {
+      width: 52px;
+      height: 52px;
+      border-radius: var(--mm-radius-sm);
+    }
+    .mm-skel-bedrock-head {
+      width: min(200px, 48%);
+      height: 26px;
+    }
+    .mm-skel-bedrock-body {
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      min-height: 0;
+    }
+    .mm-skel-bedrock-side {
+      width: min(288px, 40%);
+      border-right: 1px solid var(--mm-border);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-sizing: border-box;
+      background-color: rgb(36, 36, 38);
+    }
+    .mm-skel-bedrock-thumb {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      min-height: 76px;
+    }
+    .mm-skel-bedrock-save {
+      width: 100%;
+      height: 48px;
+    }
+    .mm-skel-bedrock-main {
+      flex: 1;
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .mm-skel-bedrock-line-lg {
+      width: 92%;
+      height: 42px;
+    }
+    .mm-skel-bedrock-line-sm {
+      width: 76%;
+      height: 20px;
+    }
+    @media (max-width: 620px) {
+      .mm-skel-bedrock-body {
+        flex-direction: column;
+      }
+      .mm-skel-bedrock-side {
+        width: 100%;
+        max-height: 42vh;
+        border-right: none;
+        border-bottom: 1px solid var(--mm-border);
+      }
+    }
+    .mm-workshop-tile.mm-workshop-tile--skel {
+      cursor: default;
+      border-color: var(--mm-border);
+    }
+    .mm-workshop-detail-skel-hero-img {
+      width: 100%;
+      aspect-ratio: 16 / 11;
+    }
+    .mm-workshop-detail-skel-banner {
+      min-height: clamp(132px, 22vw, 200px);
+    }
+    .mm-workshop-owned-row.mm-workshop-owned-row--skel {
+      padding: 12px 0;
+      gap: 10px;
+    }
     /*
-     * M5x7 is a fixed bitmap grid in a TTF. Browsers still rasterize it with anti-aliasing;
-     * fractional font-size (e.g. clamp + vw), em letter-spacing, and synthesized bold make
-     * stems look uneven. Snap responsive titles where supported; keep body M5x7 at normal spacing.
+     * M5x7 is a fixed bitmap grid in a TTF. Fractional font-size (clamp + vw), em letter-spacing,
+     * and synthesized bold make stems uneven; snap responsive BoldPixels titles where supported.
      */
     .mm-note,
     .mm-modal-meta,
@@ -3583,21 +4038,92 @@ function injectStyles(base: string): void {
       font-weight: normal;
     }
 
+    /*
+     * M5x7: match .mm-release-changes-scroll — unitless line-height × fractional font-size
+     * misaligns the bitmap grid; snap leading to whole px where supported.
+     */
+    @supports (line-height: round(nearest, 24px, 1px)) {
+      .mm-bedrock-mp-toggle,
+      .mm-bedrock-pack-row-label,
+      .mm-bedrock-panel-desc,
+      .mm-bedrock-world-meta,
+      .mm-bedrock-world-nav-item,
+      .mm-brand-kicker,
+      .mm-brand-subtitle,
+      .mm-comment-body,
+      .mm-feedback-error,
+      .mm-field input[type="email"],
+      .mm-field input[type="number"],
+      .mm-field input[type="password"],
+      .mm-field input[type="search"],
+      .mm-field input[type="text"],
+      .mm-field textarea,
+      .mm-import-feedback,
+      .mm-modal-feedback,
+      .mm-modal-meta,
+      .mm-nav-label-sub,
+      .mm-nav-meta,
+      .mm-note,
+      .mm-pack-active-empty.mm-note,
+      .mm-pack-built-in-sub,
+      .mm-placeholder-block-body,
+      .mm-release-changes-md strong,
+      .mm-rooms-badge,
+      .mm-rooms-empty,
+      .mm-rooms-row-meta,
+      .mm-settings-coming-soon,
+      .mm-settings-val,
+      .mm-star-btn,
+      textarea.mm-textarea,
+      .mm-world-desc,
+      .mm-world-empty,
+      .mm-world-meta,
+      .mm-workshop-action-feedback,
+      .mm-workshop-btn-content--busy:not([hidden]),
+      .mm-workshop-detail-banner-stat,
+      .mm-workshop-detail-hero-stat,
+      .mm-workshop-detail-meta-list,
+      .mm-workshop-empty,
+      .mm-workshop-err,
+      .mm-workshop-filename,
+      .mm-workshop-library-empty-hint,
+      .mm-workshop-library-lead,
+      .mm-workshop-library-pack-desc,
+      .mm-workshop-library-pack-meta,
+      .mm-workshop-library-tips,
+      .mm-workshop-list-status,
+      .mm-workshop-publish-err,
+      .mm-workshop-readonly-val,
+      .mm-workshop-rowcard-meta,
+      .mm-workshop-search-input,
+      .mm-workshop-tile-author,
+      .mm-workshop-tile-meta-line {
+        line-height: round(nearest, 1.48em, 1px);
+      }
+    }
+
     @supports (font-size: round(nearest, 22px, 1px)) {
       .mm-panel-title {
-        font-size: round(nearest, clamp(22px, 2.6vw, 28px), 1px);
+        font-size: max(var(--mm-bold-min), round(nearest, clamp(22px, 2.6vw, 28px), 1px));
       }
       .mm-modal-title {
-        font-size: round(nearest, clamp(22px, 2.5vw, 26px), 1px);
+        font-size: max(var(--mm-bold-min), round(nearest, clamp(22px, 2.5vw, 26px), 1px));
       }
       .mm-bedrock-world-heading {
-        font-size: round(nearest, clamp(22px, 2.8vw, 28px), 1px);
+        font-size: max(var(--mm-bold-min), round(nearest, clamp(22px, 2.8vw, 28px), 1px));
       }
       .mm-brand-title {
-        font-size: round(nearest, clamp(32px, 5vw, 48px), 1px);
+        font-size: max(var(--mm-bold-min), round(nearest, clamp(32px, 5vw, 48px), 1px));
       }
       .mm-workshop-detail-name {
-        font-size: round(nearest, clamp(18px, 2.4vw, 26px), 1px);
+        font-size: max(var(--mm-bold-min), round(nearest, clamp(18px, 2.4vw, 26px), 1px));
+      }
+      .mm-release-changes-scroll,
+      .mm-whats-new-summary {
+        font-size: max(
+          var(--mm-m5-min),
+          round(nearest, calc(19px + var(--mm-m5-nudge)), 1px)
+        );
       }
     }
 
@@ -3617,7 +4143,13 @@ function injectStyles(base: string): void {
       margin-bottom: 0;
     }
     @media (prefers-reduced-motion: reduce) {
-      .mm-nav-btn, .mm-btn, .mm-world-row { transition: none; }
+      .mm-nav-btn,
+      .mm-nav-icon-btn,
+      .mm-discord-link,
+      .mm-btn,
+      .mm-world-row {
+        transition: none;
+      }
       .mm-content.mm-content-exit,
       .mm-content.mm-content-enter {
         animation: none !important;
@@ -3636,12 +4168,31 @@ function injectStyles(base: string): void {
       .mm-workshop-spinner--btn {
         animation: none;
       }
+      .mm-bedrock-world-shell,
+      .mm-bedrock-world-section-body > *,
+      .mm-pack-bedrock-tab-body > *,
+      .mm-online-body-stage > *,
+      .mm-workshop-body > * {
+        animation: none !important;
+      }
+      .mm-skel {
+        animation: none !important;
+        background: rgba(70, 70, 74, 0.75);
+      }
       .mm-workshop-rowcard,
       .mm-workshop-type-pill,
       .mm-workshop-sort-pill,
       .mm-workshop-search-wrap,
       .mm-workshop-filter-strip {
         transition: none;
+      }
+      .mm-btn,
+      .mm-nav-btn,
+      .mm-nav-icon-btn,
+      .mm-workshop-tab,
+      .mm-bedrock-world-nav-item,
+      .mm-pack-bedrock-tab {
+        transform: none !important;
       }
       .mm-modal,
       .mm-modal-card {
@@ -3790,10 +4341,9 @@ export class MainMenu {
         }
       }
 
-      const navItems: Array<{
+      const primaryNavItems: Array<{
         id: NavTab;
         label: string;
-        sub?: string;
         disabled?: boolean;
       }> = [
         { id: "solo", label: "Solo" },
@@ -3802,60 +4352,108 @@ export class MainMenu {
           ? [{ id: "workshop" as const, label: "Workshop" }]
           : []),
         { id: "settings", label: "Settings" },
-        { id: "skins", label: "Skins", sub: "Wardrobe" },
-        { id: "profile", label: "Profile", sub: "Account" },
       ];
 
-      for (const item of navItems) {
+      const quickNavItems: Array<{
+        id: NavTab;
+        label: string;
+        title: string;
+        iconClass: string;
+      }> = [
+        {
+          id: "skins",
+          label: "Skins",
+          title: "Skins — wardrobe & outline colors",
+          iconClass: "fa-solid fa-shirt",
+        },
+        {
+          id: "profile",
+          label: "Profile",
+          title: "Profile — account & sign in",
+          iconClass: "fa-solid fa-user",
+        },
+      ];
+
+      function wireNavTabButton(btn: HTMLButtonElement, tab: NavTab, disabled: boolean): void {
+        if (disabled) {
+          return;
+        }
+        btn.addEventListener("click", () => {
+          if (activeTab === tab) {
+            setActiveTab(null);
+            transitionContent(() => {
+              renderHome();
+            });
+          } else {
+            setActiveTab(tab);
+            transitionContent(() => performTabRender(tab));
+          }
+        });
+      }
+
+      for (const item of primaryNavItems) {
+        const disabled = item.disabled === true;
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className =
-          "mm-nav-btn" + (item.disabled === true ? " mm-nav-btn-disabled" : "");
-        if (item.disabled !== true) {
-          btn.addEventListener("click", () => {
-            const tab = item.id;
-            if (activeTab === tab) {
-              // Deselect → return to home
-              activeTab = null;
-              btn.classList.remove("mm-nav-btn-active");
-              transitionContent(() => {
-                renderHome();
-              });
-            } else {
-              setActiveTab(tab);
-              transitionContent(() => performTabRender(tab));
-            }
-          });
-        }
+          "mm-nav-btn" + (disabled ? " mm-nav-btn-disabled" : "");
+        wireNavTabButton(btn, item.id, disabled);
         const labelSpan = document.createElement("span");
         labelSpan.textContent = item.label;
         btn.appendChild(labelSpan);
-        if (item.sub !== undefined) {
-          const sub = document.createElement("span");
-          sub.className = "mm-nav-label-sub";
-          sub.textContent = item.sub;
-          btn.appendChild(sub);
-        }
         navList.appendChild(btn);
         navBtns.set(item.id, btn);
       }
 
+      const bottomCluster = document.createElement("div");
+      bottomCluster.className = "mm-nav-bottom-cluster";
+
+      const navQuick = document.createElement("div");
+      navQuick.className = "mm-nav-quick";
+      for (const item of quickNavItems) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "mm-nav-icon-btn";
+        btn.setAttribute("aria-label", item.label);
+        btn.title = item.title;
+        const ic = document.createElement("i");
+        ic.className = item.iconClass;
+        ic.setAttribute("aria-hidden", "true");
+        btn.appendChild(ic);
+        wireNavTabButton(btn, item.id, false);
+        navQuick.appendChild(btn);
+        navBtns.set(item.id, btn);
+      }
+      bottomCluster.appendChild(navQuick);
+
       const navMeta = document.createElement("div");
       navMeta.className = "mm-nav-meta";
       const navMetaLine = document.createElement("div");
-      navMetaLine.textContent = "Browse rooms online or host from Solo saves.";
+      const navTabHints: Record<NavTab, string> = {
+        solo: "Create, import, and manage worlds before launching.",
+        online: "Join rooms online or host one from your Solo saves.",
+        workshop: "Browse and install community packs from Workshop.",
+        settings: "Adjust controls, audio, video, and accessibility.",
+        skins: "Pick your skin and tweak wardrobe cosmetics.",
+        profile: "Sign in, link Discord, and manage your profile.",
+      };
+      const homeHint = "Pick a tab to get started.";
+      navMetaLine.textContent = homeHint;
       navMeta.appendChild(navMetaLine);
-      nav.appendChild(navMeta);
+      bottomCluster.appendChild(navMeta);
 
-      function setActiveTab(tab: NavTab): void {
+      nav.appendChild(bottomCluster);
+
+      function setActiveTab(tab: NavTab | null): void {
         activeTab = tab;
         for (const [id, b] of navBtns) {
-          if (id === tab) {
+          if (tab !== null && id === tab) {
             b.classList.add("mm-nav-btn-active");
           } else {
             b.classList.remove("mm-nav-btn-active");
           }
         }
+        navMetaLine.textContent = tab !== null ? navTabHints[tab] : homeHint;
       }
 
       // -- Content area ------------------------------------------------------
@@ -4340,8 +4938,10 @@ export class MainMenu {
           const rerenderList = async (): Promise<void> => {
             if (!list.isConnected) return;
             list.replaceChildren();
+            appendWorldListSkeletonRows(list, 5);
             const worlds = (await store.listWorlds()).sort(sortWorldsByLastPlayed);
             if (!list.isConnected) return;
+            list.replaceChildren();
             if (worlds.length === 0) {
               const empty = document.createElement("div");
               empty.className = "mm-world-empty";
@@ -4475,6 +5075,7 @@ export class MainMenu {
         onBack: () => void;
         afterSaveSuccess?: () => void;
       }): void {
+        appendBedrockWorldEditorSkeleton(opts.container);
         void (async () => {
           const fresh = await store.loadWorld(opts.worldUuid);
           if (!opts.container.isConnected) {
@@ -4535,7 +5136,14 @@ export class MainMenu {
           }
           sidebar.appendChild(thumbWrap);
 
-          const saveSidebar = makeBtn("Save", "mm-btn mm-world-edit-save");
+          const saveSidebar = makeBtn(
+            "Save & return",
+            "mm-btn mm-world-edit-save",
+          );
+          const playSidebar = makeBtn(
+            "Play",
+            "mm-btn mm-world-edit-save",
+          );
           const feedback = document.createElement("div");
           feedback.className = "mm-modal-feedback";
 
@@ -4728,11 +5336,16 @@ export class MainMenu {
             });
           };
 
-          saveSidebar.addEventListener("click", () => {
+          const saveAndReturn = (): void => {
+            saveSidebar.classList.remove("mm-world-edit-save--saved");
             void persistWorldEdits()
               .then(() => {
                 feedback.textContent = "Saved.";
                 feedback.classList.remove("mm-feedback-error");
+                saveSidebar.classList.add("mm-world-edit-save--saved");
+                window.setTimeout(() => {
+                  saveSidebar.classList.remove("mm-world-edit-save--saved");
+                }, 460);
                 opts.afterSaveSuccess?.();
               })
               .catch((err: unknown) => {
@@ -4740,8 +5353,34 @@ export class MainMenu {
                   err instanceof Error ? err.message : "Save failed.";
                 feedback.classList.add("mm-feedback-error");
               });
+          };
+          saveSidebar.addEventListener("click", saveAndReturn);
+          playSidebar.addEventListener("click", () => {
+            playSidebar.classList.remove("mm-world-edit-save--saved");
+            void persistWorldEdits()
+              .then(() => {
+                feedback.textContent = "Saved. Launching…";
+                feedback.classList.remove("mm-feedback-error");
+                playSidebar.classList.add("mm-world-edit-save--saved");
+                window.setTimeout(() => {
+                  playSidebar.classList.remove("mm-world-edit-save--saved");
+                }, 460);
+                exitToGame({ action: "load", uuid: worldUuid });
+              })
+              .catch((err: unknown) => {
+                feedback.textContent =
+                  err instanceof Error ? err.message : "Save failed.";
+                feedback.classList.add("mm-feedback-error");
+              });
           });
-          sidebar.appendChild(saveSidebar);
+
+          const sidebarActions = document.createElement("div");
+          sidebarActions.className = "mm-bedrock-world-sidebar-actions";
+          if (opts.mode === "solo") {
+            sidebarActions.appendChild(playSidebar);
+          }
+          sidebarActions.appendChild(saveSidebar);
+          sidebar.appendChild(sidebarActions);
 
           if (opts.mode === "host") {
             const hostRoomBtn = makeBtn("Host room", "mm-btn");
@@ -5050,9 +5689,12 @@ export class MainMenu {
         cancelBtn.addEventListener("click", closeModal);
         actions.appendChild(cancelBtn);
 
+        appendWorldListSkeletonRows(list, 5);
+
         void (async () => {
           const worlds = (await store.listWorlds()).sort(sortWorldsByLastPlayed);
           if (!list.isConnected) return;
+          list.replaceChildren();
           if (worlds.length === 0) {
             const empty = document.createElement("div");
             empty.className = "mm-world-empty";
@@ -5168,6 +5810,8 @@ export class MainMenu {
           ) {
             return;
           }
+          listEl.replaceChildren();
+          appendRoomsListSkeletonRows(listEl, 6);
           const rows = await listStratumRooms(client, {
             search: searchInput.value.trim(),
             filter: filterSel.getValue() as "all" | "public" | "private",
@@ -5358,6 +6002,8 @@ export class MainMenu {
           bodyStage.appendChild(footer);
 
           const refreshComments = async (): Promise<void> => {
+            commentsList.replaceChildren();
+            appendCommentThreadSkeletons(commentsList, 3);
             const list = await listStratumRoomComments(client, room.room_code);
             commentsList.replaceChildren();
             for (const c of list) {
@@ -5392,11 +6038,13 @@ export class MainMenu {
           const rebuildStars = async (): Promise<void> => {
             starsRow.replaceChildren();
             if (session === null) return;
+            appendStarRatingSkeletons(starsRow);
             const mine = await getMyRoomRating(
               client,
               room.room_code,
               session.userId,
             );
+            starsRow.replaceChildren();
             for (let s = 1; s <= 5; s++) {
               const b = document.createElement("button");
               b.type = "button";
@@ -5588,6 +6236,9 @@ export class MainMenu {
         disposeProfile();
         closeModal();
 
+        content.replaceChildren();
+        content.appendChild(createSettingsSkeletonPanel());
+
         const panel = document.createElement("div");
         panel.className = "mm-panel mm-settings-panel";
 
@@ -5625,8 +6276,30 @@ export class MainMenu {
       }
 
       // -- Assemble ----------------------------------------------------------
+      const topbar = document.createElement("div");
+      topbar.className = "mm-topbar";
+      const discordLink = document.createElement("a");
+      discordLink.className = "mm-discord-link";
+      discordLink.href = STRATUM_DISCORD_INVITE_URL;
+      discordLink.target = "_blank";
+      discordLink.rel = "noopener noreferrer";
+      discordLink.setAttribute("aria-label", "Stratum on Discord");
+      discordLink.title = "Join the Stratum Discord";
+      const discordSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      discordSvg.setAttribute("viewBox", "0 0 127.14 96.36");
+      discordSvg.setAttribute("aria-hidden", "true");
+      const discordPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      discordPath.setAttribute(
+        "d",
+        "M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.46,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,87c-2.28-1.13-4.48-2.42-6.61-3.86a68.06,68.06,0,0,0,3.35-2.62c19.89,9.32,41.53,9.32,61.13,0a65.56,65.56,0,0,0,3.35,2.62,76.89,76.89,0,0,0-6.59,9.4,105.25,105.25,0,0,0,32.19-16.14C127.42,52.65,122.67,28.72,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.44-12.74S54,46,54,53,48.84,65.69,42.45,65.69Zm42.24,0C78.42,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.21,46,96.21,53,91.08,65.69,84.69,65.69Z",
+      );
+      discordSvg.appendChild(discordPath);
+      discordLink.appendChild(discordSvg);
+      topbar.appendChild(discordLink);
+
       body.appendChild(nav);
       body.appendChild(content);
+      root.appendChild(topbar);
       root.appendChild(body);
       mount.appendChild(root);
 
@@ -5656,7 +6329,149 @@ export class MainMenu {
 // Small DOM helpers
 // ---------------------------------------------------------------------------
 
-/** World row matching Solo list: thumbnail, name/meta, optional Edit (stops propagation). */
+/** Shown while settings IndexedDB hydrate runs. */
+function createSettingsSkeletonPanel(): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = "mm-panel mm-settings-panel";
+  const titleSk = document.createElement("div");
+  titleSk.className = "mm-skel mm-skel-inline";
+  titleSk.style.width = "min(220px, 55%)";
+  titleSk.style.height = "26px";
+  titleSk.style.marginBottom = "1.35rem";
+
+  const shell = document.createElement("div");
+  shell.className = "mm-skel-settings-shell";
+  shell.setAttribute("aria-hidden", "true");
+  shell.setAttribute("aria-busy", "true");
+  for (let i = 0; i < 7; i++) {
+    const row = document.createElement("div");
+    row.className = "mm-skel-settings-row";
+    const lb = document.createElement("div");
+    lb.className = "mm-skel mm-skel-settings-label";
+    const track = document.createElement("div");
+    track.className = "mm-skel mm-skel-settings-track";
+    row.append(lb, track);
+    shell.appendChild(row);
+  }
+  const block = document.createElement("div");
+  block.className = "mm-skel mm-skel-settings-block";
+  shell.appendChild(block);
+
+  panel.appendChild(titleSk);
+  panel.appendChild(shell);
+  return panel;
+}
+
+function appendWorldListSkeletonRows(list: HTMLElement, count: number): void {
+  for (let i = 0; i < count; i++) {
+    const row = document.createElement("div");
+    row.className = "mm-skel-world-row";
+    row.setAttribute("aria-hidden", "true");
+
+    const thumb = document.createElement("div");
+    thumb.className = "mm-skel mm-skel-world-thumb";
+
+    const lines = document.createElement("div");
+    lines.className = "mm-skel-world-lines";
+    const ln1 = document.createElement("div");
+    ln1.className = "mm-skel mm-skel-world-line-title";
+    const ln2 = document.createElement("div");
+    ln2.className = "mm-skel mm-skel-world-line-meta";
+    if (i % 2 === 1) ln1.style.width = "min(210px, 48%)";
+    lines.append(ln1, ln2);
+
+    row.append(thumb, lines);
+    list.appendChild(row);
+  }
+}
+
+function appendRoomsListSkeletonRows(list: HTMLElement, count: number): void {
+  for (let i = 0; i < count; i++) {
+    const row = document.createElement("div");
+    row.className = "mm-skel-room-row";
+    row.setAttribute("aria-hidden", "true");
+
+    const t = document.createElement("div");
+    t.className = "mm-skel mm-skel-room-title";
+    const m = document.createElement("div");
+    m.className = "mm-skel mm-skel-room-meta";
+    if (i % 3 === 1) m.style.width = "min(300px, 70%)";
+
+    row.append(t, m);
+    list.appendChild(row);
+  }
+}
+
+function appendCommentThreadSkeletons(parent: HTMLElement, count: number): void {
+  for (let i = 0; i < count; i++) {
+    const wrap = document.createElement("div");
+    wrap.className = "mm-skel-comment";
+
+    const au = document.createElement("div");
+    au.className = "mm-skel mm-skel-comment-author";
+    const bd1 = document.createElement("div");
+    bd1.className = "mm-skel mm-skel-comment-body";
+    wrap.appendChild(au);
+    wrap.appendChild(bd1);
+
+    if (i % 2 === 0) {
+      const bd2 = document.createElement("div");
+      bd2.className = "mm-skel mm-skel-comment-body";
+      wrap.appendChild(bd2);
+    }
+    wrap.setAttribute("aria-hidden", "true");
+    parent.appendChild(wrap);
+  }
+}
+
+function appendStarRatingSkeletons(row: HTMLElement, count = 5): void {
+  for (let i = 0; i < count; i++) {
+    const b = document.createElement("span");
+    b.className = "mm-skel mm-skel-inline mm-skel-star";
+    b.setAttribute("aria-hidden", "true");
+    row.appendChild(b);
+  }
+}
+
+function appendBedrockWorldEditorSkeleton(container: HTMLElement): void {
+  container.replaceChildren();
+
+  const shell = document.createElement("div");
+  shell.className = "mm-bedrock-world-shell mm-skel-bedrock-shell";
+  shell.setAttribute("aria-hidden", "true");
+  shell.setAttribute("aria-busy", "true");
+
+  const top = document.createElement("div");
+  top.className = "mm-skel-bedrock-top";
+  const bk = document.createElement("span");
+  bk.className = "mm-skel mm-skel-bedrock-back";
+  const hd = document.createElement("span");
+  hd.className = "mm-skel mm-skel-bedrock-head";
+  top.append(bk, hd);
+
+  const body = document.createElement("div");
+  body.className = "mm-skel-bedrock-body";
+  const side = document.createElement("div");
+  side.className = "mm-skel-bedrock-side";
+  const thumb = document.createElement("div");
+  thumb.className = "mm-skel mm-skel-bedrock-thumb";
+  const save = document.createElement("div");
+  save.className = "mm-skel mm-skel-bedrock-save";
+  side.append(thumb, save);
+
+  const main = document.createElement("div");
+  main.className = "mm-skel-bedrock-main";
+  const lnLg = document.createElement("div");
+  lnLg.className = "mm-skel mm-skel-bedrock-line-lg";
+  const lnSm = document.createElement("div");
+  lnSm.className = "mm-skel mm-skel-bedrock-line-sm";
+  main.append(lnLg, lnSm);
+
+  body.append(side, main);
+  shell.append(top, body);
+  container.appendChild(shell);
+}
+
 function appendWorldRowToList(
   list: HTMLElement,
   world: WorldMetadata,

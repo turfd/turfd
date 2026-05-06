@@ -29,7 +29,7 @@ Each line is one thing that changed. Present tense, active voice, short. A littl
 - **Fixes:** `Fixed a bug where …` / `Fixed a bug which …` with a plain subject (renderer, chunks, mob spawners, host CPU).
 - **Tuning:** `Adjusted …` for resolution, bloom, particle counts, performance knobs—not only "more" or "less" with no object.
 - **Two beats one line:** Use a semicolon to pair the headline change with a second fact (`Stratite now; tools, drops, and worldgen match`).
-- **Deferred UI:** When something is removed but planned later, add a short tail (`wiki to come at a later date`).
+- **Deferred UI:** When something is removed but planned later, add a short tail (`more on this later`).
 - **Texture/content:** Short noun-phrase closers are fine (`Zombie texture adjustment`).
 
 **Target:** Minecraft Beta 1.8 changelog spirit. Each change line starts with `-` (fix/change), `+` (addition), or `*` (tweak); one symbol, one space, then the line. Example:

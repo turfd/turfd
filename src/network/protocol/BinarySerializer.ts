@@ -62,7 +62,7 @@ const CHUNK_SPAWNER_MAGIC = 0x57_50_53_53; // 'SSPW' LE
 const CHUNK_SIGN_MAGIC = 0x4e_47_53_53; // 'SSGN' LE
 
 /** Wire protocol version carried in handshake (this build). */
-export const WIRE_PROTOCOL_VERSION = 21;
+export const WIRE_PROTOCOL_VERSION = 22;
 /**
  * Oldest wire version this build still speaks. Bump when the binary layout breaks;
  * keep in sync with {@link WIRE_PROTOCOL_VERSION} when you drop old clients.
@@ -88,6 +88,8 @@ export const HANDSHAKE_SKIN_ID_MAX_BYTES = 128;
 
 /** Max UTF-8 bytes for persisted local anonymous id (standard UUID string). */
 export const HANDSHAKE_LOCAL_GUEST_UUID_MAX_BYTES = 36;
+/** Max UTF-8 bytes for cosmetic hex color strings like `#4ea1ff`. */
+export const HANDSHAKE_COLOR_HEX_MAX_BYTES = 16;
 
 export type HandshakeWirePayload = {
   version: number;
@@ -103,6 +105,10 @@ export type HandshakeWirePayload = {
    * or legacy peer (v16 and older).
    */
   localGuestUuid: string;
+  /** Optional replicated player nametag color (`#rrggbb`). */
+  nameColorHex?: string;
+  /** Optional replicated player outline glow color (`#rrggbb`). */
+  outlineColorHex?: string;
 };
 
 export type WorldSyncWirePayload = {
@@ -177,6 +183,14 @@ export class BinarySerializer {
     if (localBytes.length > HANDSHAKE_LOCAL_GUEST_UUID_MAX_BYTES) {
       localBytes = localBytes.slice(0, HANDSHAKE_LOCAL_GUEST_UUID_MAX_BYTES);
     }
+    let nameColorBytes = textEnc.encode(msg.nameColorHex ?? "");
+    if (nameColorBytes.length > HANDSHAKE_COLOR_HEX_MAX_BYTES) {
+      nameColorBytes = nameColorBytes.slice(0, HANDSHAKE_COLOR_HEX_MAX_BYTES);
+    }
+    let outlineColorBytes = textEnc.encode(msg.outlineColorHex ?? "");
+    if (outlineColorBytes.length > HANDSHAKE_COLOR_HEX_MAX_BYTES) {
+      outlineColorBytes = outlineColorBytes.slice(0, HANDSHAKE_COLOR_HEX_MAX_BYTES);
+    }
     const total =
       1 +
       4 +
@@ -189,7 +203,11 @@ export class BinarySerializer {
       2 +
       skinBytes.length +
       2 +
-      localBytes.length;
+      localBytes.length +
+      2 +
+      nameColorBytes.length +
+      2 +
+      outlineColorBytes.length;
     const buffer = new ArrayBuffer(total);
     const view = new DataView(buffer);
     let o = 0;
@@ -216,6 +234,14 @@ export class BinarySerializer {
     view.setUint16(o, localBytes.length, LE);
     o += 2;
     new Uint8Array(buffer, o, localBytes.length).set(localBytes);
+    o += localBytes.length;
+    view.setUint16(o, nameColorBytes.length, LE);
+    o += 2;
+    new Uint8Array(buffer, o, nameColorBytes.length).set(nameColorBytes);
+    o += nameColorBytes.length;
+    view.setUint16(o, outlineColorBytes.length, LE);
+    o += 2;
+    new Uint8Array(buffer, o, outlineColorBytes.length).set(outlineColorBytes);
     return buffer;
   }
 
@@ -243,6 +269,8 @@ export class BinarySerializer {
         accountId: "",
         skinId: "",
         localGuestUuid: "",
+        nameColorHex: "",
+        outlineColorHex: "",
       };
     }
     const dnLen = view.getUint16(o, LE);
@@ -255,6 +283,8 @@ export class BinarySerializer {
         accountId: "",
         skinId: "",
         localGuestUuid: "",
+        nameColorHex: "",
+        outlineColorHex: "",
       };
     }
     const displayName =
@@ -268,6 +298,8 @@ export class BinarySerializer {
         accountId: "",
         skinId: "",
         localGuestUuid: "",
+        nameColorHex: "",
+        outlineColorHex: "",
       };
     }
     const accLen = view.getUint16(o, LE);
@@ -280,6 +312,8 @@ export class BinarySerializer {
         accountId: "",
         skinId: "",
         localGuestUuid: "",
+        nameColorHex: "",
+        outlineColorHex: "",
       };
     }
     const accountId =
@@ -293,6 +327,8 @@ export class BinarySerializer {
         accountId,
         skinId: "",
         localGuestUuid: "",
+        nameColorHex: "",
+        outlineColorHex: "",
       };
     }
     const skinLen = view.getUint16(o, LE);
@@ -307,17 +343,39 @@ export class BinarySerializer {
           accountId,
           skinId: "",
           localGuestUuid: "",
+          nameColorHex: "",
+          outlineColorHex: "",
         };
       }
       skinId = textDec.decode(new Uint8Array(buffer, o, skinLen));
       o += skinLen;
     }
     let localGuestUuid = "";
+    let nameColorHex = "";
+    let outlineColorHex = "";
     if (o + 2 <= buffer.byteLength) {
       const localLen = view.getUint16(o, LE);
       o += 2;
       if (localLen > 0 && o + localLen <= buffer.byteLength) {
         localGuestUuid = textDec.decode(new Uint8Array(buffer, o, localLen));
+        o += localLen;
+      }
+      if (o + 2 <= buffer.byteLength) {
+        const nameColorLen = view.getUint16(o, LE);
+        o += 2;
+        if (nameColorLen > 0 && o + nameColorLen <= buffer.byteLength) {
+          nameColorHex = textDec.decode(new Uint8Array(buffer, o, nameColorLen));
+          o += nameColorLen;
+        }
+      }
+      if (o + 2 <= buffer.byteLength) {
+        const outlineColorLen = view.getUint16(o, LE);
+        o += 2;
+        if (outlineColorLen > 0 && o + outlineColorLen <= buffer.byteLength) {
+          outlineColorHex = textDec.decode(
+            new Uint8Array(buffer, o, outlineColorLen),
+          );
+        }
       }
     }
     return {
@@ -327,6 +385,8 @@ export class BinarySerializer {
       accountId,
       skinId,
       localGuestUuid,
+      nameColorHex,
+      outlineColorHex,
     };
   }
 

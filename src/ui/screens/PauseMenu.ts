@@ -53,9 +53,9 @@ function injectPauseStyles(base: string): void {
       box-sizing: border-box;
       background: rgba(24, 24, 26, 0.55);
       font-family: 'BoldPixels', 'Courier New', monospace;
-      -webkit-font-smoothing: none;
-      -moz-osx-font-smoothing: unset;
-      text-rendering: optimizeSpeed;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: auto;
+      text-rendering: geometricPrecision;
       color: var(--mm-ink);
       opacity: 0;
       visibility: hidden;
@@ -151,7 +151,8 @@ function injectPauseStyles(base: string): void {
 
     .pm-title {
       margin: 0 0 1rem;
-      font-size: 24px;
+      font-size: max(var(--mm-bold-min), 24px);
+      line-height: 30px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       text-align: center;
@@ -167,7 +168,8 @@ function injectPauseStyles(base: string): void {
     .pm-btn {
       padding: 11px 18px;
       font-family: 'BoldPixels', monospace;
-      font-size: 17px;
+      font-size: max(var(--mm-bold-min), 17px);
+      line-height: 22px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -198,7 +200,8 @@ function injectPauseStyles(base: string): void {
       border-top: 1px solid var(--mm-border);
     }
     .pm-section-title {
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--mm-ink-soft);
@@ -223,7 +226,7 @@ function injectPauseStyles(base: string): void {
     .pm-mp-status {
       font-family: 'M5x7', monospace;
       font-size: 20px;
-      line-height: 1.45;
+      line-height: 30px;
       color: var(--mm-ink-mid);
       margin-top: 0.15rem;
       min-height: 1.35em;
@@ -234,7 +237,7 @@ function injectPauseStyles(base: string): void {
 
     .pm-label {
       display: block;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-soft);
@@ -246,7 +249,8 @@ function injectPauseStyles(base: string): void {
     }
     .pm-hint {
       font-family: 'M5x7', monospace;
-      font-size: 16px;
+      font-size: max(var(--mm-m5-min), 16px);
+      line-height: 24px;
       color: var(--mm-ink-soft);
       margin-top: 0.35rem;
       min-height: 1.2em;

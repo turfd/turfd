@@ -2,6 +2,12 @@
 
 import type { IAuthProvider } from "../../auth/IAuthProvider";
 import { validateUsername } from "../../auth/profile";
+import { DISCORD_ENTITLEMENT_REFRESH_MS } from "../../core/constants";
+import {
+  getDiscordEntitlement,
+  startDiscordOauth,
+  type DiscordEntitlementStatus,
+} from "../../network/discordEntitlementApi";
 
 const STYLES_ID = "stratum-profile-styles";
 
@@ -27,8 +33,8 @@ function injectStyles(): void {
     .stratum-profile-switch {
       margin-top: 14px;
       font-family: 'M5x7', monospace;
-      font-size: calc(20px + var(--mm-m5-nudge, 4px));
-      line-height: 1.45;
+      font-size: max(var(--mm-m5-min), calc(20px + var(--mm-m5-nudge, 4px)));
+      line-height: 30px;
       color: var(--mm-ink-mid, #aeaeb2);
     }
     .stratum-profile-switch button {
@@ -37,7 +43,7 @@ function injectStyles(): void {
       color: var(--mm-ink, #f2f2f7);
       cursor: pointer;
       font-family: 'BoldPixels', monospace;
-      font-size: 16px;
+      font-size: max(var(--mm-bold-min), 16px);
       text-transform: uppercase;
       letter-spacing: 0.06em;
       text-decoration: underline;
@@ -55,13 +61,102 @@ function injectStyles(): void {
     }
     .mm-profile-feedback--ok {
       font-family: 'M5x7', monospace;
-      font-size: calc(19px + var(--mm-m5-nudge, 4px));
+      font-size: max(var(--mm-m5-min), calc(19px + var(--mm-m5-nudge, 4px)));
+      line-height: 28px;
       color: #5daf8c;
       min-height: 1.25em;
       margin-top: 10px;
     }
+    .stratum-profile-discord-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .stratum-profile-username-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .stratum-profile-username-input-wrap {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+    .stratum-profile-username-row .stratum-profile-username-input-wrap input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .stratum-profile-skel-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 2px;
+      max-width: 28rem;
+      align-items: stretch;
+    }
+    .stratum-profile-skel-shell[aria-busy="true"] {
+      pointer-events: none;
+    }
+    .stratum-profile-skel-lines {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .stratum-profile-skel-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
   `;
   document.head.appendChild(style);
+}
+
+function profileLoggedInSkeleton(): HTMLElement {
+  const shell = document.createElement("div");
+  shell.className = "stratum-profile-skel-shell";
+  shell.setAttribute("aria-busy", "true");
+  shell.setAttribute("aria-label", "Loading profile");
+
+  const lines = document.createElement("div");
+  lines.className = "stratum-profile-skel-lines";
+  const widths = ["min(340px, 94%)", "min(290px, 80%)", "min(230px, 64%)"];
+  for (const w of widths) {
+    const ln = document.createElement("div");
+    ln.className = "mm-skel mm-skel-inline";
+    ln.style.display = "block";
+    ln.style.height = "16px";
+    ln.style.width = w;
+    lines.appendChild(ln);
+  }
+
+  const fieldSk = document.createElement("div");
+  fieldSk.className = "mm-field";
+  const fakeLabel = document.createElement("div");
+  fakeLabel.className = "mm-skel mm-skel-inline";
+  fakeLabel.style.width = "6.75rem";
+  fakeLabel.style.height = "17px";
+  fakeLabel.style.marginBottom = "8px";
+  const fakeInput = document.createElement("div");
+  fakeInput.className = "mm-skel";
+  fakeInput.style.width = "100%";
+  fakeInput.style.height = "52px";
+  fakeInput.style.borderRadius = "10px";
+  fieldSk.append(fakeLabel, fakeInput);
+
+  const actions = document.createElement("div");
+  actions.className = "stratum-profile-skel-actions";
+  const b1 = document.createElement("div");
+  b1.className = "mm-skel mm-skel-inline";
+  b1.style.width = "9rem";
+  b1.style.height = "46px";
+  const b2 = document.createElement("div");
+  b2.className = "mm-skel mm-skel-inline";
+  b2.style.width = "7rem";
+  b2.style.height = "46px";
+  actions.append(b1, b2);
+
+  shell.append(lines, fieldSk, actions);
+  return shell;
 }
 
 function profileField(labelText: string, input: HTMLInputElement): HTMLDivElement {
@@ -90,6 +185,8 @@ export function mountProfileScreen(
   let mode: "login" | "register" = "login";
   let cleaned = false;
   let renderGen = 0;
+  let entitlementTimer: number | null = null;
+  let discordEntitlement: DiscordEntitlementStatus | null = null;
 
   const feedback = document.createElement("div");
   feedback.setAttribute("aria-live", "polite");
@@ -112,7 +209,26 @@ export function mountProfileScreen(
     }
     renderGen += 1;
     const gen = renderGen;
-    setFeedback("", "clear");
+    if (window.location.search.includes("discord_link=")) {
+      const params = new URLSearchParams(window.location.search);
+      const outcome = params.get("discord_link");
+      const tier = params.get("tier");
+      if (outcome === "success") {
+        const tierLabel =
+          tier === "stratite" ? "Stratite" : tier === "gold" ? "Gold" : tier === "iron" ? "Iron" : "None";
+        setFeedback(`Discord linked successfully. Tier: ${tierLabel}.`, "ok");
+      } else if (outcome !== null) {
+        setFeedback("Discord link failed. Try again.", "err");
+      } else {
+        setFeedback("", "clear");
+      }
+      params.delete("discord_link");
+      params.delete("tier");
+      const next = `${window.location.pathname}${params.toString() === "" ? "" : `?${params.toString()}`}${window.location.hash}`;
+      window.history.replaceState(null, document.title, next);
+    } else {
+      setFeedback("", "clear");
+    }
 
     root.replaceChildren();
 
@@ -139,12 +255,14 @@ export function mountProfileScreen(
 
     const session = auth.getSession();
     if (session !== null) {
-      const loading = document.createElement("p");
-      loading.className = "mm-note";
-      loading.textContent = "Loading profile…";
-      inner.appendChild(loading);
+      inner.appendChild(profileLoggedInSkeleton());
 
-      void auth.getProfile().then((prof) => {
+      void (async () => {
+        await auth.ensureAuthHydrated();
+        if (cleaned || gen !== renderGen) {
+          return;
+        }
+        const prof = await auth.getProfile();
         if (cleaned || gen !== renderGen) {
           return;
         }
@@ -212,7 +330,19 @@ export function mountProfileScreen(
         nameInput.type = "text";
         nameInput.value = uname;
         nameInput.autocomplete = "username";
-        const nameWrap = profileField("Username", nameInput);
+        const nameWrap = document.createElement("div");
+        nameWrap.className = "mm-field";
+        const nameLabel = document.createElement("label");
+        nameLabel.htmlFor = nameInput.id;
+        nameLabel.textContent = "Username";
+        nameWrap.appendChild(nameLabel);
+        const nameRow = document.createElement("div");
+        nameRow.className = "stratum-profile-username-row";
+        const nameInputWrap = document.createElement("div");
+        nameInputWrap.className = "stratum-profile-username-input-wrap";
+        nameInputWrap.appendChild(nameInput);
+        nameRow.appendChild(nameInputWrap);
+        nameWrap.appendChild(nameRow);
 
         const actions = document.createElement("div");
         actions.className = "stratum-profile-actions";
@@ -248,10 +378,134 @@ export function mountProfileScreen(
         actions.appendChild(saveBtn);
         actions.appendChild(outBtn);
 
+        const supabase = auth.getSupabaseClient();
+
+        const discordWrap = document.createElement("div");
+        const discordTitle = document.createElement("p");
+        discordTitle.className = "mm-note";
+        discordTitle.textContent = "Discord rewards";
+        const discordIdentityRow = document.createElement("div");
+        discordIdentityRow.className = "stratum-profile-discord-row";
+        const discordIdentity = document.createElement("p");
+        discordIdentity.className = "mm-note";
+        const discordTierStatus = document.createElement("p");
+        discordTierStatus.className = "mm-note";
+        const discordActions = document.createElement("div");
+        discordActions.className = "stratum-profile-actions";
+        const linkDiscordBtn = document.createElement("button");
+        linkDiscordBtn.type = "button";
+        linkDiscordBtn.className = "mm-btn";
+        linkDiscordBtn.textContent = "Link Discord";
+        const refreshDiscordBtn = document.createElement("button");
+        refreshDiscordBtn.type = "button";
+        refreshDiscordBtn.className = "mm-btn mm-btn-subtle";
+        refreshDiscordBtn.textContent = "Refresh";
+        const renderDiscordState = (): void => {
+          if (discordEntitlement === null) {
+            discordIdentity.textContent = "Checking Discord link…";
+            discordTierStatus.textContent = "";
+            linkDiscordBtn.style.display = "";
+            refreshDiscordBtn.style.display = "none";
+            discordIdentityRow.style.display = "";
+            return;
+          }
+          if (!discordEntitlement.linked) {
+            discordIdentity.textContent = "Not linked. Link Discord to unlock donor rewards.";
+            discordTierStatus.textContent = "";
+            linkDiscordBtn.style.display = "";
+            refreshDiscordBtn.style.display = "none";
+            discordIdentityRow.style.display = "";
+            return;
+          }
+          const linkedName = discordEntitlement.username?.trim() ?? "";
+          discordIdentity.textContent =
+            linkedName === "" ? "Discord linked." : `Discord: ${linkedName}`;
+          const tierLabel =
+            discordEntitlement.tier === "stratite"
+              ? "Stratite"
+              : discordEntitlement.tier === "gold"
+                ? "Gold"
+                : discordEntitlement.tier === "iron"
+                  ? "Iron"
+                  : "None";
+          const status = discordEntitlement.isDonator ? `${tierLabel} Donator` : "No donor role";
+          const checkedAt = discordEntitlement.checkedAt;
+          const checkedAtText =
+            typeof checkedAt === "string" && checkedAt.trim() !== ""
+              ? ` Last checked ${new Date(checkedAt).toLocaleString()}.`
+              : "";
+          const staleText = discordEntitlement.stale ? " Using cached status." : "";
+          discordTierStatus.textContent = `Donation tier: ${status}.${checkedAtText}${staleText}`;
+          linkDiscordBtn.style.display = "none";
+          refreshDiscordBtn.style.display = "";
+          discordIdentityRow.style.display = "";
+        };
+        renderDiscordState();
+
+        linkDiscordBtn.addEventListener("click", () => {
+          if (supabase === null) {
+            setFeedback("Supabase is required to link Discord.", "err");
+            return;
+          }
+          void (async () => {
+            setFeedback("", "clear");
+            const start = await startDiscordOauth(supabase, window.location.href);
+            if (!start.ok) {
+              setFeedback(start.error, "err");
+              return;
+            }
+            window.location.href = start.authorizeUrl;
+          })();
+        });
+
+        refreshDiscordBtn.addEventListener("click", () => {
+          if (supabase === null) {
+            return;
+          }
+          void (async () => {
+            const res = await getDiscordEntitlement(supabase, true);
+            if (!res.ok) {
+              setFeedback(res.error, "err");
+              return;
+            }
+            discordEntitlement = res.status;
+            renderDiscordState();
+          })();
+        });
+        discordWrap.appendChild(discordTitle);
+        discordIdentityRow.appendChild(discordIdentity);
+        discordIdentityRow.appendChild(refreshDiscordBtn);
+        discordActions.appendChild(linkDiscordBtn);
+        discordWrap.appendChild(discordIdentityRow);
+        discordWrap.appendChild(discordTierStatus);
+        discordWrap.appendChild(discordActions);
+
         inner.appendChild(signed);
         inner.appendChild(nameWrap);
         inner.appendChild(actions);
-      });
+        inner.appendChild(discordWrap);
+
+        if (supabase !== null) {
+          if (entitlementTimer !== null) {
+            window.clearInterval(entitlementTimer);
+          }
+          const refreshEntitlement = async (forceRefresh: boolean): Promise<void> => {
+            const res = await getDiscordEntitlement(supabase, forceRefresh);
+            if (!res.ok) {
+              if (discordEntitlement === null) {
+                setFeedback(res.error, "err");
+              }
+              return;
+            }
+            discordEntitlement = res.status;
+            renderDiscordState();
+          };
+          void refreshEntitlement(false);
+          entitlementTimer = window.setInterval(() => {
+            void refreshEntitlement(false);
+          }, DISCORD_ENTITLEMENT_REFRESH_MS);
+        }
+      })();
       return;
     }
 
@@ -360,6 +614,11 @@ export function mountProfileScreen(
   };
 
   const unsub = auth.onAuthStateChange(() => {
+    if (entitlementTimer !== null) {
+      window.clearInterval(entitlementTimer);
+      entitlementTimer = null;
+    }
+    discordEntitlement = null;
     render();
   });
 
@@ -368,6 +627,10 @@ export function mountProfileScreen(
 
   return () => {
     cleaned = true;
+    if (entitlementTimer !== null) {
+      window.clearInterval(entitlementTimer);
+      entitlementTimer = null;
+    }
     unsub();
     root.remove();
   };

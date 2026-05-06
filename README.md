@@ -74,6 +74,28 @@ Optional dev-only token for bundled update tooling (see `vite.config.ts`):
 STRATUM_UPDATE_TOOL_TOKEN=...
 ```
 
+Discord donator linking uses Supabase Edge Functions. Add these secrets in Supabase (not client `.env.local`):
+
+```env
+DISCORD_CLIENT_ID=...
+DISCORD_CLIENT_SECRET=...
+DISCORD_REDIRECT_URI=https://<project-ref>.supabase.co/functions/v1/discord-oauth-callback
+DISCORD_OAUTH_DEFAULT_RETURN_URL=https://<your-game-url>/
+DISCORD_GUILD_ID=1500720261274669169
+DISCORD_DONATOR_ROLE_IRON_ID=1501231317465956383
+DISCORD_DONATOR_ROLE_GOLD_ID=1501231272402620528
+DISCORD_DONATOR_ROLE_STRATITE_ID=1501231435133096188
+DISCORD_ROLE_CACHE_MAX_AGE_MS=900000
+```
+
+Deploy these edge functions after pulling latest changes:
+
+```bash
+supabase functions deploy discord-oauth-start
+supabase functions deploy discord-oauth-callback
+supabase functions deploy discord-entitlement-check
+```
+
 Discord changelog **images** are defined only in **[`scripts/discordChangelogImageUrls.ts`](scripts/discordChangelogImageUrls.ts)** (HTTPS URLs in git). The webhook sends a **banner** embed (`headerImageUrl`), then a **bottom** embed with the large image (`mainEmbedImageUrl`) and the same **`[Summary]` / `[Changes]`** text Discord can render (`title` + `description` on that embed, under the image). Set **`omitTextOnMainImageEmbed`** there only if the bottom card must be image-only. Optional **`footerImageUrl`** adds another image embed after the bottom card. Clear **`mainEmbedImageUrl`** to use text-only body embeds (plus banner/footer images if set). The **`/stratum/update`** dev preview omits the bottom image URL so the Discord column stays live-text; optional `DISCORD_CHANGELOG_EMBED_COLOR` in `.env.local` (decimal RGB, e.g. `3447003`).
 
 ### Discord changelog on GitHub Actions

@@ -47,6 +47,10 @@ export type PlayerSettingsV1 = {
   keyBindings?: StoredKeyBindingsV1;
   /** Selected player skin id (e.g. `"explorer_bob"` or `"custom:uuid"`). Absent ⇒ default. */
   selectedSkinId?: string;
+  /** Donator cosmetic: player nametag color in #rrggbb format. */
+  nameColorHex?: string;
+  /** Donator cosmetic: player glow outline color in #rrggbb format. */
+  outlineColorHex?: string;
 };
 
 export type WorldMetadata = {
@@ -515,6 +519,12 @@ export class IndexedDBStore {
       ...(typeof row.selectedSkinId === "string" && row.selectedSkinId.length > 0
         ? { selectedSkinId: row.selectedSkinId }
         : {}),
+      ...(typeof row.nameColorHex === "string" && row.nameColorHex.length > 0
+        ? { nameColorHex: row.nameColorHex }
+        : {}),
+      ...(typeof row.outlineColorHex === "string" && row.outlineColorHex.length > 0
+        ? { outlineColorHex: row.outlineColorHex }
+        : {}),
     };
   }
 
@@ -564,6 +574,14 @@ export class IndexedDBStore {
     const skinId = settings.selectedSkinId ?? prev.selectedSkinId;
     if (skinId !== undefined) {
       payload.selectedSkinId = skinId;
+    }
+    const nameColorHex = settings.nameColorHex ?? prev.nameColorHex;
+    if (nameColorHex !== undefined) {
+      payload.nameColorHex = nameColorHex;
+    }
+    const outlineColorHex = settings.outlineColorHex ?? prev.outlineColorHex;
+    if (outlineColorHex !== undefined) {
+      payload.outlineColorHex = outlineColorHex;
     }
     await db.put("player_settings", payload, PLAYER_SETTINGS_KEY);
   }

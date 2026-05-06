@@ -1,5 +1,5 @@
 /**
- * Host mob knockback modeled on Terraria `StrikeNPC` (wiki.gg/Knockback, Desktop 1.4.3.6 reference).
+ * Host mob knockback modeled on Terraria `StrikeNPC` (Desktop 1.4.3.6–style tuning).
  * Knockback stat is dimensionless (tooltip scale ~0–20); we map to px/s via
  * {@link TERRARIA_KNOCKBACK_TO_HORIZONTAL_PX}.
  */
@@ -120,7 +120,7 @@ function mobHitKnockCapPx(kind: "sheep" | "pig" | "duck" | "zombie" | "slime"): 
 }
 
 /**
- * Terraria wiki order: resist → Cursed Inferno → soft caps → hard 16 → crit ×1.4.
+ * Same pipeline order as Terraria: resist → Cursed Inferno → soft caps → hard 16 → crit ×1.4.
  */
 export function terrariaProcessKnockbackStat(
   baseKnockback: number,

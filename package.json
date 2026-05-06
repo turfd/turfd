@@ -1,7 +1,7 @@
 {
   "name": "stratum",
   "private": true,
-  "version": "0.6.0-alpha.1",
+  "version": "0.6.0-alpha.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,8 @@
     "perf:preview": "npm run build && vite preview",
     "knip": "knip",
     "changelog:discord": "tsx scripts/postDiscordChangelog.ts",
-    "changelog:discord:dedupe-key": "tsx scripts/printDiscordChangelogDedupeKey.ts"
+    "changelog:discord:dedupe-key": "tsx scripts/printDiscordChangelogDedupeKey.ts",
+    "test:crash-webhook": "tsx scripts/testCrashReportWebhook.ts"
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "^7.2.0",

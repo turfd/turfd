@@ -11,7 +11,7 @@ Stratite replaces the old diamond tier. Torches now have better performance cost
 - Sandbox creative picks show the same hover names as normal inventory.
 - Adjusted and increased the bits flying off blocks while you mine.
 - `/structure list` and shorthand names for `/structure place` (e.g. `dungeon`).
-- Workshop drops the extra wiki link, wiki to come at a later date.
+- Workshop: removed extra help link from the UI.
 - Zombie texture adjustment.
 
 Dungeon generator files may still be local-only; don't promise them in the notes unless they're in the build.

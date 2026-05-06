@@ -98,6 +98,8 @@ export interface INetworkAdapter {
     accountId: string | null,
     skinId?: string,
     localGuestUuid?: string | null,
+    nameColorHex?: string,
+    outlineColorHex?: string,
   ): void;
 
   /**

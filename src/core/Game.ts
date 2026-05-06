@@ -324,6 +324,10 @@ export type GameOptions = {
   localGuestUuid?: string | null;
   /** Selected player skin id (e.g. `"explorer_bob"` or `"custom:uuid"`). */
   skinId?: string;
+  /** Optional local nametag color (`#rrggbb`) for replication. */
+  nameColorHex?: string;
+  /** Optional local player outline color (`#rrggbb`) for replication. */
+  outlineColorHex?: string;
   /** Optional workshop cache + download; omitted when Supabase is not configured. */
   modRepository?: IModRepository | null;
   /**
@@ -380,10 +384,19 @@ export class Game {
   private readonly _accountId: string | null;
   private readonly _localGuestUuid: string | null;
   private _localSkinId: string | null = null;
+  private readonly _localNameColorHex: string;
+  private readonly _localOutlineColorHex: string;
   private readonly _moderation = new WorldModerationState();
   private readonly _sessionRoster = new Map<
     string,
-    { displayName: string; accountId: string; skinId: string; localGuestUuid: string }
+    {
+      displayName: string;
+      accountId: string;
+      skinId: string;
+      localGuestUuid: string;
+      nameColorHex: string;
+      outlineColorHex: string;
+    }
   >();
   private readonly _mutedPeerIds = new Set<string>();
   private readonly _opPeerIds = new Set<string>();
@@ -651,6 +664,8 @@ export class Game {
     this._localGuestUuid =
       lg !== undefined && lg !== "" ? lg : null;
     this._localSkinId = options.skinId ?? null;
+    this._localNameColorHex = options.nameColorHex?.trim() ?? "";
+    this._localOutlineColorHex = options.outlineColorHex?.trim() ?? "";
     this._modRepository = options.modRepository ?? null;
     this._sharedAudio = options.sharedAudio;
     this._preloadedBlockAtlas = options.preloadedBlockAtlas ?? null;
@@ -664,6 +679,8 @@ export class Game {
       this._accountId,
       this._localSkinId ?? undefined,
       this._localGuestUuid,
+      this._localNameColorHex,
+      this._localOutlineColorHex,
     );
     this._chunkSync = new ChunkSyncManager(this.adapter);
     this._playerStateBroadcaster = new PlayerStateBroadcaster(this.adapter, () => {
@@ -1249,6 +1266,7 @@ export class Game {
         return URL.createObjectURL(row.blob);
       },
     });
+    entityManager.setLocalPlayerOutlineColorHex(this._localOutlineColorHex);
     this.entityManager = entityManager;
     entityManager.getPlayer().setGameMode(this._worldGameMode);
     this._mobManager = new MobManager(world, lootResolver, this.bus);
@@ -1397,6 +1415,8 @@ export class Game {
         accountId: entry.accountId,
         skinId: entry.skinId,
         localGuestUuid: entry.localGuestUuid,
+        nameColorHex: entry.nameColorHex,
+        outlineColorHex: entry.outlineColorHex,
       } satisfies GameEvent);
     }
 
@@ -3090,6 +3110,8 @@ export class Game {
           accountId: e.accountId,
           skinId: e.skinId,
           localGuestUuid: e.localGuestUuid,
+          nameColorHex: e.nameColorHex?.trim() ?? "",
+          outlineColorHex: e.outlineColorHex?.trim() ?? "",
         });
 
         // Load remote peer's skin (built-in skins resolve immediately;
@@ -3098,6 +3120,17 @@ export class Game {
           const localId = this.adapter.getLocalPeerId();
           if (e.peerId !== localId) {
             void this.entityManager.loadRemoteSkinTextures(e.peerId, e.skinId);
+          }
+        }
+        if (this.entityManager !== null) {
+          const localId = this.adapter.getLocalPeerId();
+          if (e.peerId === localId) {
+            this.entityManager.setLocalPlayerOutlineColorHex(e.outlineColorHex ?? "");
+          } else {
+            this.entityManager.setRemotePlayerOutlineColorHex(
+              e.peerId,
+              e.outlineColorHex ?? "",
+            );
           }
         }
 
@@ -3560,6 +3593,8 @@ export class Game {
         accountId: this._accountId ?? "",
         skinId: this._localSkinId ?? "",
         localGuestUuid: this._localGuestUuid ?? "",
+        nameColorHex: this._localNameColorHex,
+        outlineColorHex: this._localOutlineColorHex,
       });
     }
     this.adapter.setClientAdmissionGate((peerId, displayName, accountId) => {
@@ -9131,6 +9166,7 @@ export class Game {
           x: s.position.x,
           y: s.position.y,
           displayName: this._displayName,
+          nameColorHex: this._localNameColorHex,
         },
         this.world.getRemotePlayers(),
         this._sessionRoster,

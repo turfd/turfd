@@ -67,6 +67,8 @@ export class PeerJSAdapter implements INetworkAdapter {
   private _handshakeAccountId = "";
   private _handshakeSkinId = "";
   private _handshakeLocalGuestUuid = "";
+  private _handshakeNameColorHex = "";
+  private _handshakeOutlineColorHex = "";
 
   private _clientAdmissionGate:
     | ((peerId: PeerId, displayName: string, accountId: string) => boolean)
@@ -81,12 +83,16 @@ export class PeerJSAdapter implements INetworkAdapter {
     accountId: string | null,
     skinId?: string,
     localGuestUuid?: string | null,
+    nameColorHex?: string,
+    outlineColorHex?: string,
   ): void {
     const d = displayName.trim();
     this._handshakeDisplayName = d !== "" ? d : "Player";
     this._handshakeAccountId = accountId?.trim() ?? "";
     this._handshakeSkinId = skinId?.trim() ?? "";
     this._handshakeLocalGuestUuid = localGuestUuid?.trim() ?? "";
+    this._handshakeNameColorHex = nameColorHex?.trim() ?? "";
+    this._handshakeOutlineColorHex = outlineColorHex?.trim() ?? "";
   }
 
   setClientAdmissionGate(
@@ -118,6 +124,8 @@ export class PeerJSAdapter implements INetworkAdapter {
       accountId: this._handshakeAccountId,
       skinId: this._handshakeSkinId,
       localGuestUuid: this._handshakeLocalGuestUuid,
+      nameColorHex: this._handshakeNameColorHex,
+      outlineColorHex: this._handshakeOutlineColorHex,
     });
   }
 
@@ -399,6 +407,8 @@ export class PeerJSAdapter implements INetworkAdapter {
           accountId: payload.accountId,
           skinId: payload.skinId,
           localGuestUuid: payload.localGuestUuid,
+          nameColorHex: payload.nameColorHex ?? "",
+          outlineColorHex: payload.outlineColorHex ?? "",
         });
         this._bus.emit({ type: "net:handshake-success", isHost: true });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });
@@ -484,6 +494,8 @@ export class PeerJSAdapter implements INetworkAdapter {
           accountId: hostPayload.accountId,
           skinId: hostPayload.skinId,
           localGuestUuid: hostPayload.localGuestUuid,
+          nameColorHex: hostPayload.nameColorHex ?? "",
+          outlineColorHex: hostPayload.outlineColorHex ?? "",
         });
         this._bus.emit({ type: "net:handshake-success", isHost: false });
         this._bus.emit({ type: "net:peer-joined", peerId: conn.peer });

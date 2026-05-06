@@ -3,7 +3,7 @@
  *
  * Layers (back to front):
  *  1. CSS canvas — sky gradient (+ sun)
- *  2. PixiJS — procedural cloud filter (under parallax), blurred parallax tile strip, lit terrain + composite
+ *  2. PixiJS — cloud strip, blurred parallax tile strip (no extra tonemap filter — avoids v8 FilterPipe/batcher races), lit terrain + composite
  *  3. DOM overlay (MainMenu)
  *
  * Zoom matches the game's adaptive formula (~20 blocks on the shorter viewport edge).
@@ -54,7 +54,6 @@ import {
   paintMenuSkyToFit,
 } from "./menuSkyPaint";
 import { SpriteCloudLayer } from "../../renderer/sky/SpriteCloudLayer";
-import { TonemapFilter } from "../../renderer/lighting/TonemapFilter";
 import { createApplicationWithGraphicsPreference } from "../settings/pixiGraphicsInit";
 import { getVideoPrefs } from "../settings/videoPrefs";
 
@@ -100,8 +99,6 @@ const PAN_SPEED_X       = 0.040;  // rad/s
 const PAN_RANGE_X_BLOCKS = 16;    // ±blocks
 const PAN_SPEED_Y       = 0.022;  // rad/s
 const PAN_RANGE_Y_PX    = 24;     // ±screen-pixels (vertical bob)
-const MENU_CLOUD_ATTACH_X = 0.035;
-const MENU_CLOUD_ATTACH_Y = 0.028;
 
 /** Intro: terrain + parallax start this far down-screen (fraction of viewport height) and ease up. */
 const MENU_INTRO_SLIDE_MS = 920;
@@ -304,7 +301,6 @@ export class MenuBackground {
   private skyCtx: CanvasRenderingContext2D | null = null;
 
   private parallaxStrip: ParallaxTileStripRenderer | null = null;
-  private parallaxTonemap: TonemapFilter | null = null;
   private spriteCloud: SpriteCloudLayer | null = null;
   private atlasLoader: AtlasLoader | null = null;
   private menuSeed = 0;
@@ -531,9 +527,7 @@ export class MenuBackground {
       atlas,
       chestBlockId,
     });
-    const parallaxTonemap = new TonemapFilter();
-    this.parallaxTonemap = parallaxTonemap;
-    parallaxStrip.displayRoot.filters = [parallaxTonemap.filter];
+    parallaxStrip.displayRoot.filters = [];
     this.parallaxStrip = parallaxStrip;
 
     const menuGenMap = new Map<string, Chunk>();
@@ -641,10 +635,6 @@ export class MenuBackground {
     this.slideRevealStartMs = revealStart;
     this.startTime = revealStart;
 
-    if (this.rafId === null) {
-      this.rafId = requestAnimationFrame((t) => this.animate(t));
-    }
-
     for (let cy = CY_START; cy <= CY_END; cy++) {
       for (let cx = 0; cx < CHUNKS_X; cx++) {
         if (this.destroyed) {
@@ -679,6 +669,10 @@ export class MenuBackground {
     performance.measure("menu-bg-heavy-init", "menu-bg:heavy-start", "menu-bg:heavy-finished");
     performance.mark("menu-bg:init-end");
     performance.measure("menu-bg-total-init", "menu-bg:init-start", "menu-bg:init-end");
+
+    if (!this.destroyed && this.rafId === null) {
+      this.rafId = requestAnimationFrame((t) => this.animate(t));
+    }
   }
 
   /**
@@ -822,21 +816,22 @@ export class MenuBackground {
       introDy;
     worldContainer.x = Math.round(worldX);
     worldContainer.y = Math.round(worldY);
+
+    const sw = Math.max(1, Math.round(app.renderer.width));
+    const sh = Math.max(1, Math.round(app.renderer.height));
+    const localCX = (sw / 2 - worldContainer.x) / this.zoom;
+
     if (this.spriteCloud !== null) {
-      const cloudDx = worldContainer.x - this.baseX;
-      const cloudDy = worldContainer.y - this.baseY;
-      this.spriteCloud.displayRoot.position.set(
-        Math.round(cloudDx * MENU_CLOUD_ATTACH_X),
-        Math.round(cloudDy * MENU_CLOUD_ATTACH_Y),
-      );
+      // Camera-relative parallax (same basis as ParallaxTileStripRenderer): clouds stay
+      // tied to the sky/backdrop, not the translated world container (1:1 screen delta
+      // made them stick to the terrain).
+      this.spriteCloud.displayRoot.x = Math.round(-localCX * BACKGROUND_PARALLAX_X);
+      this.spriteCloud.displayRoot.y = Math.round(parallaxDy);
     }
 
     // -- Sky (CSS canvas) ---------------------------------------------------
     this.paintSky(worldContainer.x, worldContainer.y);
 
-    const sw = Math.max(1, Math.round(app.renderer.width));
-    const sh = Math.max(1, Math.round(app.renderer.height));
-    const localCX = (sw / 2 - worldContainer.x) / this.zoom;
     const strip = this.parallaxStrip;
     if (strip !== null) {
       strip.updateParallax(localCX, BACKGROUND_PARALLAX_X);
@@ -846,7 +841,6 @@ export class MenuBackground {
     // -- Lighting uniforms --------------------------------------------------
     if (occlusion && indirect && composite && chunkMap) {
       const tm = tonemapperModeFromPrefs();
-      this.parallaxTonemap?.setTonemapper(tm);
       const localCY = (sh / 2 - worldContainer.y) / this.zoom;
       const centerChunkX = Math.floor(localCX / (BLOCK_SIZE * CHUNK_SIZE));
       const centerChunkY = Math.floor(-localCY / (BLOCK_SIZE * CHUNK_SIZE));
@@ -884,19 +878,41 @@ export class MenuBackground {
     }
 
     // -- Two-pass render ----------------------------------------------------
-    if (this.albedoRT && composite) {
-      // Opaque clear would leave alpha=1 everywhere; composite would hide the parallax strip.
-      app.renderer.render({
-        container: worldContainer,
-        target: this.albedoRT,
-        clear: true,
-        clearColor: "rgba(0,0,0,0)",
-      });
-      worldContainer.visible = false;
-      app.render();
-      worldContainer.visible = true;
-    } else {
-      app.render();
+    try {
+      if (this.albedoRT && composite) {
+        // Opaque clear would leave alpha=1 everywhere; composite would hide the parallax strip.
+        app.renderer.render({
+          container: worldContainer,
+          target: this.albedoRT,
+          clear: true,
+          clearColor: "rgba(0,0,0,0)",
+        });
+        // Avoid `visible = false` around the main pass: Pixi v8 batching can retain renderables
+        // and later throw (e.g. null `geometry`) when visibility toggles frame-to-frame.
+        const stage = app.stage;
+        const worldIdx = stage.getChildIndex(worldContainer);
+        let reattachAt = -1;
+        if (worldIdx >= 0) {
+          stage.removeChild(worldContainer);
+          reattachAt = worldIdx;
+        }
+        try {
+          app.render();
+        } finally {
+          if (reattachAt >= 0) {
+            stage.addChildAt(
+              worldContainer,
+              Math.min(reattachAt, stage.children.length),
+            );
+          }
+        }
+      } else {
+        app.render();
+      }
+    } catch (err) {
+      console.warn("[MenuBackground] Pixi render failed; stopping menu animation loop", err);
+      this.rafId = null;
+      return;
     }
 
     this.rafId = requestAnimationFrame((t) => this.animate(t));
@@ -958,8 +974,6 @@ export class MenuBackground {
     this.chunkMap      = null;
     this.parallaxStrip?.dispose();
     this.parallaxStrip = null;
-    this.parallaxTonemap?.destroy();
-    this.parallaxTonemap = null;
     this.spriteCloud?.destroy();
     this.spriteCloud = null;
     this.atlasLoader = null;

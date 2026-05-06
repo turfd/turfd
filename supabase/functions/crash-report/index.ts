@@ -62,6 +62,11 @@ type DiscordField = { name: string; value: string; inline?: boolean };
 
 const DISCORD_EMBED_TOTAL_MAX = 5800;
 const DISCORD_FIELD_VALUE_MAX = 1024;
+/** Leave headroom under Discord's 25-field cap (exactly 25 often returns 400 embeds[0]). */
+const DISCORD_MAX_EMBED_FIELDS = 24;
+const DISCORD_TITLE_MAX = 256;
+const DISCORD_DESCRIPTION_MAX = 4096;
+const MAX_STACK_FIELD_PARTS = 3;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -168,6 +173,24 @@ function shrinkEmbedToBudget(
   return { title: t, description: d, fields: fs };
 }
 
+function sanitizeDiscordField(f: DiscordField): DiscordField {
+  const nameRaw = f.name.trim();
+  const name = nameRaw.length > 0 ? trunc(nameRaw, 256) : "Field";
+  let value = f.value;
+  if (value.trim().length === 0) {
+    value = "—";
+  }
+  value = trunc(value, DISCORD_FIELD_VALUE_MAX);
+  return { name, value, inline: f.inline };
+}
+
+function clampEmbedFields(
+  fields: DiscordField[],
+  max: number,
+): { fields: DiscordField[]; omitted: number } {
+  if (fields.length <= max) {
+    return { fields, omitted: 0 };
+  }
 function splitStackFields(stack: string): DiscordField[] {
   const s = stack.trim();
   if (s === "") {
@@ -178,7 +201,7 @@ function splitStackFields(stack: string): DiscordField[] {
   const out: DiscordField[] = [];
   let i = 0;
   let part = 1;
-  while (i < s.length && out.length < 4) {
+  while (i < s.length && out.length < MAX_STACK_FIELD_PARTS) {
     const chunk = s.slice(i, i + maxInner);
     out.push({
       name: part === 1 ? "Stack" : `Stack (${part})`,
@@ -222,13 +245,20 @@ serve(async (req) => {
   const severity = resolveSeverity(payload);
   const crashWebhook = Deno.env.get("DISCORD_WEBHOOK_URL_CRASH")?.trim() ?? "";
   const errorWebhook = Deno.env.get("DISCORD_WEBHOOK_URL_ERROR")?.trim() ?? "";
-  const webhook = severity === "crash" ? crashWebhook : errorWebhook;
-  const missingEnv =
+  /** Prefer the URL for this severity; fall back to the other so one secret is enough. */
+  const webhook =
     severity === "crash"
-      ? "DISCORD_WEBHOOK_URL_CRASH"
-      : "DISCORD_WEBHOOK_URL_ERROR";
+      ? crashWebhook || errorWebhook
+      : errorWebhook || crashWebhook;
   if (webhook === "") {
-    return json({ ok: false, error: `Missing ${missingEnv} secret` }, 500);
+    return json(
+      {
+        ok: false,
+        error:
+          "Missing Discord webhook: set DISCORD_WEBHOOK_URL_CRASH and/or DISCORD_WEBHOOK_URL_ERROR",
+      },
+      500,
+    );
   }
 
   const source = trunc(asString(payload.source) || "unknown", 60);
@@ -359,16 +389,24 @@ serve(async (req) => {
   const fields: DiscordField[] = [
     { name: "Severity", value: severity, inline: true },
     {
-      name: isCrash ? "Crash ID" : "Report ID",
-      value: crashId || "unknown",
+      name: "Session / report",
+      value: trunc(
+        `${isCrash ? "Crash" : "Report"} ID: ${crashId || "unknown"}\nSession: ${sessionId || "unknown"}`,
+        DISCORD_FIELD_VALUE_MAX,
+      ),
       inline: false,
     },
-    { name: "Session ID", value: sessionId || "unknown", inline: false },
     { name: "Source", value: source || "unknown", inline: true },
     { name: "Time", value: timestampIso || "unknown", inline: true },
     { name: "Role", value: role || "unknown", inline: true },
-    { name: "World", value: worldName || "unknown", inline: true },
-    { name: "World UUID", value: worldUuid || "n/a", inline: true },
+    {
+      name: "World",
+      value: trunc(
+        `${worldName || "unknown"}\nUUID: ${worldUuid || "n/a"}`,
+        DISCORD_FIELD_VALUE_MAX,
+      ),
+      inline: false,
+    },
     { name: "Last command", value: lastCommand || "n/a", inline: false },
     { name: "Last UI error", value: lastUiError || "n/a", inline: false },
     {
@@ -419,13 +457,23 @@ serve(async (req) => {
   ];
 
   const shrunk = shrinkEmbedToBudget(title, description, fields, DISCORD_EMBED_TOTAL_MAX);
-  title = shrunk.title;
-  description = shrunk.description;
-  const finalFields = shrunk.fields.map((f) => ({
-    ...f,
-    name: trunc(f.name, 240),
-    value: trunc(f.value, DISCORD_FIELD_VALUE_MAX),
-  }));
+  title = trunc(shrunk.title, DISCORD_TITLE_MAX);
+  description = trunc(shrunk.description, DISCORD_DESCRIPTION_MAX);
+  const normalized = shrunk.fields.map((f) =>
+    sanitizeDiscordField({
+      ...f,
+      name: trunc(f.name, 240),
+      value: trunc(f.value, DISCORD_FIELD_VALUE_MAX),
+    }),
+  );
+  const { fields: finalFields, omitted } = clampEmbedFields(
+    normalized,
+    DISCORD_MAX_EMBED_FIELDS,
+  );
+  if (omitted > 0) {
+    const note = `\n\n_(Discord: ${omitted} embed field(s) truncated — stack shown first.)_`;
+    description = trunc(description + note, DISCORD_DESCRIPTION_MAX);
+  }
 
   const discordBody = {
     username: isCrash ? "Stratum Crash Reporter" : "Stratum Error Reporter",

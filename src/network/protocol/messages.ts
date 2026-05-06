@@ -117,6 +117,10 @@ export interface HandshakeMessage {
   skinId: string;
   /** Persisted local anonymous UUID when unsigned; empty when signed in. */
   localGuestUuid: string;
+  /** Optional replicated player nametag color (`#rrggbb`). */
+  nameColorHex?: string;
+  /** Optional replicated player outline glow color (`#rrggbb`). */
+  outlineColorHex?: string;
 }
 
 export type ChunkDataMsg = {
@@ -766,6 +770,8 @@ export function encode(msg: NetworkMessage): ArrayBuffer {
         accountId: msg.accountId,
         skinId: msg.skinId,
         localGuestUuid: msg.localGuestUuid,
+        nameColorHex: msg.nameColorHex ?? "",
+        outlineColorHex: msg.outlineColorHex ?? "",
       });
 
     case MessageType.CHUNK_DATA: {
@@ -1402,6 +1408,8 @@ export function decode(buf: ArrayBuffer): NetworkMessage {
         accountId: p.accountId,
         skinId: p.skinId,
         localGuestUuid: p.localGuestUuid,
+        nameColorHex: p.nameColorHex,
+        outlineColorHex: p.outlineColorHex,
       };
     }
 

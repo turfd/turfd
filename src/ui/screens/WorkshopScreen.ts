@@ -119,13 +119,14 @@ function discoverCorePackPaths(globMap: Record<string, unknown>): string[] {
 
 function formatWorkshopDownloadCount(n: number): string {
   if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 2)}M`;
+    const m = n / 1_000_000;
+    return Number.isInteger(m) ? `${m}m` : `${m.toFixed(1).replace(/\.0$/, "")}m`;
   }
   if (n >= 10_000) {
-    return `${(n / 1_000).toFixed(1)}K`;
+    return `${Math.round(n / 1_000)}k`;
   }
   if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(2)}K`;
+    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
   return String(n);
 }
@@ -152,17 +153,6 @@ function formatWorkshopRelativeTime(iso: string): string {
     return `${Math.floor(sec / 604800)}w ago`;
   }
   return `${Math.floor(sec / 2_628_000)}mo ago`;
-}
-
-function formatWorkshopListMetaLine(m: ModListEntry): string {
-  const rc = m.ratingCount;
-  const rating =
-    rc > 0
-      ? `★ ${m.avgRating.toFixed(1)} (${rc})`
-      : `★ ${m.avgRating.toFixed(1)}`;
-  const downloads = `${formatWorkshopDownloadCount(m.downloadCount)} downloads`;
-  const when = formatWorkshopRelativeTime(m.createdAt);
-  return when.length > 0 ? `${rating} · ${downloads} · ${when}` : `${rating} · ${downloads}`;
 }
 
 function truncateLibraryDescription(raw: string, maxLen: number): string {
@@ -200,6 +190,19 @@ function workshopModTypeBadgeLabel(modType: WorkshopModTypeRow): string {
     return "World";
   }
   return modType;
+}
+
+function createWorkshopStatIcon(
+  iconClass: string,
+  text: string,
+): HTMLElement {
+  const wrap = el("span", "mm-workshop-stat-inline");
+  const ic = el("i", iconClass);
+  ic.setAttribute("aria-hidden", "true");
+  const tx = el("span", "mm-workshop-stat-text");
+  tx.textContent = text;
+  wrap.append(ic, tx);
+  return wrap;
 }
 
 export class WorkshopScreen {
@@ -251,6 +254,8 @@ export class WorkshopScreen {
   private readonly installingModIds = new Set<string>();
 
   private readonly uninstallingModIds = new Set<string>();
+  private readonly justInstalledModIds = new Set<string>();
+  private readonly downloadBoostByModId = new Map<string, number>();
 
   private actionFeedbackTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
@@ -270,6 +275,28 @@ export class WorkshopScreen {
 
   constructor(deps: WorkshopScreenDeps) {
     this.deps = deps;
+  }
+
+  private effectiveDownloadCount(modId: string, baseCount: number): number {
+    return baseCount + (this.downloadBoostByModId.get(modId) ?? 0);
+  }
+
+  private bumpDownloadCountUi(modId: string): void {
+    this.downloadBoostByModId.set(modId, (this.downloadBoostByModId.get(modId) ?? 0) + 1);
+    this.lastList = this.lastList.map((r) =>
+      r.modId === modId
+        ? { ...r, downloadCount: this.effectiveDownloadCount(modId, r.downloadCount) }
+        : r,
+    );
+    const dl = this.root?.querySelector<HTMLElement>("[data-role='workshop-detail-downloads']");
+    if (dl !== null && dl !== undefined && this.detailModId === modId) {
+      const current = parseInt(dl.dataset.downloadCount ?? "0", 10);
+      const next = Number.isFinite(current) ? current + 1 : 1;
+      dl.dataset.downloadCount = String(next);
+      dl.replaceChildren(
+        createWorkshopStatIcon("fa-solid fa-download", formatWorkshopDownloadCount(next)),
+      );
+    }
   }
 
   private subnavKey(): "explore" | "owned" | "upload" | "library" | "templates" {
@@ -448,7 +475,6 @@ export class WorkshopScreen {
     const busy = el("span", "mm-workshop-btn-content mm-workshop-btn-content--busy");
     busy.hidden = true;
     busy.appendChild(el("div", "mm-workshop-spinner mm-workshop-spinner--btn"));
-    busy.appendChild(document.createTextNode(" Installing…"));
     btn.appendChild(idle);
     btn.appendChild(busy);
   }
@@ -473,7 +499,8 @@ export class WorkshopScreen {
     if (root === null) {
       return;
     }
-    const installed = this.deps.isInstalled(modId);
+    const installed =
+      this.deps.isInstalled(modId) || this.justInstalledModIds.has(modId);
     const installing = this.installingModIds.has(modId);
     const uninstalling = this.uninstallingModIds.has(modId);
 
@@ -493,6 +520,7 @@ export class WorkshopScreen {
         if (installing) {
           btn.disabled = true;
           btn.classList.add("mm-workshop-btn--working");
+          btn.classList.remove("mm-workshop-btn--installed");
           btn.setAttribute("aria-busy", "true");
           if (idle !== null) {
             idle.hidden = true;
@@ -512,19 +540,22 @@ export class WorkshopScreen {
           if (isUpdate) {
             btn.disabled = false;
             btn.classList.add("mm-btn-subtle");
+            btn.classList.remove("mm-workshop-btn--installed");
             if (idleLabel !== null) {
               idleLabel.textContent =
                 customIdle !== undefined && customIdle.length > 0 ? customIdle : "Update";
             }
           } else if (installed) {
             btn.disabled = true;
-            btn.classList.add("mm-btn-subtle");
+            btn.classList.remove("mm-btn-subtle");
+            btn.classList.add("mm-workshop-btn--installed");
             if (idleLabel !== null) {
               idleLabel.textContent = "Installed";
             }
           } else {
             btn.disabled = false;
             btn.classList.remove("mm-btn-subtle");
+            btn.classList.remove("mm-workshop-btn--installed");
             if (idleLabel !== null) {
               idleLabel.textContent = "Install";
             }
@@ -672,10 +703,9 @@ export class WorkshopScreen {
     this.unsubs.push(
       b.on("mod:install-complete", (e) => {
         this.installingModIds.delete(e.modId);
+        this.justInstalledModIds.add(e.modId);
+        this.bumpDownloadCountUi(e.modId);
         this.syncWorkshopModUi(e.modId);
-        if (this.subView === "explore" || this.subView === "detail") {
-          this.requestList(this.listOffset);
-        }
         if (this.subView === "library") {
           this.renderLibrary();
         }
@@ -697,6 +727,7 @@ export class WorkshopScreen {
     this.unsubs.push(
       b.on("mod:uninstalled", (e) => {
         this.uninstallingModIds.delete(e.modId);
+        this.justInstalledModIds.delete(e.modId);
         this.syncWorkshopModUi(e.modId);
         if (this.subView === "library") {
           this.renderLibrary();
@@ -715,6 +746,12 @@ export class WorkshopScreen {
         ) {
           return;
         }
+        if (wrap.querySelector('[data-mm-workshop-detail-skeleton="1"]') !== null) {
+          this.detailRecordId = null;
+          this.subView = "explore";
+          this.renderExploreChrome();
+          this.requestList(this.listOffset);
+        }
         if (wrap.querySelector(".mm-workshop-err") === null) {
           const p = el("p", "mm-workshop-err");
           p.textContent = e.message;
@@ -724,8 +761,211 @@ export class WorkshopScreen {
     );
   }
 
+  private showExploreListSkeleton(): void {
+    const wrap = this.exploreWrap;
+    if (wrap === null) {
+      return;
+    }
+    const host = wrap.querySelector(".mm-workshop-grid-host");
+    if (host === null) {
+      return;
+    }
+    const statusEl = wrap.querySelector(".mm-workshop-list-status") as HTMLElement | null;
+    if (statusEl !== null) {
+      statusEl.textContent = "Loading…";
+      statusEl.hidden = false;
+    }
+    host.replaceChildren();
+    const grid = el("div", "mm-workshop-tile-grid");
+    for (let i = 0; i < 9; i++) {
+      grid.appendChild(this.workshopTileSkeleton());
+    }
+    host.appendChild(grid);
+    const pager = el("div", "mm-workshop-pager");
+    const prev = el("div", "mm-skel");
+    prev.style.width = "min(7rem, 42%)";
+    prev.style.height = "44px";
+    prev.style.flexShrink = "0";
+    const mid = el("div", "mm-skel mm-skel-pill");
+    mid.style.width = "5rem";
+    mid.style.height = "14px";
+    mid.style.flex = "1";
+    const next = el("div", "mm-skel");
+    next.style.width = "min(7rem, 42%)";
+    next.style.height = "44px";
+    next.style.flexShrink = "0";
+    pager.style.pointerEvents = "none";
+    pager.append(prev, mid, next);
+    host.appendChild(pager);
+  }
+
+  private workshopTileSkeleton(): HTMLElement {
+    const card = el("article", "mm-workshop-tile mm-workshop-tile--skel");
+    card.tabIndex = -1;
+    card.setAttribute("aria-hidden", "true");
+
+    const media = el("div", "mm-workshop-tile-media");
+    const ph = el("div", "mm-skel mm-workshop-detail-skel-hero-img");
+    ph.style.display = "block";
+    media.appendChild(ph);
+
+    const body = el("div", "mm-workshop-tile-body");
+    const ln1 = el("div", "mm-skel mm-skel-inline");
+    ln1.style.width = "90%";
+    ln1.style.height = "17px";
+    const ln2 = el("div", "mm-skel mm-skel-inline");
+    ln2.style.width = "58%";
+    ln2.style.height = "14px";
+    ln2.style.marginTop = "4px";
+
+    const metaRow = el("div", "mm-workshop-tile-meta");
+    const bd = el("div", "mm-skel mm-skel-inline mm-skel-pill");
+    bd.style.width = "4.75rem";
+    bd.style.height = "22px";
+    const ln3 = el("div", "mm-skel mm-skel-inline");
+    ln3.style.flex = "1";
+    ln3.style.minWidth = "0";
+    ln3.style.height = "13px";
+    metaRow.append(bd, ln3);
+
+    const actions = el("div", "mm-workshop-tile-actions");
+    const btn = el("div", "mm-skel");
+    btn.style.width = "100%";
+    btn.style.height = "42px";
+
+    actions.appendChild(btn);
+    body.appendChild(ln1);
+    body.appendChild(ln2);
+    body.appendChild(metaRow);
+    body.appendChild(actions);
+    card.appendChild(media);
+    card.appendChild(body);
+    return card;
+  }
+
+  private beginPackDetailNavigation(recordId: string): void {
+    this.detailRecordId = recordId;
+    this.renderDetailSkeletonPage();
+    this.deps.bus.emit({
+      type: "workshop:open-detail",
+      recordId,
+    } satisfies GameEvent);
+  }
+
+  /** Full-height placeholder while manifest + comments load. */
+  private renderDetailSkeletonPage(): void {
+    const wrap = this.exploreWrap;
+    if (wrap === null) {
+      return;
+    }
+    this.detailModId = null;
+    this.clearWorkshopActionFeedback();
+    this.setModDetailChrome(true);
+    wrap.replaceChildren();
+
+    const page = el("div", "mm-workshop-detail-page");
+    page.setAttribute("data-mm-workshop-detail-skeleton", "1");
+
+    const toolbar = el("div", "mm-workshop-detail-toolbar");
+    const back = el("button", "mm-btn mm-btn-subtle mm-workshop-detail-back") as HTMLButtonElement;
+    back.type = "button";
+    back.textContent = "Back to list";
+    back.addEventListener("click", () => {
+      this.detailRecordId = null;
+      this.subView = "explore";
+      this.renderExploreChrome();
+      this.requestList(this.listOffset);
+    });
+    const toolCtx = el("span", "mm-workshop-detail-toolbar-context");
+    toolCtx.textContent = "Loading pack…";
+
+    toolbar.append(back, toolCtx);
+    page.appendChild(toolbar);
+
+    const hero = el("section", "mm-workshop-detail-hero");
+    const heroCover = el("div", "mm-workshop-detail-hero-cover");
+    const covSk = el("div", "mm-skel mm-workshop-detail-skel-hero-img");
+    covSk.style.display = "block";
+    heroCover.appendChild(covSk);
+
+    const heroInfo = el("div", "mm-workshop-detail-hero-info");
+    const t1 = el("div", "mm-skel");
+    t1.style.width = "min(440px, 100%)";
+    t1.style.height = "26px";
+    const t2 = el("div", "mm-skel mm-skel-pill");
+    t2.style.width = "72%";
+    t2.style.height = "17px";
+
+    const meta = el("div", "mm-workshop-detail-hero-meta");
+    for (let i = 0; i < 3; i++) {
+      const px = el("div", "mm-skel mm-skel-inline mm-skel-pill");
+      px.style.width = `${108 + i * 12}px`;
+      px.style.height = "16px";
+      meta.appendChild(px);
+    }
+
+    heroInfo.append(t1, t2, meta);
+    hero.append(heroCover, heroInfo);
+    page.appendChild(hero);
+
+    const columns = el("div", "mm-workshop-detail-columns");
+
+    const mainCol = el("div", "mm-workshop-detail-main");
+    const aboutCard = el("section", "mm-workshop-detail-about-card");
+    const aboutTitleSk = el("div", "mm-skel mm-skel-inline");
+    aboutTitleSk.style.width = "6rem";
+    aboutTitleSk.style.height = "15px";
+    aboutTitleSk.style.marginBottom = "12px";
+
+    const descLn: HTMLElement[] = [];
+    for (let i = 0; i < 5; i++) {
+      const d = el("div", "mm-skel mm-skel-inline");
+      d.style.width = i === 4 ? "62%" : "100%";
+      d.style.height = "13px";
+      descLn.push(d);
+    }
+    aboutCard.append(aboutTitleSk, ...descLn);
+
+    const comSection = el("section", "mm-workshop-detail-comments-section");
+    const comHead = el("div", "mm-skel mm-skel-inline");
+    comHead.style.width = "8rem";
+    comHead.style.height = "14px";
+
+    const comLn1 = el("div", "mm-skel mm-skel-inline");
+    comLn1.style.width = "88%";
+    comLn1.style.height = "15px";
+
+    const comLn2 = el("div", "mm-skel mm-skel-inline");
+    comLn2.style.width = "76%";
+    comLn2.style.height = "15px";
+
+    comSection.append(comHead, comLn1, comLn2);
+    mainCol.append(aboutCard, comSection);
+
+    const side = el("aside", "mm-workshop-detail-side");
+    const sideCard = el("div", "mm-workshop-detail-side-card");
+    for (let i = 0; i < 3; i++) {
+      const b = el("div", "mm-skel mm-skel-inline");
+      b.style.width = "100%";
+      b.style.height = "46px";
+      sideCard.appendChild(b);
+    }
+    side.appendChild(sideCard);
+
+    columns.append(mainCol, side);
+    page.appendChild(columns);
+    wrap.appendChild(page);
+  }
+
   private requestList(offset: number): void {
     this.listOffset = offset;
+    if (
+      this.subView === "explore" &&
+      this.detailRecordId === null &&
+      this.exploreWrap !== null
+    ) {
+      this.showExploreListSkeleton();
+    }
     this.deps.bus.emit({
       type: "workshop:request-list",
       offset,
@@ -921,8 +1161,7 @@ export class WorkshopScreen {
     card.setAttribute("aria-label", `${m.name} by ${m.authorName}`);
 
     const openDetail = (): void => {
-      this.detailRecordId = m.id;
-      this.deps.bus.emit({ type: "workshop:open-detail", recordId: m.id } satisfies GameEvent);
+      this.beginPackDetailNavigation(m.id);
     };
     card.addEventListener("click", (ev) => {
       if ((ev.target as HTMLElement).closest("button")) {
@@ -945,6 +1184,14 @@ export class WorkshopScreen {
       img.src = this.deps.getModPublicUrl(m.coverPath);
     }
     media.appendChild(img);
+    const badge = el("span", `mm-workshop-badge mm-workshop-badge-${m.modType} mm-workshop-tile-badge`);
+    badge.textContent =
+      m.modType === "behavior_pack"
+        ? "Behavior"
+        : m.modType === "resource_pack"
+          ? "Resource"
+          : m.modType;
+    media.appendChild(badge);
     card.appendChild(media);
 
     const body = el("div", "mm-workshop-tile-body");
@@ -952,22 +1199,35 @@ export class WorkshopScreen {
     title.textContent = m.name;
     body.appendChild(title);
 
+    const authorRow = el("div", "mm-workshop-tile-author-row");
     const author = el("p", "mm-workshop-tile-author");
     author.textContent = m.authorName.length > 0 ? `by ${m.authorName}` : "by unknown";
-    body.appendChild(author);
+    authorRow.appendChild(author);
+    const when = formatWorkshopRelativeTime(m.createdAt);
+    if (when.length > 0) {
+      const whenMeta = el("span", "mm-workshop-tile-posted-at");
+      whenMeta.textContent = when;
+      authorRow.appendChild(whenMeta);
+    }
+    body.appendChild(authorRow);
 
     const metaRow = el("div", "mm-workshop-tile-meta");
-    const badge = el("span", `mm-workshop-badge mm-workshop-badge-${m.modType}`);
-    badge.textContent =
-      m.modType === "behavior_pack"
-        ? "Behavior"
-        : m.modType === "resource_pack"
-          ? "Resource"
-          : m.modType;
-    metaRow.appendChild(badge);
-    const meta = el("span", "mm-workshop-tile-meta-line");
-    meta.textContent = formatWorkshopListMetaLine(m);
-    metaRow.appendChild(meta);
+    const ratingMeta = el("span", "mm-workshop-tile-meta-line");
+    ratingMeta.appendChild(
+      createWorkshopStatIcon(
+        "fa-solid fa-star mm-workshop-stat-icon-rating",
+        `${m.avgRating.toFixed(1)} (${m.ratingCount})`,
+      ),
+    );
+    metaRow.appendChild(ratingMeta);
+    const dlMeta = el("span", "mm-workshop-tile-meta-line");
+    dlMeta.appendChild(
+      createWorkshopStatIcon(
+        "fa-solid fa-download",
+        formatWorkshopDownloadCount(this.effectiveDownloadCount(m.modId, m.downloadCount)),
+      ),
+    );
+    metaRow.appendChild(dlMeta);
     body.appendChild(metaRow);
 
     const actions = el("div", "mm-workshop-tile-actions");
@@ -1055,13 +1315,24 @@ export class WorkshopScreen {
     meta.appendChild(typeBadge);
     const rcBanner = m.ratingCount;
     const rateSummary = el("span", "mm-workshop-detail-hero-stat");
-    rateSummary.textContent =
-      rcBanner > 0
-        ? `★ ${m.avgRating.toFixed(1)} · ${rcBanner} rating${rcBanner === 1 ? "" : "s"}`
-        : "No ratings yet";
+    rateSummary.appendChild(
+      createWorkshopStatIcon(
+        "fa-solid fa-star mm-workshop-stat-icon-rating",
+        rcBanner > 0
+          ? `${m.avgRating.toFixed(1)} (${rcBanner})`
+          : `${m.avgRating.toFixed(1)}`,
+      ),
+    );
     meta.appendChild(rateSummary);
     const dlSummary = el("span", "mm-workshop-detail-hero-stat");
-    dlSummary.textContent = `${formatWorkshopDownloadCount(m.downloadCount)} downloads`;
+    dlSummary.dataset.role = "workshop-detail-downloads";
+    dlSummary.dataset.downloadCount = String(this.effectiveDownloadCount(m.modId, m.downloadCount));
+    dlSummary.appendChild(
+      createWorkshopStatIcon(
+        "fa-solid fa-download",
+        formatWorkshopDownloadCount(this.effectiveDownloadCount(m.modId, m.downloadCount)),
+      ),
+    );
     meta.appendChild(dlSummary);
     const whenRel = formatWorkshopRelativeTime(m.createdAt);
     if (whenRel.length > 0) {
@@ -1199,7 +1470,10 @@ export class WorkshopScreen {
     };
     addMetaRow("Version", `v${m.version}`);
     addMetaRow("Size", formatWorkshopFileSize(m.fileSize));
-    addMetaRow("Downloads", formatWorkshopDownloadCount(m.downloadCount));
+    addMetaRow(
+      "Downloads",
+      formatWorkshopDownloadCount(this.effectiveDownloadCount(m.modId, m.downloadCount)),
+    );
     const whenMeta = formatWorkshopRelativeTime(m.createdAt);
     if (whenMeta.length > 0) {
       addMetaRow("Updated", whenMeta);
@@ -1211,21 +1485,41 @@ export class WorkshopScreen {
     const rateLabel = el("span", "mm-workshop-detail-rate-label");
     rateLabel.textContent = "Your rating";
     const rateRow = el("div", "mm-workshop-stars");
+    const starButtons: HTMLButtonElement[] = [];
+    let selectedStars = 0;
+    const paintStarButtons = (): void => {
+      for (let i = 0; i < starButtons.length; i++) {
+        const btn = starButtons[i];
+        if (btn === undefined) continue;
+        const icon = btn.querySelector("i");
+        if (icon === null) continue;
+        const on = i < selectedStars;
+        icon.className = on
+          ? "fa-solid fa-star"
+          : "fa-regular fa-star";
+      }
+    };
     for (let s = 1; s <= 5; s++) {
       const star = el("button", "mm-workshop-star") as HTMLButtonElement;
       star.type = "button";
-      star.textContent = "★";
       star.disabled = uid === null;
       star.title = uid === null ? "Sign in to rate" : `Rate ${s}`;
+      const icon = el("i", "fa-regular fa-star");
+      icon.setAttribute("aria-hidden", "true");
+      star.appendChild(icon);
       star.addEventListener("click", () => {
+        selectedStars = s;
+        paintStarButtons();
         this.deps.bus.emit({
           type: "workshop:post-rating",
           recordId: m.id,
           stars: s,
         } satisfies GameEvent);
       });
+      starButtons.push(star);
       rateRow.appendChild(star);
     }
+    paintStarButtons();
     rateBlock.appendChild(rateLabel);
     rateBlock.appendChild(rateRow);
     sideCard.appendChild(rateBlock);
@@ -1281,10 +1575,7 @@ export class WorkshopScreen {
     row.setAttribute("aria-label", `Workshop details: ${displayName}`);
 
     const openDetail = (): void => {
-      this.deps.bus.emit({
-        type: "workshop:open-detail",
-        recordId: c.recordId,
-      } satisfies GameEvent);
+      this.beginPackDetailNavigation(c.recordId);
     };
     row.addEventListener("click", (ev) => {
       if ((ev.target as HTMLElement).closest("button")) {
@@ -1482,12 +1773,38 @@ export class WorkshopScreen {
     this.clearWorkshopActionFeedback();
     this.setModDetailChrome(false);
     wrap.replaceChildren();
-    const row = el("div", "mm-workshop-loading");
-    row.appendChild(el("div", "mm-workshop-spinner"));
-    const t = el("span");
-    t.textContent = "Loading…";
-    row.appendChild(t);
-    wrap.appendChild(row);
+    const tbl = el("div", "mm-workshop-owned");
+    for (let i = 0; i < 6; i++) {
+      const row = el("div", "mm-workshop-owned-row mm-workshop-owned-row--skel");
+      row.setAttribute("aria-hidden", "true");
+
+      const label = el("div", "mm-workshop-owned-label");
+      const skLb = el("span", "mm-skel mm-skel-inline");
+      skLb.style.display = "block";
+      skLb.style.width = "min(300px, 72%)";
+      skLb.style.height = "17px";
+
+      const skSub = el("span", "mm-skel mm-skel-inline");
+      skSub.style.display = "block";
+      skSub.style.width = "min(240px, 55%)";
+      skSub.style.height = "13px";
+      skSub.style.marginTop = "6px";
+
+      label.append(skLb, skSub);
+
+      const ownedAside = el("div", "mm-workshop-owned-aside");
+      const a = el("div", "mm-skel mm-skel-inline");
+      a.style.width = "5.75rem";
+      a.style.height = "40px";
+      const d = el("div", "mm-skel mm-skel-inline");
+      d.style.width = "5.25rem";
+      d.style.height = "40px";
+      ownedAside.append(a, d);
+
+      row.append(label, ownedAside);
+      tbl.appendChild(row);
+    }
+    wrap.appendChild(tbl);
     this.updateSubnavHighlight();
   }
 

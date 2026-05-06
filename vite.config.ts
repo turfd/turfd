@@ -94,6 +94,22 @@ export default defineConfig(({ mode }) => {
   },
   plugins: [...devPlugins, modPackJsoncPlugin(), emitBuildJsonPlugin()],
   base: "/stratum/",
+  // Console spam guard: keep source maps off so browsers/extensions don't try to
+  // fetch original `.ts` sources in runtime environments that don't serve them.
+  esbuild: {
+    sourcemap: false,
+  },
+  css: {
+    devSourcemap: false,
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      sourcemap: false,
+    },
+  },
+  build: {
+    sourcemap: false,
+  },
   // Same origin every dev session so IndexedDB ("stratum" worlds) stays on one database.
   // If 5173 is in use, fail fast instead of binding 5174+ (different origin = empty saves).
   server: {

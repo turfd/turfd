@@ -94,6 +94,23 @@ function toErrorLike(value: unknown): { name: string; message: string; stack: st
   }
 }
 
+/**
+ * Browser noise that should not trigger crash reports (still may appear as `window` "error").
+ * Chromium may fire "ResizeObserver loop completed with undelivered notifications" during layout;
+ * it is not an application bug.
+ */
+export function isBenignWindowError(reason: unknown): boolean {
+  const { name, message } = toErrorLike(reason);
+  const combined = `${name}\n${message}`.toLowerCase();
+  if (combined.includes("resizeobserver loop completed with undelivered notifications")) {
+    return true;
+  }
+  if (combined.includes("resizeobserver loop limit exceeded")) {
+    return true;
+  }
+  return false;
+}
+
 function truncate(s: string, max: number): string {
   if (s.length <= max) {
     return s;
@@ -311,6 +328,12 @@ export class CrashReporter {
   }
 
   async report(source: CrashSource, reason: unknown): Promise<void> {
+    if (
+      (source === "error" || source === "unhandledrejection") &&
+      isBenignWindowError(reason)
+    ) {
+      return;
+    }
     const err = toErrorLike(reason);
     const crashId = createId("crash");
     const signature = `${source}|${err.name}|${err.message}|${err.stack.slice(0, 240)}`;

@@ -13,7 +13,11 @@ import {
   type MultiplayerHostFromMenuSpec,
   type PlayerSavedState,
 } from "./core/Game";
-import { CrashReporter, type ModCrashSummary } from "./core/crash/CrashReporter";
+import {
+  CrashReporter,
+  isBenignWindowError,
+  type ModCrashSummary,
+} from "./core/crash/CrashReporter";
 import type { GameEvent, WorldGameMode, WorldGenType } from "./core/types";
 import { normalizeWorldGameMode, normalizeWorldGenType } from "./core/types";
 import { AudioEngine } from "./audio/AudioEngine";
@@ -45,6 +49,7 @@ import {
 } from "./versionInfo";
 import "@fortawesome/fontawesome-free/css/fontawesome.min.css";
 import "@fortawesome/fontawesome-free/css/solid.min.css";
+import "@fortawesome/fontawesome-free/css/regular.min.css";
 import "./styles/global.css";
 
 /** Minimum time the loading overlay stays up (ms), so the bar and tips feel intentional. */
@@ -476,7 +481,10 @@ async function main(): Promise<void> {
     }
   }
   installStaleClientGuard();
-  mountStartupBootOverlay();
+  const shouldPlayStartupIntro = !getSkipIntro();
+  if (shouldPlayStartupIntro) {
+    mountStartupBootOverlay();
+  }
 
   // ---------------------------------------------------------------------------
   // Entry routes (no router dependency; use BASE_URL-aware pathname parsing)
@@ -700,9 +708,16 @@ async function main(): Promise<void> {
     },
   });
   window.addEventListener("error", (e) => {
-    void crashReporter.report("error", e.error ?? e.message);
+    const reason = e.error ?? e.message;
+    if (isBenignWindowError(reason)) {
+      return;
+    }
+    void crashReporter.report("error", reason);
   });
   window.addEventListener("unhandledrejection", (e) => {
+    if (isBenignWindowError(e.reason)) {
+      return;
+    }
     void crashReporter.report("unhandledrejection", e.reason);
   });
   const signalRelay = createSupabaseSignalRelay(auth);
@@ -755,10 +770,7 @@ async function main(): Promise<void> {
     true,
   );
 
-  let playStartupIntro = !getSkipIntro();
-  if (!playStartupIntro) {
-    document.getElementById("stratum-startup-boot")?.remove();
-  }
+  let playStartupIntro = shouldPlayStartupIntro;
   while (true) {
     performance.mark("menu-cycle:start");
     mount.classList.remove("stratum-game-loading");
@@ -895,6 +907,8 @@ async function main(): Promise<void> {
       const session = auth.getSession();
       const playerSettings = await store.loadPlayerSettings();
       let skinId = playerSettings.selectedSkinId;
+      const nameColorHex = playerSettings.nameColorHex;
+      const outlineColorHex = playerSettings.outlineColorHex;
       if (
         session === null &&
         typeof skinId === "string" &&
@@ -920,6 +934,8 @@ async function main(): Promise<void> {
         localGuestUuid:
           session === null ? getOrCreateLocalGuestIdentity().uuid : null,
         skinId,
+        nameColorHex,
+        outlineColorHex,
         modRepository,
         sharedAudio,
         preloadedBlockAtlas: loadingBackdrop?.getBlockAtlasLoader() ?? null,

@@ -2231,31 +2231,10 @@ export class MobManager {
           worldTimeSec,
         );
         this.absorbDroppedItemsForSlime(m);
-        if (slimeTarget !== null) {
-          const { w: slimeW, h: slimeH } = mobHitboxSizePx("slime");
-          const sHalfW = slimeW * 0.5;
-          const sTop = m.y - slimeH;
-          const sBot = m.y;
-          const pTop = slimeTarget.y - slimeTarget.height;
-          const pBot = slimeTarget.y;
-          const verticalOverlap = sTop < pBot && sBot > pTop;
-          if (verticalOverlap) {
-            const dx = m.x - slimeTarget.x;
-            const overlapX = slimeTarget.halfW + sHalfW - Math.abs(dx);
-            if (overlapX > 0) {
-              const pushDir = dx >= 0 ? 1 : -1;
-              m.x += pushDir * (overlapX + 0.001);
-              m.vx = 0;
-              m.targetVx = 0;
-              // Hop arc lives in `slimeAirHorizVx`; clearing only `vx` leaves full charge speed.
-              m.slimeAirHorizVx = 0;
-              m.slimeJumpPriming = false;
-              m.slimeJumpPrimeElapsedSec = 0;
-            }
-          }
-        }
         m.attackCooldownRemainSec = Math.max(0, m.attackCooldownRemainSec - dt);
         m.attackSwingRemainSec = Math.max(0, m.attackSwingRemainSec - dt);
+        // Slime damage requires overlapping hitboxes; run it before the anti-overlap push below,
+        // which fully separates horizontally and would otherwise make contact checks fail every frame.
         if (onZombieHitPlayer !== undefined && m.attackCooldownRemainSec <= 0) {
           let hitPeer: string | null | undefined;
           let bestD = Number.POSITIVE_INFINITY;
@@ -2285,6 +2264,29 @@ export class MobManager {
             );
             m.attackCooldownRemainSec = SLIME_ATTACK_INTERVAL_SEC;
             m.attackSwingRemainSec = SLIME_ATTACK_SWING_VISUAL_SEC;
+          }
+        }
+        if (slimeTarget !== null) {
+          const { w: slimeW, h: slimeH } = mobHitboxSizePx("slime");
+          const sHalfW = slimeW * 0.5;
+          const sTop = m.y - slimeH;
+          const sBot = m.y;
+          const pTop = slimeTarget.y - slimeTarget.height;
+          const pBot = slimeTarget.y;
+          const verticalOverlap = sTop < pBot && sBot > pTop;
+          if (verticalOverlap) {
+            const dx = m.x - slimeTarget.x;
+            const overlapX = slimeTarget.halfW + sHalfW - Math.abs(dx);
+            if (overlapX > 0) {
+              const pushDir = dx >= 0 ? 1 : -1;
+              m.x += pushDir * (overlapX + 0.001);
+              m.vx = 0;
+              m.targetVx = 0;
+              // Hop arc lives in `slimeAirHorizVx`; clearing only `vx` leaves full charge speed.
+              m.slimeAirHorizVx = 0;
+              m.slimeJumpPriming = false;
+              m.slimeJumpPrimeElapsedSec = 0;
+            }
           }
         }
       } else {

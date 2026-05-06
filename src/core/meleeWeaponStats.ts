@@ -68,7 +68,7 @@ export function meleeDamageFromHeldItemId(
 }
 
 /**
- * Terraria weapon knockback before mob resist / soft caps (see wiki.gg/Knockback).
+ * Terraria weapon knockback before mob resist / soft caps.
  */
 export function meleeBaseKnockbackFromHeldItemId(
   def: ItemDefinition | undefined,

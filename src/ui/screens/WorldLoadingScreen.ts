@@ -93,9 +93,9 @@ function injectLoadingStyles(base: string): void {
       font-family: 'BoldPixels', 'Courier New', monospace;
       font-weight: normal;
       font-synthesis: none;
-      -webkit-font-smoothing: none;
-      -moz-osx-font-smoothing: grayscale;
-      text-rendering: optimizeSpeed;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: auto;
+      text-rendering: geometricPrecision;
       color: var(--mm-ink, #f2f2f7);
       pointer-events: none;
       box-sizing: border-box;
@@ -121,7 +121,7 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-btn {
       pointer-events: auto;
       font-family: 'BoldPixels', monospace;
-      font-size: 16px;
+      font-size: max(var(--mm-bold-min), 16px);
       text-transform: uppercase;
       letter-spacing: 0.06em;
       padding: 10px 14px;
@@ -231,7 +231,7 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-kicker {
       margin: 0 0 0.2rem;
       font-family: 'M5x7', monospace;
-      font-size: calc(14px + var(--mm-m5-nudge, 4px));
+      font-size: max(var(--mm-m5-min), calc(14px + var(--mm-m5-nudge, 4px)));
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--mm-ink-soft, #8e8e93);
@@ -240,28 +240,28 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-title {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(20px, 4.2vw, 26px);
+      font-size: max(var(--mm-bold-min), clamp(20px, 4.2vw, 26px));
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink, #f2f2f7);
-      line-height: 1.12;
+      line-height: 26px;
     }
 
     .stratum-loading-stage {
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(15px, 3.4vw, 17px);
+      font-size: max(var(--mm-bold-min), clamp(15px, 3.4vw, 17px));
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--mm-ink-mid, #aeaeb2);
       text-align: left;
-      line-height: 1.35;
+      line-height: 22px;
     }
 
     .stratum-loading-detail {
       min-height: 1.35em;
       margin-top: 0.45rem;
       font-family: 'M5x7', monospace;
-      font-size: calc(17px + var(--mm-m5-nudge, 4px));
+      font-size: max(var(--mm-m5-min), calc(17px + var(--mm-m5-nudge, 4px)));
       line-height: 1.45;
       color: var(--mm-ink-soft, #8e8e93);
       text-align: left;
@@ -326,7 +326,7 @@ function injectLoadingStyles(base: string): void {
       min-height: 1.35em;
       text-align: right;
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge, 4px));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge, 4px)));
       font-variant-numeric: tabular-nums;
       color: var(--mm-ink-soft, #8e8e93);
       flex-shrink: 0;
@@ -353,7 +353,7 @@ function injectLoadingStyles(base: string): void {
     .stratum-loading-tip-label {
       margin: 0;
       font-family: 'BoldPixels', monospace;
-      font-size: 12px;
+      font-size: max(var(--mm-bold-min), 12px);
       text-transform: uppercase;
       letter-spacing: 0.14em;
       color: rgba(180, 200, 230, 0.95);
@@ -363,13 +363,13 @@ function injectLoadingStyles(base: string): void {
       border-radius: var(--mm-radius-sm, 10px);
       background: rgba(100, 150, 220, 0.14);
       border: 1px solid rgba(120, 170, 235, 0.22);
-      line-height: 1.2;
+      line-height: 16px;
     }
 
     .stratum-loading-tip {
       margin: 0;
       font-family: 'M5x7', monospace;
-      font-size: calc(15px + var(--mm-m5-nudge, 4px));
+      font-size: max(var(--mm-m5-min), calc(15px + var(--mm-m5-nudge, 4px)));
       line-height: 1.45;
       letter-spacing: 0.02em;
       color: var(--mm-ink-mid, #aeaeb2);

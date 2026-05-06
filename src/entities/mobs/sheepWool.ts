@@ -1,5 +1,5 @@
 /**
- * Minecraft dye order (0–15): matches {@link https://minecraft.wiki/w/Dye} / sheep wool.
+ * Minecraft dye order (0–15), matching vanilla Java sheep wool / dye ids.
  * Natural spawns only use 6 colors with Java Edition weights.
  */
 import type { GeneratorContext } from "../../world/gen/GeneratorContext";

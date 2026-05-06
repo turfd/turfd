@@ -464,8 +464,7 @@ export const HOSTILE_SPAWN_ATTEMPTS_PER_CYCLE = 5;
 export const HOSTILE_ZOMBIE_CAVE_PREFERENCE_CHANCE = 0.72;
 
 /**
- * Terraria-style natural hostile pressure
- * ([NPC spawning](https://terraria.wiki.gg/wiki/NPC_spawning)):
+ * Terraria-style natural hostile pressure (NPC spawning–style routing):
  * - Spawn attempts bias to columns around a **chosen player** within a max tile span.
  * - Reject spawns inside a smaller **safe** rectangle around each player (comfort / “town” analogue).
  * - **Local cap** on simultaneous hostiles near players; when the count is low, **extra spawn
@@ -473,13 +472,13 @@ export const HOSTILE_ZOMBIE_CAVE_PREFERENCE_CHANCE = 0.72;
  */
 export const HOSTILE_LOCAL_MAX_SPAWNS = 6;
 
-/** Horizontal span (blocks) from anchor player for hostile column picks (wiki ≈84 tiles). */
+/** Horizontal span (blocks) from anchor player for hostile column picks (Terraria-scale ≈84 tiles). */
 export const HOSTILE_SPAWN_MAX_DIST_BLOCKS_H = 84;
-/** Vertical span (blocks) from anchor feet block row (wiki: 46 up / 45 down). */
+/** Vertical span (blocks) from anchor feet block row (reference: 46 up / 45 down in tiles). */
 export const HOSTILE_SPAWN_MAX_DIST_BLOCKS_V = 46;
 
 /**
- * Inner “safe” rectangle half-extents in blocks (wiki ≈62×35 tiles from the player hitbox).
+ * Inner “safe” rectangle half-extents in blocks (reference ≈62×35 tiles from the player hitbox).
  * Natural hostiles may not spawn on a floor inside this box relative to **any** player.
  */
 export const HOSTILE_SPAWN_SAFE_ZONE_BLOCKS_H = 62;
@@ -501,8 +500,8 @@ export const HOSTILE_LEGACY_RANDOM_COLUMN_TRIES = 10;
 export const HOSTILE_SPAWN_ATTEMPTS_PER_CYCLE_CAP = 20;
 
 /**
- * Terraria spawn-rate tiers: fewer nearby hostiles ⇒ more attempts per cycle (inverse of the
- * wiki’s denominator multipliers 0.6–0.9).
+ * Terraria spawn-rate tiers: fewer nearby hostiles ⇒ more attempts per cycle (inverse of
+ * Terraria denominator multipliers 0.6–0.9).
  */
 export function hostileSpawnAttemptMultiplierFromFill(
   effectiveHostileCount: number,

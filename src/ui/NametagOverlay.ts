@@ -8,7 +8,8 @@ import type { RemotePlayer } from "../world/entities/RemotePlayer";
 
 const BASE_URL = import.meta.env.BASE_URL;
 
-function ensureFonts(): void {
+/** Loads M5x7 for nametags; safe to call from menu previews. */
+export function ensureNametagFonts(): void {
   if (document.getElementById("stratum-nametag-fonts")) {
     return;
   }
@@ -25,7 +26,7 @@ function ensureFonts(): void {
   document.head.appendChild(style);
 }
 
-export type NametagRosterEntry = { displayName: string };
+export type NametagRosterEntry = { displayName: string; nameColorHex?: string };
 
 /** Gap from nametag bottom to head anchor (px). */
 const NAMETAG_GAP_ABOVE_HEAD_PX = 14;
@@ -34,6 +35,7 @@ type NametagView = {
   el: HTMLDivElement;
   lastText: string;
   lastTransform: string;
+  lastColor: string;
 };
 
 export class NametagOverlay {
@@ -53,7 +55,7 @@ export class NametagOverlay {
   };
 
   init(mount: HTMLElement): void {
-    ensureFonts();
+    ensureNametagFonts();
     const layer = document.createElement("div");
     layer.id = "stratum-nametag-layer";
     layer.style.cssText = [
@@ -114,6 +116,7 @@ export class NametagOverlay {
       x: number;
       y: number;
       displayName: string;
+      nameColorHex?: string;
     },
     remotes: ReadonlyMap<string, RemotePlayer>,
     roster: ReadonlyMap<string, NametagRosterEntry>,
@@ -165,8 +168,16 @@ export class NametagOverlay {
           "will-change:transform",
         ].join(";");
         layer.appendChild(el);
-        view = { el, lastText: "", lastTransform: "" };
+        view = { el, lastText: "", lastTransform: "", lastColor: "#f2f2f7" };
         this.tags.set(id, view);
+      }
+      const nextColor =
+        id === localId
+          ? (local.nameColorHex?.trim() || "#f2f2f7")
+          : (roster.get(id)?.nameColorHex?.trim() || "#f2f2f7");
+      if (view.lastColor !== nextColor) {
+        view.lastColor = nextColor;
+        view.el.style.color = nextColor;
       }
       const textChanged = view.lastText !== text;
       if (textChanged) {

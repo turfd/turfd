@@ -63,7 +63,7 @@ export class CursorStackUI {
 
     const count = document.createElement("span");
     count.style.cssText =
-      "position:absolute;right:0;bottom:0;font-family:M5x7,monospace;font-size:24px;font-weight:normal;font-synthesis:none;-webkit-font-smoothing:none;color:#f2f2f7;text-shadow:1px 1px 0 #0d0d0d;line-height:1;";
+      "position:absolute;right:0;bottom:0;font-family:M5x7,monospace;font-size:24px;font-weight:normal;font-synthesis:none;-webkit-font-smoothing:antialiased;color:#f2f2f7;text-shadow:1px 1px 0 #0d0d0d;line-height:1;";
     wrap.appendChild(stackCol);
     wrap.appendChild(count);
     mount.appendChild(wrap);

@@ -33,12 +33,12 @@ export function injectSettingsSharedStyles(base: string): void {
 
     .st-settings-root .mm-panel-title {
       font-family: 'BoldPixels', monospace;
-      font-size: clamp(22px, 2.6vw, 28px);
+      font-size: max(var(--mm-bold-min), clamp(22px, 2.6vw, 28px));
       text-transform: uppercase;
       letter-spacing: 1px;
       color: var(--st-mm-ink);
       margin: 0 0 1.1rem;
-      line-height: 1.15;
+      line-height: 28px;
     }
 
     .st-settings-root {
@@ -79,7 +79,8 @@ export function injectSettingsSharedStyles(base: string): void {
     .st-settings-subtab {
       padding: 10px 16px;
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.07em;
       cursor: pointer;
@@ -128,7 +129,8 @@ export function injectSettingsSharedStyles(base: string): void {
       border: 1px solid var(--st-mm-ink);
       color: #1c1c1e;
       font-family: 'BoldPixels', monospace;
-      font-size: 16px;
+      font-size: max(var(--mm-bold-min), 16px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
@@ -151,7 +153,8 @@ export function injectSettingsSharedStyles(base: string): void {
 
     .st-settings-section {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.07em;
       color: var(--st-mm-ink-soft);
@@ -169,7 +172,8 @@ export function injectSettingsSharedStyles(base: string): void {
     }
     .st-settings-row label {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--st-mm-ink-soft);
@@ -182,7 +186,8 @@ export function injectSettingsSharedStyles(base: string): void {
     }
     .st-settings-val {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--st-mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--st-mm-m5-nudge)));
+      line-height: 28px;
       color: var(--st-mm-ink-mid);
       width: 44px;
       text-align: right;
@@ -190,9 +195,9 @@ export function injectSettingsSharedStyles(base: string): void {
 
     .st-settings-hint {
       font-family: 'M5x7', monospace;
-      font-size: calc(18px + var(--st-mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(18px + var(--st-mm-m5-nudge)));
       color: var(--st-mm-ink-soft);
-      line-height: 1.45;
+      line-height: 30px;
       margin: 0 0 10px;
     }
 
@@ -218,7 +223,8 @@ export function injectSettingsSharedStyles(base: string): void {
     }
     .st-bind-label {
       font-family: 'BoldPixels', monospace;
-      font-size: 14px;
+      font-size: max(var(--mm-bold-min), 14px);
+      line-height: 18px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--st-mm-ink-mid);
@@ -243,7 +249,8 @@ export function injectSettingsSharedStyles(base: string): void {
       background: var(--st-mm-surface-raised);
       border: 1px solid var(--st-mm-border);
       font-family: 'M5x7', monospace;
-      font-size: calc(17px + var(--st-mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(17px + var(--st-mm-m5-nudge)));
+      line-height: 26px;
       color: var(--st-mm-ink);
     }
     .st-bind-chip-key {
@@ -283,7 +290,8 @@ export function injectSettingsSharedStyles(base: string): void {
     }
     .st-bind-capture-msg {
       font-family: 'M5x7', monospace;
-      font-size: calc(17px + var(--st-mm-m5-nudge));
+      font-size: max(var(--mm-m5-min), calc(17px + var(--st-mm-m5-nudge)));
+      line-height: 26px;
       color: #ffcc66;
       width: 100%;
       margin-top: 2px;
@@ -304,7 +312,8 @@ export function injectSettingsSharedStyles(base: string): void {
     }
     .st-settings-toggle-row label {
       font-family: 'BoldPixels', monospace;
-      font-size: 15px;
+      font-size: max(var(--mm-bold-min), 15px);
+      line-height: 20px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--st-mm-ink-soft);
@@ -367,7 +376,8 @@ export function injectSettingsSharedStyles(base: string): void {
     .st-seg-btn {
       padding: 7px 14px;
       font-family: 'BoldPixels', monospace;
-      font-size: 13px;
+      font-size: max(var(--mm-bold-min), 13px);
+      line-height: 18px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       cursor: pointer;
