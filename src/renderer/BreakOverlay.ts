@@ -57,7 +57,9 @@ export class BreakOverlay {
     this.localFallback = new Graphics();
     this.localRoot.addChild(this.localFallback);
     this.localRoot.addChild(this.localSprite);
-    this.localRoot.blendMode = "overlay";
+    // "overlay" washes out badly on bright / semi-transparent blocks (e.g. leaves); standard
+    // alpha composite matches destroy-stage art and reads clearly on wood and foliage.
+    this.localRoot.blendMode = "normal";
     pipeline.layerEntities.addChild(this.localRoot);
   }
 
@@ -165,7 +167,7 @@ export class BreakOverlay {
       let entry = this.remoteByPeer.get(peerId);
       if (entry === undefined) {
         const root = new Container();
-        root.blendMode = "overlay";
+        root.blendMode = "normal";
         const sprite = new Sprite();
         sprite.width = BLOCK_SIZE;
         sprite.height = BLOCK_SIZE;

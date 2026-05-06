@@ -13,6 +13,7 @@ import type { WorldModerationPersisted } from "../network/moderation/WorldModera
 import type { CachedMod } from "../mods/workshopTypes";
 import type { KeybindableAction } from "../input/bindings";
 import type { WorldGameMode, WorldGenType } from "../core/types";
+import { DEFAULT_PLAYER_NAME_COLOR_HEX } from "../core/playerCosmetics";
 import {
   buildStratumWorldExportV1,
   parseStratumWorldImportV1,
@@ -575,13 +576,31 @@ export class IndexedDBStore {
     if (skinId !== undefined) {
       payload.selectedSkinId = skinId;
     }
-    const nameColorHex = settings.nameColorHex ?? prev.nameColorHex;
-    if (nameColorHex !== undefined) {
-      payload.nameColorHex = nameColorHex;
+    const settingsRec = settings as Record<string, unknown>;
+    if (Object.hasOwn(settingsRec, "nameColorHex")) {
+      const raw = settings.nameColorHex;
+      const v =
+        raw === undefined || raw === null || String(raw).trim() === ""
+          ? DEFAULT_PLAYER_NAME_COLOR_HEX
+          : String(raw).trim();
+      if (
+        v.length > 0 &&
+        v.toLowerCase() !== DEFAULT_PLAYER_NAME_COLOR_HEX.toLowerCase()
+      ) {
+        payload.nameColorHex = v;
+      }
+    } else if (prev.nameColorHex !== undefined) {
+      payload.nameColorHex = prev.nameColorHex;
     }
-    const outlineColorHex = settings.outlineColorHex ?? prev.outlineColorHex;
-    if (outlineColorHex !== undefined) {
-      payload.outlineColorHex = outlineColorHex;
+
+    if (Object.hasOwn(settingsRec, "outlineColorHex")) {
+      const raw = settings.outlineColorHex;
+      const v = raw === undefined || raw === null ? "" : String(raw).trim();
+      if (v.length > 0) {
+        payload.outlineColorHex = v;
+      }
+    } else if (prev.outlineColorHex !== undefined) {
+      payload.outlineColorHex = prev.outlineColorHex;
     }
     await db.put("player_settings", payload, PLAYER_SETTINGS_KEY);
   }

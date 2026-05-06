@@ -4,12 +4,44 @@ import type { IAuthProvider } from "../../auth/IAuthProvider";
 import { validateUsername } from "../../auth/profile";
 import { DISCORD_ENTITLEMENT_REFRESH_MS } from "../../core/constants";
 import {
+  DEFAULT_PLAYER_NAME_COLOR_HEX,
+  effectiveDonatorTierFromDiscord,
+} from "../../core/playerCosmetics";
+import {
   getDiscordEntitlement,
   startDiscordOauth,
   type DiscordEntitlementStatus,
 } from "../../network/discordEntitlementApi";
+import { IndexedDBStore } from "../../persistence/IndexedDBStore";
 
 const STYLES_ID = "stratum-profile-styles";
+
+async function persistCosmeticResetIfLostDonor(status: DiscordEntitlementStatus): Promise<void> {
+  if (effectiveDonatorTierFromDiscord(status) !== "none") {
+    return;
+  }
+  const store = new IndexedDBStore();
+  try {
+    await store.openDB();
+  } catch {
+    return;
+  }
+  const prev = await store.loadPlayerSettings();
+  const hadCustomName =
+    prev.nameColorHex !== undefined &&
+    prev.nameColorHex.trim() !== "" &&
+    prev.nameColorHex.toLowerCase() !== DEFAULT_PLAYER_NAME_COLOR_HEX.toLowerCase();
+  const hadOutline =
+    prev.outlineColorHex !== undefined && prev.outlineColorHex.trim() !== "";
+  if (!hadCustomName && !hadOutline) {
+    return;
+  }
+  await store.savePlayerSettings({
+    ...prev,
+    nameColorHex: DEFAULT_PLAYER_NAME_COLOR_HEX,
+    outlineColorHex: "",
+  });
+}
 
 function injectStyles(): void {
   if (document.getElementById(STYLES_ID) !== null) {
@@ -470,6 +502,7 @@ export function mountProfileScreen(
             }
             discordEntitlement = res.status;
             renderDiscordState();
+            void persistCosmeticResetIfLostDonor(res.status);
           })();
         });
         discordWrap.appendChild(discordTitle);
@@ -499,6 +532,7 @@ export function mountProfileScreen(
             }
             discordEntitlement = res.status;
             renderDiscordState();
+            void persistCosmeticResetIfLostDonor(res.status);
           };
           void refreshEntitlement(false);
           entitlementTimer = window.setInterval(() => {

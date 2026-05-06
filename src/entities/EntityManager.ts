@@ -11,10 +11,7 @@ import {
   Sprite,
   Texture,
 } from "pixi.js";
-import {
-  DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
-  hexToNumber,
-} from "../core/playerCosmetics";
+import { NO_OUTLINE_GLOW_HEX, hexToNumber } from "../core/playerCosmetics";
 import { createPlayerSpectralOutlineFilter } from "../renderer/filters/playerSpectralOutlineFilter";
 import { feetAabbOverlapsWater } from "./feetAabbOverlapsWater";
 import { MobManager } from "./mobs/MobManager";
@@ -1329,7 +1326,7 @@ export class EntityManager {
   private aimGraphic: Graphics | null = null;
   private aimLineSprite: Sprite | null = null;
   private readonly remoteGraphics = new Map<string, Container>();
-  private localOutlineColorHex = DEFAULT_PLAYER_OUTLINE_COLOR_HEX;
+  private localOutlineColorHex = NO_OUTLINE_GLOW_HEX;
   private readonly remoteOutlineColorHex = new Map<string, string>();
   /** Per-peer armor overlay sprites (destroyed with remote root; map cleared on peer removal). */
   private readonly remoteArmorSprites = new Map<string, (Sprite | null)[]>();
@@ -2161,7 +2158,7 @@ export class EntityManager {
         remoteRoot = this.createRemotePlayerRoot(peerSkin);
         this.applyOutlineToRoot(
           remoteRoot,
-          this.remoteOutlineColorHex.get(peerId) ?? DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
+          this.remoteOutlineColorHex.get(peerId) ?? NO_OUTLINE_GLOW_HEX,
         );
         const parent = this.playerGraphic?.parent;
         parent?.addChild(remoteRoot);
@@ -2770,7 +2767,12 @@ export class EntityManager {
   }
 
   private applyOutlineToRoot(root: Container, colorHex: string): void {
-    root.filters = [createPlayerSpectralOutlineFilter(hexToNumber(colorHex))];
+    const t = colorHex.trim();
+    if (t === "") {
+      root.filters = [];
+      return;
+    }
+    root.filters = [createPlayerSpectralOutlineFilter(hexToNumber(t))];
   }
 
   /** Rebuild a single remote peer's container with a new skin texture set. */
@@ -2788,7 +2790,7 @@ export class EntityManager {
     const newRoot = this.createRemotePlayerRoot(skinSet);
     this.applyOutlineToRoot(
       newRoot,
-      this.remoteOutlineColorHex.get(peerId) ?? DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
+      this.remoteOutlineColorHex.get(peerId) ?? NO_OUTLINE_GLOW_HEX,
     );
     parent.addChild(newRoot);
     this.remoteGraphics.set(peerId, newRoot);
@@ -2843,7 +2845,7 @@ export class EntityManager {
       root.addChild(anim);
       this.applyOutlineToRoot(
         root,
-        this.remoteOutlineColorHex.get(peerId) ?? DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
+        this.remoteOutlineColorHex.get(peerId) ?? NO_OUTLINE_GLOW_HEX,
       );
       let mode = this.remoteWalkAnimMode.get(peerId);
       if (mode === undefined) {
@@ -3540,16 +3542,14 @@ export class EntityManager {
   }
 
   setLocalPlayerOutlineColorHex(colorHex: string): void {
-    this.localOutlineColorHex =
-      colorHex.trim() !== "" ? colorHex.trim() : DEFAULT_PLAYER_OUTLINE_COLOR_HEX;
+    this.localOutlineColorHex = colorHex.trim();
     if (this.playerGraphic !== null) {
       this.applyOutlineToRoot(this.playerGraphic, this.localOutlineColorHex);
     }
   }
 
   setRemotePlayerOutlineColorHex(peerId: string, colorHex: string): void {
-    const normalized =
-      colorHex.trim() !== "" ? colorHex.trim() : DEFAULT_PLAYER_OUTLINE_COLOR_HEX;
+    const normalized = colorHex.trim();
     this.remoteOutlineColorHex.set(peerId, normalized);
     const root = this.remoteGraphics.get(peerId);
     if (root !== undefined) {

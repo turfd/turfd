@@ -4,11 +4,12 @@ import type { IAuthProvider } from "../../auth/IAuthProvider";
 import { DEFAULT_SKIN_ID, PLAYER_BODY_REQUIRED_FRAME_COUNT } from "../../core/constants";
 import {
   DEFAULT_PLAYER_NAME_COLOR_HEX,
-  DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
+  NO_OUTLINE_GLOW_HEX,
   allowedPresetColorsForTier,
   canUseCustomColor,
-  cosmeticTierFromRaw,
-  sanitizeColorForTier,
+  effectiveDonatorTierFromDiscord,
+  sanitizeDonorNameColorForSettings,
+  sanitizeOutlineColorForSettings,
   type DonatorTier,
 } from "../../core/playerCosmetics";
 import { getDiscordEntitlement } from "../../network/discordEntitlementApi";
@@ -545,7 +546,7 @@ export function mountSkinScreen(
   let previewEntry: SkinEntry | null = null;
   let previewDispose: (() => void) | null = null;
   const blobUrls: string[] = [];
-  let outlineColorHex = DEFAULT_PLAYER_OUTLINE_COLOR_HEX;
+  let outlineColorHex = NO_OUTLINE_GLOW_HEX;
   let outlineDonatorTier: DonatorTier = "none";
   let nameColorHex = DEFAULT_PLAYER_NAME_COLOR_HEX;
   let displayNameForPreview = auth.getDisplayLabel();
@@ -726,7 +727,13 @@ export function mountSkinScreen(
   previewCol.appendChild(hint);
 
   const syncOutlineChrome = (): void => {
-    outlineToggleSwatch.style.backgroundColor = outlineColorHex;
+    if (outlineColorHex.trim() === "") {
+      outlineToggleSwatch.style.backgroundColor = "transparent";
+      outlineToggleSwatch.style.boxShadow = "inset 0 0 0 2px rgba(255,255,255,0.25)";
+    } else {
+      outlineToggleSwatch.style.boxShadow = "none";
+      outlineToggleSwatch.style.backgroundColor = outlineColorHex;
+    }
   };
 
   const syncNameColorChrome = (): void => {
@@ -814,6 +821,27 @@ export function mountSkinScreen(
     outlineSwatches.replaceChildren();
     const hexLower = outlineColorHex.toLowerCase();
 
+    if (outlineDonatorTier !== "none") {
+      const offBtn = document.createElement("button");
+      offBtn.type = "button";
+      offBtn.className = "mm-btn mm-btn-subtle stratum-cp-swatch stratum-cp-swatch--compact";
+      offBtn.textContent = "None";
+      offBtn.title = "No outline glow";
+      if (outlineColorHex.trim() === "") {
+        offBtn.classList.add("stratum-cp-swatch--active");
+      }
+      offBtn.addEventListener("click", () => {
+        void (async () => {
+          outlineColorHex = NO_OUTLINE_GLOW_HEX;
+          const cur = await store.loadPlayerSettings();
+          await store.savePlayerSettings({ ...cur, outlineColorHex: "" });
+          renderOutlineSwatches();
+          setFeedback("Outline glow turned off.", "ok");
+        })();
+      });
+      outlineSwatches.appendChild(offBtn);
+    }
+
     for (const color of allowed) {
       const sw = document.createElement("button");
       sw.type = "button";
@@ -856,11 +884,7 @@ export function mountSkinScreen(
           initialHex: outlineColorHex,
           onPick: (hex) => {
             void (async () => {
-              outlineColorHex = sanitizeColorForTier(
-                hex,
-                outlineDonatorTier,
-                DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
-              );
+              outlineColorHex = sanitizeOutlineColorForSettings(hex, outlineDonatorTier);
               const cur = await store.loadPlayerSettings();
               await store.savePlayerSettings({ ...cur, outlineColorHex });
               renderOutlineSwatches();
@@ -926,11 +950,7 @@ export function mountSkinScreen(
           initialHex: nameColorHex,
           onPick: (hex) => {
             void (async () => {
-              nameColorHex = sanitizeColorForTier(
-                hex,
-                outlineDonatorTier,
-                DEFAULT_PLAYER_NAME_COLOR_HEX,
-              );
+              nameColorHex = sanitizeDonorNameColorForSettings(hex, outlineDonatorTier);
               const cur = await store.loadPlayerSettings();
               await store.savePlayerSettings({ ...cur, nameColorHex });
               renderNameColorSwatches();
@@ -1183,32 +1203,58 @@ export function mountSkinScreen(
     if (allowCustom && selectedSkinId.startsWith("custom:")) {
       setCategory("custom");
     }
-    const tier = (() => {
-      const supabase = auth.getSupabaseClient();
-      if (supabase === null) {
-        return "none";
-      }
-      return "none";
-    })();
     const supabase = auth.getSupabaseClient();
-    let donatorTier = cosmeticTierFromRaw(tier);
+    let donatorTier = effectiveDonatorTierFromDiscord(null);
+    let entitlementOk = false;
     if (supabase !== null) {
       const entitlement = await getDiscordEntitlement(supabase, false);
       if (entitlement.ok) {
-        donatorTier = cosmeticTierFromRaw(entitlement.status.tier);
+        entitlementOk = true;
+        donatorTier = effectiveDonatorTierFromDiscord(entitlement.status);
       }
     }
-    outlineDonatorTier = donatorTier;
-    outlineColorHex = sanitizeColorForTier(
-      s.outlineColorHex ?? DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
-      donatorTier,
-      DEFAULT_PLAYER_OUTLINE_COLOR_HEX,
-    );
-    nameColorHex = sanitizeColorForTier(
-      s.nameColorHex ?? DEFAULT_PLAYER_NAME_COLOR_HEX,
-      donatorTier,
-      DEFAULT_PLAYER_NAME_COLOR_HEX,
-    );
+    const tierForUi = entitlementOk ? donatorTier : "none";
+    outlineDonatorTier = tierForUi;
+    outlineColorHex = sanitizeOutlineColorForSettings(s.outlineColorHex, tierForUi);
+    nameColorHex = sanitizeDonorNameColorForSettings(s.nameColorHex, tierForUi);
+    if (entitlementOk) {
+      if (donatorTier === "none") {
+        const hadCustomName =
+          s.nameColorHex !== undefined &&
+          s.nameColorHex.trim() !== "" &&
+          s.nameColorHex.toLowerCase() !== DEFAULT_PLAYER_NAME_COLOR_HEX.toLowerCase();
+        const hadOutline =
+          s.outlineColorHex !== undefined && s.outlineColorHex.trim() !== "";
+        if (hadCustomName || hadOutline) {
+          await store.savePlayerSettings({
+            ...s,
+            nameColorHex: DEFAULT_PLAYER_NAME_COLOR_HEX,
+            outlineColorHex: "",
+          });
+        }
+      } else {
+        const oPrev = (s.outlineColorHex ?? "").trim();
+        const nPrevRaw = (s.nameColorHex ?? "").trim();
+        const nPrevNorm =
+          nPrevRaw === ""
+            ? DEFAULT_PLAYER_NAME_COLOR_HEX.toLowerCase()
+            : nPrevRaw.toLowerCase();
+        if (
+          oPrev !== outlineColorHex.trim() ||
+          nPrevNorm !== nameColorHex.trim().toLowerCase()
+        ) {
+          await store.savePlayerSettings({
+            ...s,
+            nameColorHex,
+            outlineColorHex,
+          });
+        }
+      }
+    }
+    const showDonorCosmeticUi = tierForUi !== "none";
+    outlineStack.style.display = showDonorCosmeticUi ? "" : "none";
+    nameColorStack.style.display = showDonorCosmeticUi ? "" : "none";
+
     renderOutlineSwatches();
     renderNameColorSwatches();
     setFeedback("", "clear");

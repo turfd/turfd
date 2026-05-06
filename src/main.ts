@@ -9,6 +9,13 @@ import { EventBus } from "./core/EventBus";
 import { unixRandom01 } from "./core/unixRandom";
 import { DEFAULT_SKIN_ID } from "./core/constants";
 import {
+  DEFAULT_PLAYER_NAME_COLOR_HEX,
+  effectiveDonatorTierFromDiscord,
+  sanitizeDonorNameColorForSettings,
+  sanitizeOutlineColorForSettings,
+  type DonatorTier,
+} from "./core/playerCosmetics";
+import {
   Game,
   type MultiplayerHostFromMenuSpec,
   type PlayerSavedState,
@@ -32,6 +39,7 @@ import {
   modDetailToListEntry,
 } from "./network/workshopModApi";
 import { semverGt } from "./util/semverGt";
+import { getDiscordEntitlement } from "./network/discordEntitlementApi";
 import { createSupabaseSignalRelay } from "./network/SupabaseSignalAdapter";
 import { IndexedDBStore } from "./persistence/IndexedDBStore";
 import { pinWorkshopModToWorld } from "./persistence/pinWorkshopModToWorld";
@@ -907,8 +915,61 @@ async function main(): Promise<void> {
       const session = auth.getSession();
       const playerSettings = await store.loadPlayerSettings();
       let skinId = playerSettings.selectedSkinId;
-      const nameColorHex = playerSettings.nameColorHex;
-      const outlineColorHex = playerSettings.outlineColorHex;
+      let cosmeticTier: DonatorTier = "none";
+      let entitlementResolved = false;
+      const supabaseClient = auth.getSupabaseClient();
+      if (session !== null && supabaseClient !== null) {
+        const ent = await getDiscordEntitlement(supabaseClient, false);
+        if (ent.ok) {
+          entitlementResolved = true;
+          cosmeticTier = effectiveDonatorTierFromDiscord(ent.status);
+        }
+      }
+      const effectiveTierForPlay = entitlementResolved ? cosmeticTier : "none";
+      const nameColorHex = sanitizeDonorNameColorForSettings(
+        playerSettings.nameColorHex,
+        effectiveTierForPlay,
+      );
+      const outlineColorHex = sanitizeOutlineColorForSettings(
+        playerSettings.outlineColorHex,
+        effectiveTierForPlay,
+      );
+      if (entitlementResolved) {
+        if (cosmeticTier === "none") {
+          const hadCustomName =
+            playerSettings.nameColorHex !== undefined &&
+            playerSettings.nameColorHex.trim() !== "" &&
+            playerSettings.nameColorHex.toLowerCase() !==
+              DEFAULT_PLAYER_NAME_COLOR_HEX.toLowerCase();
+          const hadOutline =
+            playerSettings.outlineColorHex !== undefined &&
+            playerSettings.outlineColorHex.trim() !== "";
+          if (hadCustomName || hadOutline) {
+            await store.savePlayerSettings({
+              ...playerSettings,
+              nameColorHex: DEFAULT_PLAYER_NAME_COLOR_HEX,
+              outlineColorHex: "",
+            });
+          }
+        } else {
+          const oPrev = (playerSettings.outlineColorHex ?? "").trim();
+          const nPrevRaw = playerSettings.nameColorHex?.trim() ?? "";
+          const nPrevNorm =
+            nPrevRaw === ""
+              ? DEFAULT_PLAYER_NAME_COLOR_HEX.toLowerCase()
+              : nPrevRaw.toLowerCase();
+          if (
+            oPrev !== outlineColorHex.trim() ||
+            nPrevNorm !== nameColorHex.trim().toLowerCase()
+          ) {
+            await store.savePlayerSettings({
+              ...playerSettings,
+              nameColorHex,
+              outlineColorHex,
+            });
+          }
+        }
+      }
       if (
         session === null &&
         typeof skinId === "string" &&

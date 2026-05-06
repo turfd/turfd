@@ -111,6 +111,7 @@ export async function mountSkinMenuPreviewWithOutline(
 
   host.appendChild(canvas);
 
+  let outlineActive = outlineHex.trim() !== "";
   let outlineCss = hexToCss(outlineHex);
   let frameIdx = 0;
   let lastCssW = -1;
@@ -173,43 +174,45 @@ export async function mountSkinMenuPreviewWithOutline(
       target.globalAlpha = 1;
     };
 
-    // 1) Solid black rim (full outline depth), crisp.
-    for (const [dx, dy] of OUTLINE_OFFSETS) {
-      stampTintedOn(ctx, BLACK_OUTLINE, left + dx * s, top + dy * s, dw, dh, 1);
-    }
-
-    // 2) Custom color fringe: built supersampled, then smoothed onto main (smooth fade, no stair-steps).
-    gctx.clearRect(0, 0, gW, gH);
-    gctx.imageSmoothingEnabled = false;
-    const ox0 = fringePadSrc * COLOR_FRINGE_SS;
-    const oy0 = fringePadSrc * COLOR_FRINGE_SS;
-    const dwp = frameW * COLOR_FRINGE_SS;
-    const dhp = frameH * COLOR_FRINGE_SS;
-
-    for (const [dx, dy] of OUTLINE_OFFSETS) {
-      for (let i = 1; i <= COLOR_GRADIENT_STEPS; i++) {
-        const t = (i / COLOR_GRADIENT_STEPS) * COLOR_GRADIENT_EXTENT;
-        const u = t / COLOR_GRADIENT_EXTENT;
-        const alpha = 1 - smoothstep01(u);
-        if (alpha <= 0.002) {
-          continue;
-        }
-        const px = dx * t * COLOR_FRINGE_SS;
-        const py = dy * t * COLOR_FRINGE_SS;
-        stampTintedOn(gctx, outlineCss, ox0 + px, oy0 + py, dwp, dhp, alpha);
+    if (outlineActive) {
+      // 1) Solid black rim (full outline depth), crisp.
+      for (const [dx, dy] of OUTLINE_OFFSETS) {
+        stampTintedOn(ctx, BLACK_OUTLINE, left + dx * s, top + dy * s, dw, dh, 1);
       }
+
+      // 2) Custom color fringe: built supersampled, then smoothed onto main (smooth fade, no stair-steps).
+      gctx.clearRect(0, 0, gW, gH);
+      gctx.imageSmoothingEnabled = false;
+      const ox0 = fringePadSrc * COLOR_FRINGE_SS;
+      const oy0 = fringePadSrc * COLOR_FRINGE_SS;
+      const dwp = frameW * COLOR_FRINGE_SS;
+      const dhp = frameH * COLOR_FRINGE_SS;
+
+      for (const [dx, dy] of OUTLINE_OFFSETS) {
+        for (let i = 1; i <= COLOR_GRADIENT_STEPS; i++) {
+          const t = (i / COLOR_GRADIENT_STEPS) * COLOR_GRADIENT_EXTENT;
+          const u = t / COLOR_GRADIENT_EXTENT;
+          const alpha = 1 - smoothstep01(u);
+          if (alpha <= 0.002) {
+            continue;
+          }
+          const px = dx * t * COLOR_FRINGE_SS;
+          const py = dy * t * COLOR_FRINGE_SS;
+          stampTintedOn(gctx, outlineCss, ox0 + px, oy0 + py, dwp, dhp, alpha);
+        }
+      }
+
+      const fringeDestW = (frameW + fringePadSrc * 2) * s;
+      const fringeDestH = (frameH + fringePadSrc * 2) * s;
+      const fringeLeft = left - fringePadSrc * s;
+      const fringeTop = top - fringePadSrc * s;
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(gradCanvas, 0, 0, gW, gH, fringeLeft, fringeTop, fringeDestW, fringeDestH);
+      ctx.restore();
+
+      ctx.imageSmoothingEnabled = false;
     }
-
-    const fringeDestW = (frameW + fringePadSrc * 2) * s;
-    const fringeDestH = (frameH + fringePadSrc * 2) * s;
-    const fringeLeft = left - fringePadSrc * s;
-    const fringeTop = top - fringePadSrc * s;
-    ctx.save();
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(gradCanvas, 0, 0, gW, gH, fringeLeft, fringeTop, fringeDestW, fringeDestH);
-    ctx.restore();
-
-    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(image, srcX, 0, frameW, frameH, left, top, dw, dh);
   };
 
@@ -232,6 +235,7 @@ export async function mountSkinMenuPreviewWithOutline(
   return {
     updateOutlineColorHex(hex: string): void {
       if (cleaned) return;
+      outlineActive = hex.trim() !== "";
       outlineCss = hexToCss(hex);
       paint();
     },
