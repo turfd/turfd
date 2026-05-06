@@ -780,7 +780,6 @@ export class MenuBackground {
     if (this.destroyed || !this.app || !this.worldContainer) return;
 
     this.syncLayoutFromRenderer();
-    this.spriteCloud?.updateTime(now);
 
     const app            = this.app;
     const worldContainer = this.worldContainer;
@@ -822,11 +821,15 @@ export class MenuBackground {
     const localCX = (sw / 2 - worldContainer.x) / this.zoom;
 
     if (this.spriteCloud !== null) {
-      // Camera-relative parallax (same basis as ParallaxTileStripRenderer): clouds stay
-      // tied to the sky/backdrop, not the translated world container (1:1 screen delta
-      // made them stick to the terrain).
-      this.spriteCloud.displayRoot.x = Math.round(-localCX * BACKGROUND_PARALLAX_X);
+      // Same basis as ParallaxTileStripRenderer: parallax from menu “camera” center.
+      // Apply as tile scroll so TilingSprites stay full width and repeat infinitely
+      // (moving displayRoot.x exposed empty sky at the sides).
+      this.spriteCloud.setMenuParallaxScrollPx(
+        Math.round(-localCX * BACKGROUND_PARALLAX_X),
+      );
+      this.spriteCloud.displayRoot.x = 0;
       this.spriteCloud.displayRoot.y = Math.round(parallaxDy);
+      this.spriteCloud.updateTime(now);
     }
 
     // -- Sky (CSS canvas) ---------------------------------------------------

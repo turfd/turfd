@@ -265,6 +265,11 @@ export class SpriteCloudLayer {
   private _screenH = 1;
   private _visible = true;
   private _alphaDriftTimeSec = 0;
+  /**
+   * Main menu only: horizontal parallax vs fake camera, applied as tile scroll (not container x)
+   * so full-width {@link TilingSprite}s stay screen-sized and the pattern wraps instead of showing edges.
+   */
+  private _menuParallaxScrollPx = 0;
 
   readonly displayRoot: Container;
 
@@ -281,6 +286,14 @@ export class SpriteCloudLayer {
   set visible(v: boolean) {
     this._visible = v;
     this._root.visible = v;
+  }
+
+  /**
+   * Drive sky-style parallax from menu “camera” via tile scroll, not `displayRoot.x`
+   * (shifting the root leaves gaps beside screen-width strips). In-game, leave at 0.
+   */
+  setMenuParallaxScrollPx(px: number): void {
+    this._menuParallaxScrollPx = px;
   }
 
   async init(): Promise<void> {
@@ -487,7 +500,8 @@ export class SpriteCloudLayer {
         (texW * 0.37 * (1 + strip.config.speedPxPerSec * 0.05)) % texW,
       );
       strip.scrollSubPixelX = 0;
-      strip.sprite.tilePosition.x = strip.scrollPixelX + strip.worldScrollPx;
+      strip.sprite.tilePosition.x =
+        strip.scrollPixelX + strip.worldScrollPx + this._menuParallaxScrollPx;
     }
   }
 
@@ -542,7 +556,8 @@ export class SpriteCloudLayer {
         strip.worldScrollSubPx = wAdv - wStep;
         strip.worldScrollPx += wStep;
       }
-      strip.sprite.tilePosition.x = strip.scrollPixelX + strip.worldScrollPx;
+      strip.sprite.tilePosition.x =
+        strip.scrollPixelX + strip.worldScrollPx + this._menuParallaxScrollPx;
       strip.sprite.alpha = this.composeStripAlpha(strip);
     }
   }
